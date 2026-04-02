@@ -24,6 +24,23 @@
             <artifactId>gls-platform</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>co.uk.wolfnotsheep.governance</groupId>
+            <artifactId>gls-governance</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>co.uk.wolfnotsheep.document</groupId>
+            <artifactId>gls-document</artifactId>
+        </dependency>
+
+        <!-- ==================== RabbitMQ ==================== -->
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
         <!-- ==================== Actuator (Health Checks) ==================== -->
 
         <dependency>

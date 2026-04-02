@@ -1,0 +1,25 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: gls-mcp-server
+  data:
+    mongodb:
+      uri: mongodb://root:${MONGO_PASSWORD:example}@localhost:27017/${MONGO_DB_NAME:governance_led_storage_main}?authSource=admin
+  ai:
+    mcp:
+      server:
+        name: gls-governance-mcp
+        version: 0.1.0
+        type: SYNC
+        annotation-scanner:
+          enabled: true
+        capabilities:
+          tool: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: info,health

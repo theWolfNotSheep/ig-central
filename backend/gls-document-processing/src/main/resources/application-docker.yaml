@@ -1,0 +1,11 @@
+spring:
+  data:
+    mongodb:
+      uri: mongodb://root:${MONGO_PASSWORD:example}@mongo:27017/${MONGO_DB_NAME:governance_led_storage_main}?authSource=admin
+
+  rabbitmq:
+    host: rabbitmq
+    port: 5672
+
+minio:
+  endpoint: http://minio:9000

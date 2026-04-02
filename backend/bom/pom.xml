@@ -11,8 +11,7 @@
     <description>Bill of Materials — pins compatible versions for all GLS modules</description>
 
     <properties>
-        <gls.platform.version>0.0.1-SNAPSHOT</gls.platform.version>
-        <gls.app.version>0.0.1-SNAPSHOT</gls.app.version>
+        <gls.version>0.0.1-SNAPSHOT</gls.version>
     </properties>
 
     <dependencyManagement>
@@ -23,7 +22,37 @@
             <dependency>
                 <groupId>co.uk.wolfnotsheep.platform</groupId>
                 <artifactId>gls-platform</artifactId>
-                <version>${gls.platform.version}</version>
+                <version>${gls.version}</version>
+            </dependency>
+
+            <!-- ==================== Governance ==================== -->
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.governance</groupId>
+                <artifactId>gls-governance</artifactId>
+                <version>${gls.version}</version>
+            </dependency>
+
+            <!-- ==================== Document ==================== -->
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.document</groupId>
+                <artifactId>gls-document</artifactId>
+                <version>${gls.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.docprocessing</groupId>
+                <artifactId>gls-document-processing</artifactId>
+                <version>${gls.version}</version>
+            </dependency>
+
+            <!-- ==================== Enforcement ==================== -->
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.enforcement</groupId>
+                <artifactId>gls-governance-enforcement</artifactId>
+                <version>${gls.version}</version>
             </dependency>
 
             <!-- ==================== App Modules ==================== -->
@@ -31,7 +60,19 @@
             <dependency>
                 <groupId>co.uk.wolfnotsheep</groupId>
                 <artifactId>gls-app-assembly</artifactId>
-                <version>${gls.app.version}</version>
+                <version>${gls.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.mcp</groupId>
+                <artifactId>gls-mcp-server</artifactId>
+                <version>${gls.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.llm</groupId>
+                <artifactId>gls-llm-orchestration</artifactId>
+                <version>${gls.version}</version>
             </dependency>
 
         </dependencies>

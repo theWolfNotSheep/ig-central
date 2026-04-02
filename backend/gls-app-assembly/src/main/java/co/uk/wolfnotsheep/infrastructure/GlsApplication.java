@@ -8,12 +8,16 @@ import org.springframework.data.mongodb.repository.config.EnableMongoRepositorie
 
 @EnableMongoRepositories(basePackages = {
         "co.uk.wolfnotsheep.apps",
-        "co.uk.wolfnotsheep.platform"
+        "co.uk.wolfnotsheep.platform",
+        "co.uk.wolfnotsheep.governance.repositories",
+        "co.uk.wolfnotsheep.document.repositories"
 })
 @SpringBootApplication(scanBasePackages = {
         "co.uk.wolfnotsheep.infrastructure",
         "co.uk.wolfnotsheep.platform",
-        "co.uk.wolfnotsheep.apps"
+        "co.uk.wolfnotsheep.apps",
+        "co.uk.wolfnotsheep.governance",
+        "co.uk.wolfnotsheep.document"
 })
 @ConfigurationPropertiesScan
 public class GlsApplication {

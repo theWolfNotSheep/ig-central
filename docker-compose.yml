@@ -40,6 +40,49 @@ services:
     networks:
       - gls
 
+  minio:
+    image: minio/minio:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+    networks:
+      - gls
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+    networks:
+      - gls
+
   api:
     container_name: ${COMPOSE_PROJECT_NAME:-gls}-api
     restart: unless-stopped
@@ -64,8 +107,19 @@ services:
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
       GIT_HUB_CLIENT_ID: ${GIT_HUB_CLIENT_ID:-}
       GIT_HUB_CLIENT_SECRET: ${GIT_HUB_CLIENT_SECRET:-}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
     depends_on:
       mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/actuator/info"]
@@ -73,6 +127,129 @@ services:
       timeout: 10s
       retries: 10
       start_period: 120s
+    logging: *default-logging
+    networks:
+      - gls
+
+  mcp-server:
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-mcp-server
+    restart: unless-stopped
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.mcp
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SERVER_PORT: "8081"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8081/actuator/info"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging: *default-logging
+    networks:
+      - gls
+
+  llm-worker:
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-llm-worker
+    restart: unless-stopped
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.llm
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SERVER_PORT: "8082"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      MCP_SERVER_URL: http://mcp-server:8081
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mcp-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8082/actuator/info"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging: *default-logging
+    networks:
+      - gls
+
+  doc-processor:
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-doc-processor
+    restart: unless-stopped
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.docprocessing
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SERVER_PORT: "8083"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8083/actuator/info"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging: *default-logging
+    networks:
+      - gls
+
+  governance-enforcer:
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-governance-enforcer
+    restart: unless-stopped
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.enforcement
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SERVER_PORT: "8084"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8084/actuator/info"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     logging: *default-logging
     networks:
       - gls
@@ -129,6 +306,8 @@ services:
 
 volumes:
   mongo_data:
+  rabbitmq_data:
+  minio_data:
 
 networks:
   gls:

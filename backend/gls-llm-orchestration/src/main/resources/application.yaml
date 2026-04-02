@@ -1,0 +1,40 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: gls-llm-orchestration
+
+  data:
+    mongodb:
+      uri: mongodb://root:${MONGO_PASSWORD:example}@localhost:27017/${MONGO_DB_NAME:governance_led_storage_main}?authSource=admin
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+
+  ai:
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      chat:
+        options:
+          model: claude-sonnet-4-20250514
+          max-tokens: 4096
+          temperature: 0.1
+
+    # MCP client — connects to the governance MCP server over SSE
+    mcp:
+      client:
+        type: SYNC
+        sse:
+          connections:
+            governance:
+              url: ${MCP_SERVER_URL:http://localhost:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: info,health
