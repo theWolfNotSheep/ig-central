@@ -4,8 +4,8 @@ import co.uk.wolfnotsheep.governance.models.RetentionSchedule;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.ai.mcp.annotation.McpTool;
-import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -21,11 +21,11 @@ public class RetentionScheduleTool {
         this.objectMapper = objectMapper;
     }
 
-    @McpTool(name = "get_retention_schedules",
+    @Tool(name = "get_retention_schedules",
             description = "Retrieve retention schedules that define how long documents must be kept and what happens at expiry. " +
                     "Use this after classification to determine the correct retention period.")
     public String getSchedules(
-            @McpToolParam(description = "Optional: retrieve a specific retention schedule by ID", required = false)
+            @ToolParam(description = "Optional: retrieve a specific retention schedule by ID", required = false)
             String scheduleId) throws JsonProcessingException {
 
         if (scheduleId != null && !scheduleId.isBlank()) {

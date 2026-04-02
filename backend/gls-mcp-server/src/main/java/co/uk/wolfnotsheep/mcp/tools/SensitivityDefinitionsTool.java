@@ -1,13 +1,13 @@
 package co.uk.wolfnotsheep.mcp.tools;
 
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
-import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.stereotype.Component;
 
 @Component
 public class SensitivityDefinitionsTool {
 
-    @McpTool(name = "get_sensitivity_definitions",
+    @Tool(name = "get_sensitivity_definitions",
             description = "Retrieve the definitions of all sensitivity labels (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED). " +
                     "Use this to determine the correct sensitivity level for a document based on its content.")
     public String getDefinitions() {

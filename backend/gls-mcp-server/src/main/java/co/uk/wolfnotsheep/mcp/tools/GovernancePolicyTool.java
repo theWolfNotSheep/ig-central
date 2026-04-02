@@ -5,8 +5,8 @@ import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.ai.mcp.annotation.McpTool;
-import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -22,13 +22,13 @@ public class GovernancePolicyTool {
         this.objectMapper = objectMapper;
     }
 
-    @McpTool(name = "get_governance_policies",
+    @Tool(name = "get_governance_policies",
             description = "Retrieve active governance policies. Optionally filter by category ID or sensitivity label. " +
                     "Use this to understand what rules apply to a document based on its classification.")
     public String getPolicies(
-            @McpToolParam(description = "Optional: filter policies by classification category ID", required = false)
+            @ToolParam(description = "Optional: filter policies by classification category ID", required = false)
             String categoryId,
-            @McpToolParam(description = "Optional: filter policies by sensitivity label (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)", required = false)
+            @ToolParam(description = "Optional: filter policies by sensitivity label (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)", required = false)
             String sensitivityLabel) throws JsonProcessingException {
 
         List<GovernancePolicy> policies;

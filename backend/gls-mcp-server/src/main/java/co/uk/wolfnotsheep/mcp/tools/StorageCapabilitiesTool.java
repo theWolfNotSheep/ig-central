@@ -5,8 +5,8 @@ import co.uk.wolfnotsheep.governance.models.StorageTier;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.ai.mcp.annotation.McpTool;
-import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -22,11 +22,11 @@ public class StorageCapabilitiesTool {
         this.objectMapper = objectMapper;
     }
 
-    @McpTool(name = "get_storage_capabilities",
+    @Tool(name = "get_storage_capabilities",
             description = "Retrieve available storage tiers with their encryption, immutability, and geographic constraints. " +
                     "Use this to recommend the appropriate storage tier for a classified document.")
     public String getCapabilities(
-            @McpToolParam(description = "Optional: filter storage tiers by what sensitivity they support (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)", required = false)
+            @ToolParam(description = "Optional: filter storage tiers by what sensitivity they support (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)", required = false)
             String sensitivityLabel) throws JsonProcessingException {
 
         List<StorageTier> tiers;
