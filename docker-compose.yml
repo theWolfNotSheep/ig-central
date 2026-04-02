@@ -1,0 +1,135 @@
+# Base docker-compose — used with environment-specific .env files:
+#   docker compose --env-file .env.dev up --build
+#   docker compose --env-file .env.prod up --build
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    depends_on:
+      nginx:
+        condition: service_healthy
+    logging: *default-logging
+    networks:
+      - gls
+
+  mongo:
+    image: mongo:7
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-example}
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    logging: *default-logging
+    networks:
+      - gls
+
+  api:
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-api
+    restart: unless-stopped
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SERVER_PORT: "8080"
+      APP_ENV: ${APP_ENV:-DEV}
+      FRONTEND_URL: ${FRONTEND_URL}
+      BACKEND_BASE_URL: ${BACKEND_BASE_URL}
+      EMAIL_SMTP_HOST: ${EMAIL_SMTP_HOST:-smtp.office365.com}
+      EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-587}
+      EMAIL_ADDRESS: ${EMAIL_ADDRESS}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@governanceledstore.co.uk}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:-}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      GIT_HUB_CLIENT_ID: ${GIT_HUB_CLIENT_ID:-}
+      GIT_HUB_CLIENT_SECRET: ${GIT_HUB_CLIENT_SECRET:-}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/actuator/info"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    logging: *default-logging
+    networks:
+      - gls
+
+  web:
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-web
+    restart: unless-stopped
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        BACKEND_BASE_URL: http://api:8080
+        NEXT_PUBLIC_APP_ENV: ${APP_ENV:-DEV}
+    environment:
+      BACKEND_BASE_URL: http://api:8080
+      NODE_ENV: production
+      PORT: "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
+    networks:
+      - gls
+
+  nginx:
+    image: nginx:alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    logging: *default-logging
+    networks:
+      - gls
+
+volumes:
+  mongo_data:
+
+networks:
+  gls:
+    driver: bridge

@@ -1,0 +1,11 @@
+spring:
+  data:
+    mongodb:
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://root:example@mongo:27017/governance_led_storage_main?authSource=admin}
+      auto-index-creation: true
+
+logging:
+  level:
+    co.uk.wolfnotsheep: ${LOG_LEVEL:INFO}
+    org.springframework.security: WARN
+    org.springframework.web.cors: WARN

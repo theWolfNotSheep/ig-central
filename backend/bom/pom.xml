@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>co.uk.wolfnotsheep</groupId>
+    <artifactId>gls-bom</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>GLS BOM</name>
+    <description>Bill of Materials — pins compatible versions for all GLS modules</description>
+
+    <properties>
+        <gls.platform.version>0.0.1-SNAPSHOT</gls.platform.version>
+        <gls.app.version>0.0.1-SNAPSHOT</gls.app.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+
+            <!-- ==================== Platform ==================== -->
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.platform</groupId>
+                <artifactId>gls-platform</artifactId>
+                <version>${gls.platform.version}</version>
+            </dependency>
+
+            <!-- ==================== App Modules ==================== -->
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep</groupId>
+                <artifactId>gls-app-assembly</artifactId>
+                <version>${gls.app.version}</version>
+            </dependency>
+
+        </dependencies>
+    </dependencyManagement>
+
+</project>

@@ -1,0 +1,68 @@
+frontend:
+  url: ${FRONTEND_URL:http://localhost:3000}
+backend:
+  base-url: ${BACKEND_BASE_URL:http://localhost:8080}
+app:
+  admin:
+    email: ${ADMIN_EMAIL:admin@governanceledstore.co.uk}
+    password: ${ADMIN_PASSWORD:ChangeMe123!}
+  environment: ${APP_ENV:DEV}
+spring:
+  application:
+    name: governance-led-storage-backend
+    jwtSecret: ${JWT_SECRET:mkj1e8TsWXIWmXHMmJAli53oxkDnK28pUIX/n1wI56ChWswdcpNHpVSsirKbgNGbSr6ItJFXLDyIkviadCTJtA==}
+    jwtExpirationMs: ${JWT_EXPIRATION_MS:172800000}
+  data:
+    mongodb:
+      auto-index-creation: true
+  thymeleaf:
+    prefix: classpath:/templates/
+    suffix: .html
+    mode: HTML
+  autoconfigure:
+    exclude:
+      - ${EXCLUDE_OAUTH2:org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2ClientAutoConfiguration}
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 110MB
+      max-request-size: 120MB
+      file-size-threshold: 2KB
+  mail:
+    host: ${EMAIL_SMTP_HOST:smtp.office365.com}
+    port: ${EMAIL_SMTP_PORT:587}
+    username: ${EMAIL_ADDRESS}
+    password: ${EMAIL_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+    protocol: smtp
+  mongodb:
+    uri: ${SPRING_DATA_MONGODB_URI}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+  health:
+    mongo:
+      enabled: true
+    mail:
+      enabled: false
+    diskspace:
+      enabled: true
+
+logging:
+  level:
+    co.uk.wolfnotsheep: TRACE
+    org.springframework.security: TRACE
+    org.springframework.web.cors: TRACE

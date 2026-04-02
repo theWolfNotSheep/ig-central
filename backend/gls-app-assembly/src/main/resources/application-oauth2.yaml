@@ -1,0 +1,27 @@
+# Activate this profile when OAuth2 providers are configured:
+#   SPRING_PROFILES_ACTIVE=docker,oauth2
+spring:
+  autoconfigure:
+    exclude: []
+  security:
+    oauth2:
+      client:
+        registration:
+          linkedin:
+            client-id: ${LINKEDIN_CLIENT_ID}
+            client-secret: ${LINKEDIN_CLIENT_SECRET}
+            scope: openid, profile, email
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            client-name: LinkedIn
+          github:
+            client-id: ${GIT_HUB_CLIENT_ID}
+            client-secret: ${GIT_HUB_CLIENT_SECRET}
+            scope: [ read:user, user:email ]
+        provider:
+          linkedin:
+            authorization-uri: https://www.linkedin.com/oauth/v2/authorization
+            token-uri: https://www.linkedin.com/oauth/v2/accessToken
+            user-info-uri: https://api.linkedin.com/v2/userinfo
+            jwk-set-uri: https://www.linkedin.com/oauth/openid/jwks
+            user-name-attribute: sub
