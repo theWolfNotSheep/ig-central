@@ -3,15 +3,15 @@ package co.uk.wolfnotsheep.mcp.tools;
 import co.uk.wolfnotsheep.governance.models.GovernancePolicy;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
-import org.springframework.stereotype.Component;
+import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.stereotype.Service;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 
-@Component
+@Service
 public class GovernancePolicyTool {
 
     private final GovernanceService governanceService;
@@ -22,14 +22,14 @@ public class GovernancePolicyTool {
         this.objectMapper = objectMapper;
     }
 
-    @Tool(name = "get_governance_policies",
+    @McpTool(name = "get_governance_policies",
             description = "Retrieve active governance policies. Optionally filter by category ID or sensitivity label. " +
                     "Use this to understand what rules apply to a document based on its classification.")
     public String getPolicies(
-            @ToolParam(description = "Optional: filter policies by classification category ID", required = false)
+            @McpToolParam(description = "Optional: filter policies by classification category ID", required = false)
             String categoryId,
-            @ToolParam(description = "Optional: filter policies by sensitivity label (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)", required = false)
-            String sensitivityLabel) throws JsonProcessingException {
+            @McpToolParam(description = "Optional: filter policies by sensitivity label (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)", required = false)
+            String sensitivityLabel) throws JacksonException {
 
         List<GovernancePolicy> policies;
 

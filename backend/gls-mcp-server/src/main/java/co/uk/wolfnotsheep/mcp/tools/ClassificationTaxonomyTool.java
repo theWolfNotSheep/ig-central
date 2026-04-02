@@ -1,10 +1,10 @@
 package co.uk.wolfnotsheep.mcp.tools;
 
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.stereotype.Component;
+import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.stereotype.Service;
 
-@Component
+@Service
 public class ClassificationTaxonomyTool {
 
     private final GovernanceService governanceService;
@@ -13,7 +13,7 @@ public class ClassificationTaxonomyTool {
         this.governanceService = governanceService;
     }
 
-    @Tool(name = "get_classification_taxonomy",
+    @McpTool(name = "get_classification_taxonomy",
             description = "Retrieve the full document classification taxonomy as a hierarchical tree. " +
                     "Each category includes its name, description, default sensitivity label, and keywords. " +
                     "Use this to determine which category a document belongs to.")

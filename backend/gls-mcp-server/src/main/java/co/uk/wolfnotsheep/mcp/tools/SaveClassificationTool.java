@@ -3,14 +3,13 @@ package co.uk.wolfnotsheep.mcp.tools;
 import co.uk.wolfnotsheep.governance.models.DocumentClassificationResult;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
-import org.springframework.stereotype.Component;
+import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Map;
 
-@Component
+@Service
 public class SaveClassificationTool {
 
     private final GovernanceService governanceService;
@@ -19,25 +18,25 @@ public class SaveClassificationTool {
         this.governanceService = governanceService;
     }
 
-    @Tool(name = "save_classification_result",
+    @McpTool(name = "save_classification_result",
             description = "Persist the classification result for a document. Call this after you have determined the " +
                     "category, sensitivity, tags, and applicable policies. This creates an immutable audit record.")
     public String saveClassification(
-            @ToolParam(description = "The ID of the document being classified", required = true)
+            @McpToolParam(description = "The ID of the document being classified")
             String documentId,
-            @ToolParam(description = "The classification category ID from the taxonomy", required = true)
+            @McpToolParam(description = "The classification category ID from the taxonomy")
             String categoryId,
-            @ToolParam(description = "The human-readable category name", required = true)
+            @McpToolParam(description = "The human-readable category name")
             String categoryName,
-            @ToolParam(description = "The sensitivity label: PUBLIC, INTERNAL, CONFIDENTIAL, or RESTRICTED", required = true)
+            @McpToolParam(description = "The sensitivity label: PUBLIC, INTERNAL, CONFIDENTIAL, or RESTRICTED")
             String sensitivityLabel,
-            @ToolParam(description = "Confidence score between 0.0 and 1.0", required = true)
+            @McpToolParam(description = "Confidence score between 0.0 and 1.0")
             double confidence,
-            @ToolParam(description = "Explanation of why this classification was chosen", required = true)
+            @McpToolParam(description = "Explanation of why this classification was chosen")
             String reasoning,
-            @ToolParam(description = "Comma-separated tags extracted from the document", required = false)
+            @McpToolParam(description = "Comma-separated tags extracted from the document", required = false)
             String tags,
-            @ToolParam(description = "The retention schedule ID to apply", required = false)
+            @McpToolParam(description = "The retention schedule ID to apply", required = false)
             String retentionScheduleId) {
 
         DocumentClassificationResult result = new DocumentClassificationResult();
