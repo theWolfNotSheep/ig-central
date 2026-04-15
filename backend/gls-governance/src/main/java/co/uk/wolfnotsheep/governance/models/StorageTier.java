@@ -3,6 +3,7 @@ package co.uk.wolfnotsheep.governance.models;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -24,6 +25,11 @@ public class StorageTier {
     private List<SensitivityLabel> allowedSensitivities;
     private long maxFileSizeBytes;
     private double costPerGbMonth;
+
+    // Import provenance
+    private String sourcePackSlug;
+    private Integer sourcePackVersion;
+    private Instant importedAt;
 
     public StorageTier() {}
 
@@ -56,4 +62,13 @@ public class StorageTier {
 
     public double getCostPerGbMonth() { return costPerGbMonth; }
     public void setCostPerGbMonth(double costPerGbMonth) { this.costPerGbMonth = costPerGbMonth; }
+
+    public String getSourcePackSlug() { return sourcePackSlug; }
+    public void setSourcePackSlug(String sourcePackSlug) { this.sourcePackSlug = sourcePackSlug; }
+
+    public Integer getSourcePackVersion() { return sourcePackVersion; }
+    public void setSourcePackVersion(Integer sourcePackVersion) { this.sourcePackVersion = sourcePackVersion; }
+
+    public Instant getImportedAt() { return importedAt; }
+    public void setImportedAt(Instant importedAt) { this.importedAt = importedAt; }
 }

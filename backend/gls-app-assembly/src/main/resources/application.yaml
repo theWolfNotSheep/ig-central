@@ -1,5 +1,11 @@
+governance-hub:
+  url: ${GOVERNANCE_HUB_URL:http://localhost:8090}
+  api-key: ${GOVERNANCE_HUB_API_KEY:}
+
+public:
+  url: ${PUBLIC_URL:http://localhost}
 frontend:
-  url: ${FRONTEND_URL:http://localhost:3000}
+  url: ${PUBLIC_URL:http://localhost}
 backend:
   base-url: ${BACKEND_BASE_URL:http://localhost:8080}
 app:
@@ -8,6 +14,8 @@ app:
     password: ${ADMIN_PASSWORD:ChangeMe123!}
   environment: ${APP_ENV:DEV}
 spring:
+  main:
+    allow-bean-definition-overriding: true
   application:
     name: governance-led-storage-backend
     jwtSecret: ${JWT_SECRET:mkj1e8TsWXIWmXHMmJAli53oxkDnK28pUIX/n1wI56ChWswdcpNHpVSsirKbgNGbSr6ItJFXLDyIkviadCTJtA==}
@@ -42,13 +50,24 @@ spring:
             required: true
     protocol: smtp
   mongodb:
-    uri: ${SPRING_DATA_MONGODB_URI}
+    uri: ${SPRING_MONGODB_URI:mongodb://root:example@localhost:27017/governance_led_storage_main?authSource=admin}
 
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+
+spring.elasticsearch:
+  uris: ${SPRING_ELASTICSEARCH_URIS:http://localhost:9200}
+  socket-timeout: 30s
+  connection-timeout: 10s
+
+google:
+  oauth:
+    client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
+    client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
+    redirect-uri: ${PUBLIC_URL:http://localhost}/api/drives/google/callback
 
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
@@ -72,6 +91,30 @@ management:
       enabled: false
     diskspace:
       enabled: true
+
+monitoring:
+  services:
+    - name: api
+      url: http://localhost:8080/actuator/health
+    - name: mcp-server
+      url: ${MCP_SERVER_HEALTH:http://localhost:8081/actuator/health}
+    - name: llm-worker
+      url: ${LLM_WORKER_HEALTH:http://localhost:8082/actuator/health}
+    - name: doc-processor
+      url: ${DOC_PROCESSOR_HEALTH:http://localhost:8083/actuator/health}
+    - name: governance-enforcer
+      url: ${GOVERNANCE_ENFORCER_HEALTH:http://localhost:8084/actuator/health}
+  rabbitmq-management-url: http://${RABBITMQ_HOST:localhost}:15672/api
+  health-check-timeout-ms: 3000
+
+pipeline:
+  execution-engine:
+    enabled: true
+  bert:
+    service-url: ${PIPELINE_BERT_SERVICE_URL:http://localhost:8000}
+  llm:
+    service-url: ${LLM_SERVICE_URL:http://localhost:8082}
+    timeout-ms: ${LLM_TIMEOUT_MS:300000}
 
 logging:
   level:

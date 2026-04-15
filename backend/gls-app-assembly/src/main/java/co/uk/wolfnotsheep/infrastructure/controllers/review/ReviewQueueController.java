@@ -5,8 +5,14 @@ import co.uk.wolfnotsheep.document.models.DocumentModel;
 import co.uk.wolfnotsheep.document.models.DocumentStatus;
 import co.uk.wolfnotsheep.document.repositories.AuditEventRepository;
 import co.uk.wolfnotsheep.document.services.DocumentService;
+import co.uk.wolfnotsheep.governance.models.BlockFeedback;
+import co.uk.wolfnotsheep.governance.models.ClassificationCorrection;
+import co.uk.wolfnotsheep.governance.models.ClassificationCorrection.CorrectionType;
 import co.uk.wolfnotsheep.governance.models.DocumentClassificationResult;
+import co.uk.wolfnotsheep.governance.models.PipelineBlock;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
+import co.uk.wolfnotsheep.governance.repositories.BlockFeedbackRepository;
+import co.uk.wolfnotsheep.governance.repositories.PipelineBlockRepository;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -30,13 +36,19 @@ public class ReviewQueueController {
     private final DocumentService documentService;
     private final GovernanceService governanceService;
     private final AuditEventRepository auditEventRepository;
+    private final BlockFeedbackRepository blockFeedbackRepo;
+    private final PipelineBlockRepository blockRepo;
 
     public ReviewQueueController(DocumentService documentService,
                                  GovernanceService governanceService,
-                                 AuditEventRepository auditEventRepository) {
+                                 AuditEventRepository auditEventRepository,
+                                 BlockFeedbackRepository blockFeedbackRepo,
+                                 PipelineBlockRepository blockRepo) {
         this.documentService = documentService;
         this.governanceService = governanceService;
         this.auditEventRepository = auditEventRepository;
+        this.blockFeedbackRepo = blockFeedbackRepo;
+        this.blockRepo = blockRepo;
     }
 
     @GetMapping
@@ -69,10 +81,26 @@ public class ReviewQueueController {
             latest.setHumanReviewed(true);
             latest.setReviewedBy(user.getUsername());
             governanceService.saveClassificationResult(latest);
+
+            // Record as a positive signal — the LLM got it right
+            ClassificationCorrection correction = new ClassificationCorrection();
+            correction.setDocumentId(documentId);
+            correction.setOriginalCategoryId(latest.getCategoryId());
+            correction.setOriginalCategoryName(latest.getCategoryName());
+            correction.setOriginalSensitivity(latest.getSensitivityLabel());
+            correction.setOriginalConfidence(latest.getConfidence());
+            correction.setCorrectedCategoryId(latest.getCategoryId());
+            correction.setCorrectedCategoryName(latest.getCategoryName());
+            correction.setCorrectedSensitivity(latest.getSensitivityLabel());
+            correction.setCorrectionType(CorrectionType.APPROVED_CORRECT);
+            correction.setReason("Approved as correct by reviewer");
+            correction.setMimeType(doc.getMimeType());
+            correction.setCorrectedBy(user.getUsername());
+            governanceService.saveCorrection(correction);
         }
 
-        // Advance status
-        doc.setStatus(DocumentStatus.GOVERNANCE_APPLIED);
+        // Advance status — document goes to inbox for filing
+        doc.setStatus(DocumentStatus.INBOX);
         doc.setGovernanceAppliedAt(Instant.now());
         documentService.save(doc);
 
@@ -96,6 +124,11 @@ public class ReviewQueueController {
         DocumentModel doc = documentService.getById(documentId);
         if (doc == null) return ResponseEntity.notFound().build();
 
+        // Get the original LLM classification for correction tracking
+        List<DocumentClassificationResult> history =
+                governanceService.getClassificationHistory(documentId);
+        DocumentClassificationResult original = history.isEmpty() ? null : history.getFirst();
+
         // Create a new classification result with the human override
         DocumentClassificationResult override = new DocumentClassificationResult();
         override.setDocumentId(documentId);
@@ -110,13 +143,45 @@ public class ReviewQueueController {
         override.setReviewedBy(user.getUsername());
         governanceService.saveClassificationResult(override);
 
+        // Record the correction for LLM feedback
+        if (original != null) {
+            boolean catChanged = !request.categoryId().equals(original.getCategoryId());
+            boolean senChanged = request.sensitivityLabel() != original.getSensitivityLabel();
+
+            ClassificationCorrection correction = new ClassificationCorrection();
+            correction.setDocumentId(documentId);
+            correction.setOriginalCategoryId(original.getCategoryId());
+            correction.setOriginalCategoryName(original.getCategoryName());
+            correction.setOriginalSensitivity(original.getSensitivityLabel());
+            correction.setOriginalConfidence(original.getConfidence());
+            correction.setCorrectedCategoryId(request.categoryId());
+            correction.setCorrectedCategoryName(request.categoryName());
+            correction.setCorrectedSensitivity(request.sensitivityLabel());
+            correction.setCorrectionType(catChanged && senChanged ? CorrectionType.BOTH_CHANGED
+                    : catChanged ? CorrectionType.CATEGORY_CHANGED
+                    : CorrectionType.SENSITIVITY_CHANGED);
+            correction.setReason(request.reason());
+            correction.setMimeType(doc.getMimeType());
+            correction.setKeywords(request.tags());
+            correction.setCorrectedBy(user.getUsername());
+            governanceService.saveCorrection(correction);
+
+            // Wire feedback to the Classification Prompt block
+            createBlockFeedback(documentId, BlockFeedback.FeedbackType.CORRECTION,
+                    "Category: " + original.getCategoryName() + " → " + request.categoryName() +
+                    (senChanged ? "; Sensitivity: " + original.getSensitivityLabel() + " → " + request.sensitivityLabel() : "") +
+                    "; Reason: " + request.reason(),
+                    original.getCategoryName(), request.categoryName(),
+                    user.getUsername(), PipelineBlock.BlockType.PROMPT);
+        }
+
         // Update the document with the override
         doc.setClassificationResultId(override.getId());
         doc.setCategoryId(request.categoryId());
         doc.setCategoryName(request.categoryName());
         doc.setSensitivityLabel(request.sensitivityLabel());
         doc.setTags(request.tags());
-        doc.setStatus(DocumentStatus.GOVERNANCE_APPLIED);
+        doc.setStatus(DocumentStatus.INBOX);
         doc.setGovernanceAppliedAt(Instant.now());
         documentService.save(doc);
 
@@ -155,6 +220,77 @@ public class ReviewQueueController {
         return ResponseEntity.ok(doc);
     }
 
+    /**
+     * Report PII that the system missed. Creates a PII_FLAGGED correction
+     * that feeds back to the LLM via the get_org_pii_patterns MCP tool.
+     */
+    @PostMapping("/{documentId}/report-pii")
+    public ResponseEntity<ClassificationCorrection> reportPii(
+            @PathVariable String documentId,
+            @RequestBody PiiReportRequest request,
+            @AuthenticationPrincipal UserDetails user) {
+
+        DocumentModel doc = documentService.getById(documentId);
+        if (doc == null) return ResponseEntity.notFound().build();
+
+        ClassificationCorrection correction = new ClassificationCorrection();
+        correction.setDocumentId(documentId);
+        correction.setOriginalCategoryId(doc.getCategoryId());
+        correction.setOriginalCategoryName(doc.getCategoryName());
+        correction.setOriginalSensitivity(doc.getSensitivityLabel());
+        correction.setCorrectedCategoryId(doc.getCategoryId());
+        correction.setCorrectedCategoryName(doc.getCategoryName());
+        correction.setCorrectedSensitivity(doc.getSensitivityLabel());
+        correction.setCorrectionType(CorrectionType.PII_FLAGGED);
+        correction.setReason("PII reported by " + user.getUsername());
+        correction.setMimeType(doc.getMimeType());
+        correction.setPiiCorrections(request.piiItems().stream()
+                .map(p -> new ClassificationCorrection.PiiCorrection(p.type(), p.description(), p.context()))
+                .toList());
+        correction.setCorrectedBy(user.getUsername());
+
+        ClassificationCorrection saved = governanceService.saveCorrection(correction);
+
+        // Wire feedback to the PII Regex block
+        for (var item : request.piiItems()) {
+            createBlockFeedback(documentId, BlockFeedback.FeedbackType.MISSED,
+                    "Missed PII: " + item.type() + " — " + item.description(),
+                    null, item.type() + ": " + item.description(),
+                    user.getUsername(), PipelineBlock.BlockType.REGEX_SET);
+        }
+
+        // Add the reported PII entities to the document's findings immediately
+        // so they're visible without waiting for a re-scan
+        var existingFindings = doc.getPiiFindings() != null
+                ? new java.util.ArrayList<>(doc.getPiiFindings()) : new java.util.ArrayList<co.uk.wolfnotsheep.document.models.PiiEntity>();
+        for (var item : request.piiItems()) {
+            var entity = new co.uk.wolfnotsheep.document.models.PiiEntity(
+                    item.type(), item.context(), item.context(),
+                    0, 1.0, co.uk.wolfnotsheep.document.models.PiiEntity.DetectionMethod.LLM);
+            entity.setVerified(true);
+            entity.setVerifiedBy(user.getUsername());
+            existingFindings.add(entity);
+        }
+        doc.setPiiFindings(existingFindings);
+        long activeCount = existingFindings.stream()
+                .filter(p -> !p.isDismissed()).count();
+        doc.setPiiStatus(activeCount > 0 ? "DETECTED" : doc.getPiiStatus());
+        doc.setPiiScannedAt(Instant.now());
+        documentService.save(doc);
+
+        auditEventRepository.save(new AuditEvent(
+                documentId, "PII_REPORTED", user.getUsername(), "USER",
+                Map.of("piiCount", String.valueOf(request.piiItems().size()))
+        ));
+
+        return ResponseEntity.ok(saved);
+    }
+
+    @GetMapping("/corrections")
+    public ResponseEntity<List<ClassificationCorrection>> getRecentCorrections() {
+        return ResponseEntity.ok(governanceService.getRecentCorrections(20));
+    }
+
     @GetMapping("/low-confidence")
     public ResponseEntity<List<DocumentClassificationResult>> getLowConfidence(
             @RequestParam(defaultValue = "0.7") double threshold) {
@@ -168,4 +304,35 @@ public class ReviewQueueController {
             List<String> tags,
             String reason
     ) {}
+
+    public record PiiReportRequest(List<PiiItem> piiItems) {}
+
+    public record PiiItem(String type, String description, String context) {}
+
+    // ── Block Feedback Helper ────────────────────────────
+
+    private void createBlockFeedback(String documentId, BlockFeedback.FeedbackType type,
+                                      String details, String originalValue, String correctedValue,
+                                      String userEmail, PipelineBlock.BlockType blockType) {
+        // Find the block of this type
+        List<PipelineBlock> blocks = blockRepo.findByTypeAndActiveTrueOrderByNameAsc(blockType);
+        if (blocks.isEmpty()) return;
+
+        PipelineBlock block = blocks.getFirst();
+        BlockFeedback feedback = new BlockFeedback();
+        feedback.setBlockId(block.getId());
+        feedback.setBlockVersion(block.getActiveVersion());
+        feedback.setDocumentId(documentId);
+        feedback.setUserEmail(userEmail);
+        feedback.setType(type);
+        feedback.setDetails(details);
+        feedback.setOriginalValue(originalValue);
+        feedback.setCorrectedValue(correctedValue);
+        blockFeedbackRepo.save(feedback);
+
+        // Update feedback count
+        block.setFeedbackCount(blockFeedbackRepo.countByBlockId(block.getId()));
+        block.setCorrectionsReceived(block.getCorrectionsReceived() + 1);
+        blockRepo.save(block);
+    }
 }

@@ -1,0 +1,4 @@
+spring:
+  data:
+    mongodb:
+      uri: mongodb://root:${HUB_MONGO_PASSWORD:hubpassword123}@hub-mongo:27017/governance_hub?authSource=admin

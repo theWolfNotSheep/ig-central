@@ -2,6 +2,7 @@ package co.uk.wolfnotsheep.mcp.tools;
 
 import co.uk.wolfnotsheep.governance.models.RetentionSchedule;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
+import co.uk.wolfnotsheep.mcp.ToolCallLogger;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Service;
@@ -15,10 +16,12 @@ public class RetentionScheduleTool {
 
     private final GovernanceService governanceService;
     private final ObjectMapper objectMapper;
+    private final ToolCallLogger toolLog;
 
-    public RetentionScheduleTool(GovernanceService governanceService, ObjectMapper objectMapper) {
+    public RetentionScheduleTool(GovernanceService governanceService, ObjectMapper objectMapper, ToolCallLogger toolLog) {
         this.governanceService = governanceService;
         this.objectMapper = objectMapper;
+        this.toolLog = toolLog;
     }
 
     @McpTool(name = "get_retention_schedules",
@@ -27,6 +30,7 @@ public class RetentionScheduleTool {
     public String getSchedules(
             @McpToolParam(description = "Optional: retrieve a specific retention schedule by ID", required = false)
             String scheduleId) throws JacksonException {
+        toolLog.logToolCall("", "get_retention_schedules", "Loading schedules" + (scheduleId != null ? " for id=" + scheduleId : ""));
 
         if (scheduleId != null && !scheduleId.isBlank()) {
             RetentionSchedule schedule = governanceService.getRetentionSchedule(scheduleId);

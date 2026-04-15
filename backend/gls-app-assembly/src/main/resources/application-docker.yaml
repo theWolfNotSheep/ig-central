@@ -1,7 +1,6 @@
 spring:
   data:
     mongodb:
-      uri: ${SPRING_DATA_MONGODB_URI:mongodb://root:example@mongo:27017/governance_led_storage_main?authSource=admin}
       auto-index-creation: true
   rabbitmq:
     host: rabbitmq
@@ -12,6 +11,23 @@ spring:
 
 minio:
   endpoint: http://minio:9000
+
+spring.elasticsearch:
+  uris: http://elasticsearch:9200
+
+monitoring:
+  services:
+    - name: api
+      url: http://localhost:8080/actuator/health
+    - name: mcp-server
+      url: http://mcp-server:8081/actuator/health
+    - name: llm-worker
+      url: http://llm-worker:8082/actuator/health
+    - name: doc-processor
+      url: http://doc-processor:8083/actuator/health
+    - name: governance-enforcer
+      url: http://governance-enforcer:8084/actuator/health
+  rabbitmq-management-url: http://rabbitmq:15672/api
 
 logging:
   level:

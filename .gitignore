@@ -15,6 +15,16 @@ backend/**/*.class
 web/node_modules/
 web/.next/
 web/out/
+web-hub/node_modules/
+web-hub/.next/
+web-hub/out/
+
+# Build artifacts
+backend/.next/
+backend/BOOT-INF/
+
+# Persistent data (bind mounts)
+data/
 
 # OS
 .DS_Store

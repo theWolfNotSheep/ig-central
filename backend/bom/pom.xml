@@ -75,6 +75,20 @@
                 <version>${gls.version}</version>
             </dependency>
 
+            <!-- ==================== Governance Hub ==================== -->
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.hub</groupId>
+                <artifactId>gls-governance-hub</artifactId>
+                <version>${gls.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.hub.app</groupId>
+                <artifactId>gls-governance-hub-app</artifactId>
+                <version>${gls.version}</version>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
 

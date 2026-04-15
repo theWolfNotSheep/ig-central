@@ -44,7 +44,26 @@ public class UserModel implements UserDetails, AuthenticatedUser {
     private Set<String> roles;
     private Set<String> permissions;
 
+    // ── Profile ──────────────────────────────────
+    private String firstName;
+    private String lastName;
+    private String displayName;
+    private String department;
+    private String jobTitle;
+    private String organisationId;
+    private String avatarUrl;
+
+    // ── Access Control ───────────────────────────
+    private int sensitivityClearanceLevel; // 0=PUBLIC, 1=INTERNAL, 2=CONFIDENTIAL, 3=RESTRICTED
+    private Set<String> taxonomyGrantIds;
+
+    // ── Directory Service ────────────────────────
+    private String externalDirectoryId;
+    private String externalDirectorySource;
+    private Instant lastDirectorySyncAt;
+
     private LocalDateTime createdDate;
+    private Instant lastLoginAt;
 
 
     protected UserModel() {}
@@ -112,6 +131,20 @@ public class UserModel implements UserDetails, AuthenticatedUser {
     public LocalDateTime getCreatedDate() {
         return createdDate;
     }
+
+    public String getFirstName() { return firstName; }
+    public String getLastName() { return lastName; }
+    public String getDisplayName() { return displayName; }
+    public String getDepartment() { return department; }
+    public String getJobTitle() { return jobTitle; }
+    public String getAvatarUrl() { return avatarUrl; }
+    public String getOrganisationId() { return organisationId; }
+    public int getSensitivityClearanceLevel() { return sensitivityClearanceLevel; }
+    public Set<String> getTaxonomyGrantIds() { return taxonomyGrantIds; }
+    public String getExternalDirectoryId() { return externalDirectoryId; }
+    public String getExternalDirectorySource() { return externalDirectorySource; }
+    public Instant getLastDirectorySyncAt() { return lastDirectorySyncAt; }
+    public Instant getLastLoginAt() { return lastLoginAt; }
 
     @Override
     public boolean isAccountNonLocked() {
@@ -217,6 +250,20 @@ public class UserModel implements UserDetails, AuthenticatedUser {
     public void setCreatedDate(Instant createdDate) {
         this.createdDate = LocalDateTime.ofInstant(createdDate, ZoneId.systemDefault());
     }
+
+    public void setFirstName(String firstName) { this.firstName = firstName; }
+    public void setLastName(String lastName) { this.lastName = lastName; }
+    public void setDisplayName(String displayName) { this.displayName = displayName; }
+    public void setDepartment(String department) { this.department = department; }
+    public void setJobTitle(String jobTitle) { this.jobTitle = jobTitle; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
+    public void setOrganisationId(String organisationId) { this.organisationId = organisationId; }
+    public void setSensitivityClearanceLevel(int sensitivityClearanceLevel) { this.sensitivityClearanceLevel = sensitivityClearanceLevel; }
+    public void setTaxonomyGrantIds(Set<String> taxonomyGrantIds) { this.taxonomyGrantIds = taxonomyGrantIds; }
+    public void setExternalDirectoryId(String externalDirectoryId) { this.externalDirectoryId = externalDirectoryId; }
+    public void setExternalDirectorySource(String externalDirectorySource) { this.externalDirectorySource = externalDirectorySource; }
+    public void setLastDirectorySyncAt(Instant lastDirectorySyncAt) { this.lastDirectorySyncAt = lastDirectorySyncAt; }
+    public void setLastLoginAt(Instant lastLoginAt) { this.lastLoginAt = lastLoginAt; }
     //-----------------------------------------------------------------------------------------------------------------
 
 

@@ -44,6 +44,9 @@ public class DocumentClassificationResult {
     /** The LLM's reasoning chain — why it made this classification. */
     private String reasoning;
 
+    /** A brief human-readable summary of the document content. */
+    private String summary;
+
     /** Which model was used for this classification. */
     private String modelId;
 
@@ -85,6 +88,9 @@ public class DocumentClassificationResult {
 
     public String getReasoning() { return reasoning; }
     public void setReasoning(String reasoning) { this.reasoning = reasoning; }
+
+    public String getSummary() { return summary; }
+    public void setSummary(String summary) { this.summary = summary; }
 
     public String getModelId() { return modelId; }
     public void setModelId(String modelId) { this.modelId = modelId; }

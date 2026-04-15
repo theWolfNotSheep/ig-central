@@ -3,6 +3,7 @@ package co.uk.wolfnotsheep.mcp.tools;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.models.StorageTier;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
+import co.uk.wolfnotsheep.mcp.ToolCallLogger;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Service;
@@ -16,10 +17,12 @@ public class StorageCapabilitiesTool {
 
     private final GovernanceService governanceService;
     private final ObjectMapper objectMapper;
+    private final ToolCallLogger toolLog;
 
-    public StorageCapabilitiesTool(GovernanceService governanceService, ObjectMapper objectMapper) {
+    public StorageCapabilitiesTool(GovernanceService governanceService, ObjectMapper objectMapper, ToolCallLogger toolLog) {
         this.governanceService = governanceService;
         this.objectMapper = objectMapper;
+        this.toolLog = toolLog;
     }
 
     @McpTool(name = "get_storage_capabilities",
@@ -28,6 +31,7 @@ public class StorageCapabilitiesTool {
     public String getCapabilities(
             @McpToolParam(description = "Optional: filter storage tiers by what sensitivity they support (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)", required = false)
             String sensitivityLabel) throws JacksonException {
+        toolLog.logToolCall("", "get_storage_capabilities", "Loading storage tiers");
 
         List<StorageTier> tiers;
 

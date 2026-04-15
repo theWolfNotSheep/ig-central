@@ -3,6 +3,7 @@ package co.uk.wolfnotsheep.governance.models;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -23,7 +24,13 @@ public class ClassificationCategory {
     private List<String> keywords;
     private SensitivityLabel defaultSensitivity;
     private String retentionScheduleId;
+    private String metadataSchemaId;
     private boolean active;
+
+    // Import provenance
+    private String sourcePackSlug;
+    private Integer sourcePackVersion;
+    private Instant importedAt;
 
     public ClassificationCategory() {}
 
@@ -48,6 +55,18 @@ public class ClassificationCategory {
     public String getRetentionScheduleId() { return retentionScheduleId; }
     public void setRetentionScheduleId(String retentionScheduleId) { this.retentionScheduleId = retentionScheduleId; }
 
+    public String getMetadataSchemaId() { return metadataSchemaId; }
+    public void setMetadataSchemaId(String metadataSchemaId) { this.metadataSchemaId = metadataSchemaId; }
+
     public boolean isActive() { return active; }
     public void setActive(boolean active) { this.active = active; }
+
+    public String getSourcePackSlug() { return sourcePackSlug; }
+    public void setSourcePackSlug(String sourcePackSlug) { this.sourcePackSlug = sourcePackSlug; }
+
+    public Integer getSourcePackVersion() { return sourcePackVersion; }
+    public void setSourcePackVersion(Integer sourcePackVersion) { this.sourcePackVersion = sourcePackVersion; }
+
+    public Instant getImportedAt() { return importedAt; }
+    public void setImportedAt(Instant importedAt) { this.importedAt = importedAt; }
 }

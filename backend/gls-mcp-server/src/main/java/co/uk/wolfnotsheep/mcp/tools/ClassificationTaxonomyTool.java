@@ -1,6 +1,7 @@
 package co.uk.wolfnotsheep.mcp.tools;
 
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
+import co.uk.wolfnotsheep.mcp.ToolCallLogger;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.stereotype.Service;
 
@@ -8,9 +9,11 @@ import org.springframework.stereotype.Service;
 public class ClassificationTaxonomyTool {
 
     private final GovernanceService governanceService;
+    private final ToolCallLogger toolLog;
 
-    public ClassificationTaxonomyTool(GovernanceService governanceService) {
+    public ClassificationTaxonomyTool(GovernanceService governanceService, ToolCallLogger toolLog) {
         this.governanceService = governanceService;
+        this.toolLog = toolLog;
     }
 
     @McpTool(name = "get_classification_taxonomy",
@@ -18,6 +21,7 @@ public class ClassificationTaxonomyTool {
                     "Each category includes its name, description, default sensitivity label, and keywords. " +
                     "Use this to determine which category a document belongs to.")
     public String getTaxonomy() {
+        toolLog.logToolCall("", "get_classification_taxonomy", "Loading taxonomy categories");
         String taxonomy = governanceService.getTaxonomyAsText();
 
         if (taxonomy.isBlank()) {

@@ -15,4 +15,8 @@ public interface RoleRepository extends MongoRepository<Role, String> {
     List<Role> findByIdIn(List<String> ids);
 
     List<Role> findByAccountTypeScopeContaining(String accountType);
+
+    List<Role> findByAdminRoleTrueAndStatus(String status);
+
+    List<Role> findByDefaultForNewUsersTrueAndStatus(String status);
 }

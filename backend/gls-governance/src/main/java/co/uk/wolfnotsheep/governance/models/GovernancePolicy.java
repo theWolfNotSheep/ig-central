@@ -38,9 +38,17 @@ public class GovernancePolicy {
     /** Actions to enforce: e.g. {"encryption": "AES-256", "accessReview": "quarterly"} */
     private Map<String, String> enforcementActions;
 
+    /** IDs of Legislation documents that mandate this policy. */
+    private List<String> legislationIds;
+
     private Instant createdAt;
     private String createdBy;
     private Instant updatedAt;
+
+    // Import provenance
+    private String sourcePackSlug;
+    private Integer sourcePackVersion;
+    private Instant importedAt;
 
     public GovernancePolicy() {}
 
@@ -85,4 +93,16 @@ public class GovernancePolicy {
 
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+
+    public List<String> getLegislationIds() { return legislationIds; }
+    public void setLegislationIds(List<String> legislationIds) { this.legislationIds = legislationIds; }
+
+    public String getSourcePackSlug() { return sourcePackSlug; }
+    public void setSourcePackSlug(String sourcePackSlug) { this.sourcePackSlug = sourcePackSlug; }
+
+    public Integer getSourcePackVersion() { return sourcePackVersion; }
+    public void setSourcePackVersion(Integer sourcePackVersion) { this.sourcePackVersion = sourcePackVersion; }
+
+    public Instant getImportedAt() { return importedAt; }
+    public void setImportedAt(Instant importedAt) { this.importedAt = importedAt; }
 }

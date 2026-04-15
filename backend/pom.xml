@@ -33,6 +33,8 @@
         <module>gls-llm-orchestration</module>
         <module>gls-governance-enforcement</module>
         <module>gls-app-assembly</module>
+        <module>gls-governance-hub</module>
+        <module>gls-governance-hub-app</module>
     </modules>
 
     <dependencyManagement>

@@ -3,6 +3,7 @@ package co.uk.wolfnotsheep.infrastructure;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 
@@ -17,9 +18,12 @@ import org.springframework.data.mongodb.repository.config.EnableMongoRepositorie
         "co.uk.wolfnotsheep.platform",
         "co.uk.wolfnotsheep.apps",
         "co.uk.wolfnotsheep.governance",
-        "co.uk.wolfnotsheep.document"
+        "co.uk.wolfnotsheep.document",
+        "co.uk.wolfnotsheep.docprocessing",
+        "co.uk.wolfnotsheep.enforcement"
 })
 @ConfigurationPropertiesScan
+@EnableScheduling
 public class GlsApplication {
 
     public static void main(String[] args) {

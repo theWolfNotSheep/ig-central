@@ -5,14 +5,24 @@ import co.uk.wolfnotsheep.document.models.DocumentModel;
 import co.uk.wolfnotsheep.document.models.DocumentStatus;
 import co.uk.wolfnotsheep.document.repositories.AuditEventRepository;
 import co.uk.wolfnotsheep.document.repositories.DocumentRepository;
+import co.uk.wolfnotsheep.document.util.SlugGenerator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.support.PageableExecutionUtils;
+
 import java.io.InputStream;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -21,16 +31,24 @@ import java.util.UUID;
 @Service
 public class DocumentService {
 
+    private static final Logger log = LoggerFactory.getLogger(DocumentService.class);
+
     private final DocumentRepository documentRepository;
     private final AuditEventRepository auditEventRepository;
     private final ObjectStorageService objectStorage;
+    private final MongoTemplate mongoTemplate;
+    private final PipelineStatusNotifier statusNotifier;
 
     public DocumentService(DocumentRepository documentRepository,
                            AuditEventRepository auditEventRepository,
-                           ObjectStorageService objectStorage) {
+                           ObjectStorageService objectStorage,
+                           MongoTemplate mongoTemplate,
+                           PipelineStatusNotifier statusNotifier) {
         this.documentRepository = documentRepository;
         this.auditEventRepository = auditEventRepository;
         this.objectStorage = objectStorage;
+        this.mongoTemplate = mongoTemplate;
+        this.statusNotifier = statusNotifier;
     }
 
     /**
@@ -66,6 +84,8 @@ public class DocumentService {
             doc.setUpdatedAt(Instant.now());
 
             DocumentModel saved = documentRepository.save(doc);
+            saved.setSlug(SlugGenerator.generate(file.getOriginalFilename(), saved.getId()));
+            saved = documentRepository.save(saved);
 
             // Audit
             audit(saved.getId(), "DOCUMENT_UPLOADED", uploadedBy, "USER", Map.of(
@@ -78,6 +98,18 @@ public class DocumentService {
         } catch (Exception e) {
             throw new RuntimeException("Failed to ingest document", e);
         }
+    }
+
+    public List<DocumentModel> getAll() {
+        return documentRepository.findAll();
+    }
+
+    /** Find documents by external storage file IDs — efficient indexed query for Drive cross-referencing. */
+    public List<DocumentModel> findByExternalFileIds(List<String> fileIds) {
+        if (fileIds == null || fileIds.isEmpty()) return List.of();
+        return mongoTemplate.find(
+                Query.query(Criteria.where("externalStorageRef.fileId").in(fileIds)),
+                DocumentModel.class);
     }
 
     public DocumentModel getById(String id) {
@@ -113,7 +145,7 @@ public class DocumentService {
 
         if (newStatus == DocumentStatus.PROCESSED) doc.setProcessedAt(Instant.now());
         if (newStatus == DocumentStatus.CLASSIFIED) doc.setClassifiedAt(Instant.now());
-        if (newStatus == DocumentStatus.GOVERNANCE_APPLIED) doc.setGovernanceAppliedAt(Instant.now());
+        if (newStatus == DocumentStatus.GOVERNANCE_APPLIED || newStatus == DocumentStatus.INBOX) doc.setGovernanceAppliedAt(Instant.now());
 
         DocumentModel saved = documentRepository.save(doc);
 
@@ -122,12 +154,73 @@ public class DocumentService {
                 "to", newStatus.name()
         ));
 
+        statusNotifier.notifyStatusChange(id, newStatus.name(), saved.getOriginalFileName());
         return saved;
     }
 
     public DocumentModel save(DocumentModel doc) {
         doc.setUpdatedAt(Instant.now());
         return documentRepository.save(doc);
+    }
+
+    public DocumentModel setError(String id, DocumentStatus failedStatus, String stage, String errorMessage) {
+        DocumentModel doc = documentRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        DocumentStatus oldStatus = doc.getStatus();
+        doc.setStatus(failedStatus);
+        doc.setLastError(errorMessage);
+        doc.setLastErrorStage(stage);
+        doc.setFailedAt(Instant.now());
+        doc.setUpdatedAt(Instant.now());
+        DocumentModel saved = documentRepository.save(doc);
+        audit(id, "PROCESSING_FAILED", "SYSTEM", "SYSTEM", Map.of(
+                "from", oldStatus.name(), "to", failedStatus.name(),
+                "stage", stage, "error", errorMessage != null ? errorMessage : "unknown"));
+        statusNotifier.notifyStatusChange(id, failedStatus.name(), saved.getOriginalFileName());
+        return saved;
+    }
+
+    public DocumentModel clearErrorForReprocess(String id) {
+        DocumentModel doc = documentRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+        doc.setLastError(null);
+        doc.setLastErrorStage(null);
+        doc.setFailedAt(null);
+        doc.setCancelledAt(null); // Clear cancel flag so reprocessing works
+        // Reset pipeline timing so the UI shows fresh run timers
+        doc.setProcessedAt(null);
+        doc.setClassifiedAt(null);
+        doc.setGovernanceAppliedAt(null);
+        doc.setPiiScannedAt(null);
+        doc.setRetryCount(doc.getRetryCount() + 1);
+        doc.setStatus(DocumentStatus.UPLOADED);
+        doc.setUpdatedAt(Instant.now());
+        return documentRepository.save(doc);
+    }
+
+    public DocumentModel deleteDocument(String id, String performedBy) {
+        DocumentModel doc = documentRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Document not found: " + id));
+
+        // Delete from object storage (tolerate missing file — may already be gone)
+        if (doc.getStorageKey() != null) {
+            try {
+                String bucket = doc.getStorageBucket() != null ? doc.getStorageBucket() : objectStorage.getDefaultBucket();
+                objectStorage.delete(bucket, doc.getStorageKey());
+            } catch (Exception e) {
+                log.warn("Could not delete storage object for document {}: {}", id, e.getMessage());
+            }
+        }
+
+        documentRepository.deleteById(id);
+        audit(id, "DOCUMENT_DELETED", performedBy, "USER", Map.of(
+                "fileName", doc.getOriginalFileName() != null ? doc.getOriginalFileName() : "unknown",
+                "status", doc.getStatus() != null ? doc.getStatus().name() : "unknown"));
+        return doc;
+    }
+
+    public DocumentModel getBySlug(String slug) {
+        return documentRepository.findBySlug(slug).orElse(null);
     }
 
     public List<DocumentModel> getExpiredDocuments() {
@@ -147,6 +240,52 @@ public class DocumentService {
 
     public long countByStatus(DocumentStatus status) {
         return documentRepository.countByStatus(status);
+    }
+
+    public List<DocumentModel> getByCategoryAndUploader(String categoryId, String categoryName, String uploadedBy) {
+        List<DocumentModel> byId = documentRepository.findByCategoryIdAndUploadedByOrderByOriginalFileNameAsc(categoryId, uploadedBy);
+        if (!byId.isEmpty()) return byId;
+        // Fallback: LLM may have saved category name instead of ID
+        return documentRepository.findByCategoryNameAndUploadedByOrderByOriginalFileNameAsc(categoryName, uploadedBy);
+    }
+
+    public List<DocumentModel> getUnclassifiedByUploader(String uploadedBy) {
+        return documentRepository.findByCategoryIdIsNullAndUploadedByOrderByCreatedAtDesc(uploadedBy);
+    }
+
+    public Page<DocumentModel> search(String uploadedBy, String q, String status,
+                                       String sensitivity, String category, String mimeType,
+                                       Pageable pageable) {
+        List<Criteria> filters = new ArrayList<>();
+        filters.add(Criteria.where("uploadedBy").is(uploadedBy));
+
+        if (q != null && !q.isBlank()) {
+            String pattern = ".*" + java.util.regex.Pattern.quote(q.trim()) + ".*";
+            filters.add(new Criteria().orOperator(
+                    Criteria.where("originalFileName").regex(pattern, "i"),
+                    Criteria.where("categoryName").regex(pattern, "i"),
+                    Criteria.where("tags").regex(pattern, "i")
+            ));
+        }
+        if (status != null && !status.isBlank()) {
+            filters.add(Criteria.where("status").is(DocumentStatus.valueOf(status)));
+        }
+        if (sensitivity != null && !sensitivity.isBlank()) {
+            filters.add(Criteria.where("sensitivityLabel").is(SensitivityLabel.valueOf(sensitivity)));
+        }
+        if (category != null && !category.isBlank()) {
+            filters.add(Criteria.where("categoryName").is(category));
+        }
+        if (mimeType != null && !mimeType.isBlank()) {
+            filters.add(Criteria.where("mimeType").regex(".*" + java.util.regex.Pattern.quote(mimeType) + ".*", "i"));
+        }
+
+        Query query = new Query(new Criteria().andOperator(filters.toArray(new Criteria[0])))
+                .with(pageable);
+
+        List<DocumentModel> results = mongoTemplate.find(query, DocumentModel.class);
+        return PageableExecutionUtils.getPage(results, pageable,
+                () -> mongoTemplate.count(Query.of(query).limit(-1).skip(-1), DocumentModel.class));
     }
 
     // ── Helpers ──────────────────────────────────────────

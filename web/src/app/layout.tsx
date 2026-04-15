@@ -15,8 +15,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Governance-Led Storage",
-  description: "Governance-Led Storage Platform",
+  title: "IG Central",
+  description: "Information Governance Central — classify, protect, and manage your documents",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

@@ -29,6 +29,9 @@ public class Role {
     private String status = "ACTIVE";
 
     private boolean systemProtected = false;
+    private boolean adminRole = false;
+    private boolean defaultForNewUsers = false;
+    private int defaultSensitivityClearance = 0;
 
     public Role() {}
 
@@ -42,6 +45,9 @@ public class Role {
     public List<String> getAccountTypeScope() { return accountTypeScope; }
     public String getStatus() { return status; }
     public boolean isSystemProtected() { return systemProtected; }
+    public boolean isAdminRole() { return adminRole; }
+    public boolean isDefaultForNewUsers() { return defaultForNewUsers; }
+    public int getDefaultSensitivityClearance() { return defaultSensitivityClearance; }
 
     // SETTERS
     public void setId(String id) { this.id = id; }
@@ -53,4 +59,7 @@ public class Role {
     public void setAccountTypeScope(List<String> accountTypeScope) { this.accountTypeScope = accountTypeScope; }
     public void setStatus(String status) { this.status = status; }
     public void setSystemProtected(boolean systemProtected) { this.systemProtected = systemProtected; }
+    public void setAdminRole(boolean adminRole) { this.adminRole = adminRole; }
+    public void setDefaultForNewUsers(boolean defaultForNewUsers) { this.defaultForNewUsers = defaultForNewUsers; }
+    public void setDefaultSensitivityClearance(int defaultSensitivityClearance) { this.defaultSensitivityClearance = defaultSensitivityClearance; }
 }

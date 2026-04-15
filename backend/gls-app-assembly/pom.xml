@@ -34,6 +34,16 @@
             <artifactId>gls-document</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>co.uk.wolfnotsheep.docprocessing</groupId>
+            <artifactId>gls-document-processing</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>co.uk.wolfnotsheep.enforcement</groupId>
+            <artifactId>gls-governance-enforcement</artifactId>
+        </dependency>
+
         <!-- ==================== RabbitMQ ==================== -->
 
         <dependency>
@@ -46,6 +56,25 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aspects</artifactId>
+        </dependency>
+
+        <!-- ==================== Tika (Office doc preview) ==================== -->
+
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-core</artifactId>
+            <version>3.1.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parsers-standard-package</artifactId>
+            <version>3.1.0</version>
         </dependency>
 
         <!-- ==================== Logging ==================== -->
@@ -76,6 +105,31 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-mongodb</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-elasticsearch</artifactId>
+        </dependency>
+
+        <!-- ==================== Google Drive API ==================== -->
+
+        <dependency>
+            <groupId>com.google.api-client</groupId>
+            <artifactId>google-api-client</artifactId>
+            <version>2.7.2</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.google.apis</groupId>
+            <artifactId>google-api-services-drive</artifactId>
+            <version>v3-rev20241027-2.0.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.google.auth</groupId>
+            <artifactId>google-auth-library-oauth2-http</artifactId>
+            <version>1.30.1</version>
         </dependency>
 
         <!-- ==================== Email ==================== -->

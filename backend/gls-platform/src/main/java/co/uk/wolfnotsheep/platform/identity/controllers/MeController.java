@@ -27,11 +27,16 @@ public class MeController {
         MeResponse response = new MeResponse(
                 true,
                 userId,
-                principal.getEmail(),
-                principal.getEmail(),
+                principal.getFirstName() != null ? principal.getFirstName() : principal.getEmail(),
+                principal.getLastName() != null ? principal.getLastName() : "",
+                principal.getDisplayName(),
+                principal.getAvatarUrl(),
                 principal.getRoles() != null ? List.copyOf(principal.getRoles()) : List.of(),
                 principal.getPermissions() != null ? List.copyOf(principal.getPermissions()) : List.of(),
-                principal.getAccountType() != null ? principal.getAccountType().name() : null
+                principal.getAccountType() != null ? principal.getAccountType().name() : null,
+                principal.getSensitivityClearanceLevel(),
+                principal.getSignUpMethod(),
+                principal.getIdentity() != null ? principal.getIdentity().getProvider() : null
         );
 
         return ResponseEntity.ok(response);
@@ -42,8 +47,13 @@ public class MeController {
             String userId,
             String firstName,
             String lastName,
+            String displayName,
+            String avatarUrl,
             List<String> roles,
             List<String> permissions,
-            String accountType
+            String accountType,
+            int sensitivityClearanceLevel,
+            String signUpMethod,
+            String identityProvider
     ) {}
 }

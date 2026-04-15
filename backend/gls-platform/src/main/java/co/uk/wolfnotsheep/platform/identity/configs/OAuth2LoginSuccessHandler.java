@@ -45,8 +45,8 @@ public class OAuth2LoginSuccessHandler extends SavedRequestAwareAuthenticationSu
         this.userRepo = userRepo;
     }
 
-    @Value("${frontend.url}")
-    private String frontendUrl;
+    @Value("${public.url:${frontend.url}}")
+    private String publicUrl;
 
     @Override
     public void onAuthenticationSuccess(
@@ -90,7 +90,7 @@ public class OAuth2LoginSuccessHandler extends SavedRequestAwareAuthenticationSu
         String jwtToken = jwtUtils.generateTokenFromUsername(user);
 
         String targetUrl = UriComponentsBuilder
-                .fromUriString(frontendUrl + "/oauth2/redirect")
+                .fromUriString(publicUrl + "/oauth2/redirect")
                 .queryParam("token", jwtToken)
                 .build()
                 .toUriString();

@@ -1,0 +1,27 @@
+{
+  "0": {
+    "category_id": "demo-hr",
+    "category_name": "HR Documents",
+    "sensitivity_label": "CONFIDENTIAL"
+  },
+  "1": {
+    "category_id": "demo-finance",
+    "category_name": "Financial Records",
+    "sensitivity_label": "RESTRICTED"
+  },
+  "2": {
+    "category_id": "demo-legal",
+    "category_name": "Legal Documents",
+    "sensitivity_label": "CONFIDENTIAL"
+  },
+  "3": {
+    "category_id": "demo-operations",
+    "category_name": "Operations",
+    "sensitivity_label": "INTERNAL"
+  },
+  "4": {
+    "category_id": "demo-general",
+    "category_name": "General",
+    "sensitivity_label": "PUBLIC"
+  }
+}

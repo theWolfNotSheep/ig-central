@@ -21,6 +21,40 @@ function setCookieArrayToCookieHeader(setCookie?: string[] | string): string {
     return arr.map((c) => c.split(";")[0]).join("; ");
 }
 
+/**
+ * GET handler for OAuth callbacks — receives JWT token as query param,
+ * sets the httpOnly cookie, and redirects to dashboard.
+ */
+export async function GET(req: Request) {
+    const url = new URL(req.url);
+    const token = url.searchParams.get("token");
+
+    if (!token) {
+        return new NextResponse(null, {
+            status: 302,
+            headers: { Location: "/login?error=no_token" },
+        });
+    }
+
+    const isProduction = process.env.NODE_ENV === "production";
+
+    // Use manual redirect with relative Location to avoid Docker internal URL issues
+    const response = new NextResponse(null, {
+        status: 302,
+        headers: { Location: "/dashboard" },
+    });
+
+    response.cookies.set("access_token", token, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: isProduction,
+        path: "/",
+        maxAge: 60 * 60 * 48,
+    });
+
+    return response;
+}
+
 export async function POST(req: Request) {
     const { username, password } = (await req.json()) as { username: string; password: string };
 

@@ -4,7 +4,7 @@
 
 - **Backend:** Spring Boot 4.0.2 (Java 21), Maven multi-module monorepo, MongoDB
 - **Frontend:** Next.js 16 (React 19, TypeScript, TailwindCSS 4)
-- **Infra:** Docker Compose — Cloudflare tunnel, nginx, MongoDB
+- **Infra:** Docker Compose ��� Cloudflare tunnel, nginx, MongoDB, Elasticsearch, RabbitMQ, MinIO
 - **Auth:** JWT + OAuth2 (optional), CSRF via cookie
 
 ### Module structure
@@ -102,14 +102,201 @@ Subscription (links a user/company to a Product)
 - `PublicConfigController` — `GET /api/public/config` for frontend config
 - `AdminConfigController` — `GET/PUT /api/admin/config` for admin management
 
+## Pipeline Blocks
+
+**Blocks are versioned, reusable processing units that plug into pipelines.** Every prompt, regex pattern set, extractor, router, and enforcer is a block with full version history and user feedback tracking.
+
+### Block types
+
+| Type | What it contains | Example |
+|---|---|---|
+| `PROMPT` | System prompt + user template + model config | "Classification Prompt v3" |
+| `REGEX_SET` | Regex patterns with types + confidence | "UK PII Patterns v2" |
+| `EXTRACTOR` | Text extraction config | "Tika Text Extractor v1" |
+| `ROUTER` | Conditional routing logic | "Confidence Router v1" |
+| `ENFORCER` | Governance enforcement rules | "Standard Enforcement v1" |
+
+### Version control
+
+- Every block has an immutable version history — publish creates a new version, never overwrites
+- Active version is what pipelines use by default
+- Drafts can be edited and previewed before publishing
+- Rollback to any previous version with one click
+- Each version records: content snapshot, changelog, published by, timestamp
+
+### Feedback loop
+
+User corrections automatically create block feedback:
+- Classification overrides → CORRECTION feedback on the PROMPT block
+- PII dismissals → FALSE_POSITIVE feedback on the REGEX_SET block
+- PII flags (missed) → MISSED feedback on the REGEX_SET block
+- Admin can add SUGGESTION feedback manually
+
+Feedback accumulates per block per version. When enough feedback exists, admins can use "Improve with AI" to generate a better version.
+
+### Admin: Block Library (`/blocks`)
+
+Block list with type filters, version counts, feedback badges. Detail panel with:
+- **Configuration** — JSON editor for block content, save draft, publish
+- **Versions** — timeline with rollback, version comparison
+- **Feedback** — user corrections grouped by type
+
+## Happy Path AND Unhappy Path
+
+**Every pipeline stage and async workflow must handle both success and failure explicitly.** Never silently swallow errors or leave resources in an intermediate state.
+
+### Rules
+
+- **Every RabbitMQ consumer must catch exceptions and set a `*_FAILED` status** on the document (e.g. `PROCESSING_FAILED`, `CLASSIFICATION_FAILED`, `ENFORCEMENT_FAILED`). Never re-throw exceptions that cause infinite requeue loops.
+- **Store the error** — `lastError` (message), `lastErrorStage` (which step failed), `failedAt` (timestamp) must be set on the document so admins and users can see what went wrong.
+- **Failed documents must be retryable** — the monitoring page provides "Retry Failed" to re-queue them. The `reprocess` endpoint clears error state and increments `retryCount`.
+- **Stale detection** — documents stuck in in-flight states (PROCESSING, CLASSIFYING) for >10 minutes are considered stale and can be reset from the monitoring page.
+- **Audit everything** — every status transition, including failures, must produce an audit event.
+- **No silent returns** — if a pipeline step cannot produce a result (e.g. LLM returns no classification), that is a failure and must be recorded as such.
+
+### Document status flow
+
+```
+UPLOADED → PROCESSING → PROCESSED → CLASSIFYING → CLASSIFIED → GOVERNANCE_APPLIED
+              ↓                          ↓                          ↓
+       PROCESSING_FAILED        CLASSIFICATION_FAILED       ENFORCEMENT_FAILED
+              ↓                          ↓                          ↓
+           (retry)                    (retry)                    (retry)
+```
+
+### Pipeline error statuses
+
+| Status | Stage | Set by |
+|---|---|---|
+| `PROCESSING_FAILED` | Text extraction / PII scan | `DocumentProcessingPipeline` |
+| `CLASSIFICATION_FAILED` | LLM classification | `ClassificationPipeline` |
+| `ENFORCEMENT_FAILED` | Governance enforcement | `ClassificationEnforcementConsumer` |
+
+## Slug-Based URLs
+
+**All user-facing items must be addressable by slug, not raw MongoDB ObjectId.**
+
+- Slugs are generated on creation: `{slugified-name}-{last-6-chars-of-id}` (e.g. `maternity-leave-confirmation-a3f2b1`)
+- `SlugGenerator` utility in `gls-document` handles generation
+- Documents have a `slug` field with a unique sparse index
+- Backend exposes `/by-slug/{slug}` endpoints alongside ID-based endpoints
+- Frontend uses slugs in query params (e.g. `/documents?doc=maternity-leave-confirmation-a3f2b1`)
+- Existing documents without slugs are backfilled on startup via `SlugBackfillRunner`
+
+## Correction Feedback Loop
+
+**Human corrections feed back to the LLM via MCP tools to improve classification accuracy over time.**
+
+### How it works
+
+1. LLM classifies a document → low confidence routes to review queue
+2. Records manager approves, overrides, or flags PII → stored as `ClassificationCorrection` in MongoDB
+3. Next classification: LLM calls `get_correction_history` and `get_org_pii_patterns` MCP tools
+4. Tools return past human corrections relevant to the document's category/type
+5. LLM adjusts its decision based on correction history — few-shot learning at inference time
+
+### Correction types
+
+| Type | Trigger | What's stored |
+|---|---|---|
+| `APPROVED_CORRECT` | Reviewer approves | Positive signal — LLM got it right |
+| `CATEGORY_CHANGED` | Override with different category | Original vs corrected category + reason |
+| `SENSITIVITY_CHANGED` | Override with different sensitivity | Original vs corrected sensitivity + reason |
+| `BOTH_CHANGED` | Override changes both | Both corrections + reason |
+| `PII_FLAGGED` | Report missed PII | PII type, description, context |
+
+### MCP tools for feedback
+
+| Tool | Called when | Returns |
+|---|---|---|
+| `get_correction_history` | Before every classification (required) | Past corrections for this category/mime type |
+| `get_org_pii_patterns` | Before PII analysis | Organisation-specific PII types from corrections |
+
+### Path to cheaper models
+
+As corrections accumulate, the MCP tools provide richer context, reducing reliance on model reasoning. This enables stepping down from Sonnet to Haiku because the model's job shifts from open-ended classification to pattern matching against provided examples.
+
+## Metadata Extraction Schemas
+
+**The LLM extracts structured metadata from documents based on configurable schemas linked to taxonomy categories.**
+
+### How it works
+
+1. Admin creates a `MetadataSchema` (e.g. "HR Leave Request") with typed fields: `employee_name (text)`, `leave_type (keyword)`, `start_date (date)`, etc.
+2. Schema is linked to taxonomy categories (e.g. "HR > Employee Records", "HR > HR Letters")
+3. During classification, the LLM calls `get_metadata_schemas` MCP tool after determining the category
+4. If a schema matches, the LLM extracts the defined fields from the document text
+5. Extracted metadata is saved as a JSON key-value map on the `DocumentClassificationResult.extractedMetadata` field
+6. Metadata is indexed into Elasticsearch for structured search
+
+### Field types
+
+| Type | Description | Example |
+|---|---|---|
+| TEXT | Free-form text | "John Smith" |
+| KEYWORD | Enumerated/short value | "maternity", "England and Wales" |
+| DATE | ISO date | "2026-06-01" |
+| NUMBER | Numeric value | "42" |
+| CURRENCY | Amount with currency | "£50,000" |
+| BOOLEAN | True/false | "true" |
+
+### Rules for new schemas
+
+- Link schemas to specific taxonomy categories — the LLM only extracts fields when the schema applies
+- Mark critical fields as `required` — the LLM will set "NOT_FOUND" if it cannot determine the value
+- Include examples on fields to guide the LLM on expected formats
+- Schemas are managed via Governance > Metadata Schemas in the admin UI
+
+## Search Infrastructure
+
+**Elasticsearch** provides full-text search and structured queries across documents and their extracted metadata.
+
+- ES 8.17 runs as a Docker container alongside the existing services
+- MongoDB remains the system of record; ES is the search index
+- `spring-boot-starter-data-elasticsearch` is included in gls-app-assembly
+- Future: ES indexing consumer on RabbitMQ will index documents on each status change
+
+## External Storage Connectors
+
+**Documents can be classified in-situ from external storage providers without importing them.**
+
+### Google Drive
+
+- OAuth2 flow: user connects via `/drives` page → authorises GLS to read their Drive
+- Tokens stored in `connected_drives` collection
+- File browser: navigate folders, select files, classify individually or entire folders
+- Files stay in Google Drive — content is streamed temporarily for text extraction, then discarded
+- `DocumentModel.storageProvider` = `"GOOGLE_DRIVE"`, with `externalStorageRef` holding fileId, driveId, ownerEmail, webViewLink
+- Viewer proxies content from Google API via `/api/drives/{driveId}/content/{fileId}`
+- Classification, PII detection, metadata extraction work identically to uploaded documents
+- Classification panel shows Google Drive storage info (owner, account, "Open in Drive" link)
+
+### Configuration
+
+```
+PUBLIC_URL=https://your-domain.com
+GOOGLE_OAUTH_CLIENT_ID=your_client_id.apps.googleusercontent.com
+GOOGLE_OAUTH_CLIENT_SECRET=your_client_secret
+```
+
+Google Drive and Google Login redirect URIs are derived automatically from `PUBLIC_URL`:
+- Drive: `${PUBLIC_URL}/api/drives/google/callback`
+- Login: `${PUBLIC_URL}/api/auth/public/google/callback`
+
+Register both in Google Cloud Console → Credentials → Authorized redirect URIs.
+
+### Future: SharePoint / OneDrive
+
+Same `storageProvider` abstraction — implement `SharePointDriveService` behind the same interface.
+
 ## Build & Run
 
 ```bash
 # Local backend
 cd backend && ./mvnw compile -DskipTests -pl gls-app-assembly -am
 
-# Docker (all services)
-docker compose up --build mongo api web nginx -d
+# Docker (all services including Cloudflare tunnel)
+docker compose up --build -d
 
 # Access
 http://localhost          # Homepage

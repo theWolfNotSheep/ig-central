@@ -2,12 +2,15 @@ package co.uk.wolfnotsheep.document.services;
 
 import io.minio.*;
 import io.minio.errors.ErrorResponseException;
+import okhttp3.OkHttpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Abstraction over MinIO/S3-compatible object storage.
@@ -27,9 +30,16 @@ public class ObjectStorageService {
             @Value("${minio.secret-key:minioadmin}") String secretKey,
             @Value("${minio.bucket:gls-documents}") String defaultBucket) {
 
+        OkHttpClient httpClient = new OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .build();
+
         this.minioClient = MinioClient.builder()
                 .endpoint(endpoint)
                 .credentials(accessKey, secretKey)
+                .httpClient(httpClient)
                 .build();
         this.defaultBucket = defaultBucket;
     }
@@ -52,16 +62,37 @@ public class ObjectStorageService {
     public void upload(String bucket, String key, InputStream data, long size, String contentType) {
         try {
             ensureBucketExists(bucket);
-            minioClient.putObject(PutObjectArgs.builder()
-                    .bucket(bucket)
-                    .object(key)
-                    .stream(data, size, -1)
-                    .contentType(contentType)
-                    .build());
-            log.info("Uploaded object: {}/{} ({} bytes)", bucket, key, size);
+
+            // Buffer the stream so we can retry if verification fails
+            byte[] bytes = data.readAllBytes();
+
+            doUpload(bucket, key, bytes, contentType);
+
+            // Post-upload verification
+            if (!exists(bucket, key)) {
+                log.warn("Upload verification failed for {}/{}, retrying once", bucket, key);
+                doUpload(bucket, key, bytes, contentType);
+                if (!exists(bucket, key)) {
+                    throw new RuntimeException(
+                            "Upload verification failed after retry: " + bucket + "/" + key);
+                }
+            }
+
+            log.info("Uploaded object: {}/{} ({} bytes)", bucket, key, bytes.length);
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
             throw new RuntimeException("Failed to upload object: " + bucket + "/" + key, e);
         }
+    }
+
+    private void doUpload(String bucket, String key, byte[] bytes, String contentType) throws Exception {
+        minioClient.putObject(PutObjectArgs.builder()
+                .bucket(bucket)
+                .object(key)
+                .stream(new ByteArrayInputStream(bytes), bytes.length, -1)
+                .contentType(contentType)
+                .build());
     }
 
     public InputStream download(String key) {
@@ -112,6 +143,10 @@ public class ObjectStorageService {
         }
     }
 
+    public boolean exists(String key) {
+        return exists(defaultBucket, key);
+    }
+
     public boolean exists(String bucket, String key) {
         try {
             minioClient.statObject(StatObjectArgs.builder()
@@ -123,6 +158,16 @@ public class ObjectStorageService {
             return false;
         } catch (Exception e) {
             throw new RuntimeException("Failed to check object existence", e);
+        }
+    }
+
+    public boolean healthCheck() {
+        try {
+            minioClient.bucketExists(BucketExistsArgs.builder().bucket(defaultBucket).build());
+            return true;
+        } catch (Exception e) {
+            log.warn("MinIO health check failed: {}", e.getMessage());
+            return false;
         }
     }
 

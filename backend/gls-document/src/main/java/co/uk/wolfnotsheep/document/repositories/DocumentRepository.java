@@ -29,4 +29,35 @@ public interface DocumentRepository extends MongoRepository<DocumentModel, Strin
     Page<DocumentModel> findByStatusIn(List<DocumentStatus> statuses, Pageable pageable);
 
     long countByStatus(DocumentStatus status);
+
+    List<DocumentModel> findByFolderIdOrderByOriginalFileNameAsc(String folderId);
+
+    List<DocumentModel> findByFolderIdIsNullAndUploadedByOrderByOriginalFileNameAsc(String uploadedBy);
+
+    List<DocumentModel> findByCategoryIdAndUploadedByOrderByOriginalFileNameAsc(String categoryId, String uploadedBy);
+
+    List<DocumentModel> findByCategoryNameAndUploadedByOrderByOriginalFileNameAsc(String categoryName, String uploadedBy);
+
+    List<DocumentModel> findByCategoryIdIsNullAndUploadedByOrderByCreatedAtDesc(String uploadedBy);
+
+    Optional<DocumentModel> findBySlug(String slug);
+
+    long countByStatusIn(List<DocumentStatus> statuses);
+
+    List<DocumentModel> findByFolderIdIsNullAndStorageProviderInOrderByCreatedAtDesc(List<String> providers);
+
+    List<DocumentModel> findByConnectedDriveIdOrderByCreatedAtDesc(String connectedDriveId);
+
+    long countByConnectedDriveId(String connectedDriveId);
+
+    List<DocumentModel> findByStatusAndMimeType(DocumentStatus status, String mimeType);
+
+    List<DocumentModel> findByStatusInAndMimeType(List<DocumentStatus> statuses, String mimeType);
+
+    Page<DocumentModel> findByStatusAndUploadedByOrderByUpdatedAtDesc(DocumentStatus status, String uploadedBy, Pageable pageable);
+
+    long countByStatusAndUploadedBy(DocumentStatus status, String uploadedBy);
+
+    long countByStatusAndUpdatedAtBefore(DocumentStatus status, Instant before);
+
 }

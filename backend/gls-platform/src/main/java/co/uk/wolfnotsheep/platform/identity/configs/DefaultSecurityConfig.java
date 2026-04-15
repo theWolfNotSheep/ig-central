@@ -60,6 +60,9 @@ public class DefaultSecurityConfig {
         http.csrf(csrf ->
                 csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .ignoringRequestMatchers("/api/auth/public/**")
+                        .ignoringRequestMatchers("/api/internal/**")
+                        .ignoringRequestMatchers("/api/drives/google/callback")
+                        .ignoringRequestMatchers("/api/auth/public/google/**")
                         .ignoringRequestMatchers(IdentityPaths.VERIFY)
                         .ignoringRequestMatchers("/actuator/**")
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())

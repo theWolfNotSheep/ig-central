@@ -3,6 +3,7 @@ package co.uk.wolfnotsheep.mcp.tools;
 import co.uk.wolfnotsheep.governance.models.GovernancePolicy;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
+import co.uk.wolfnotsheep.mcp.ToolCallLogger;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Service;
@@ -16,10 +17,12 @@ public class GovernancePolicyTool {
 
     private final GovernanceService governanceService;
     private final ObjectMapper objectMapper;
+    private final ToolCallLogger toolLog;
 
-    public GovernancePolicyTool(GovernanceService governanceService, ObjectMapper objectMapper) {
+    public GovernancePolicyTool(GovernanceService governanceService, ObjectMapper objectMapper, ToolCallLogger toolLog) {
         this.governanceService = governanceService;
         this.objectMapper = objectMapper;
+        this.toolLog = toolLog;
     }
 
     @McpTool(name = "get_governance_policies",
@@ -30,6 +33,7 @@ public class GovernancePolicyTool {
             String categoryId,
             @McpToolParam(description = "Optional: filter policies by sensitivity label (PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED)", required = false)
             String sensitivityLabel) throws JacksonException {
+        toolLog.logToolCall("", "get_governance_policies", "Loading policies");
 
         List<GovernancePolicy> policies;
 

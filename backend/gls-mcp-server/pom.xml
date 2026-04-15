@@ -54,6 +54,11 @@
             <artifactId>gls-governance</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>co.uk.wolfnotsheep.document</groupId>
+            <artifactId>gls-document</artifactId>
+        </dependency>
+
         <!-- ==================== Spring Boot ==================== -->
 
         <dependency>

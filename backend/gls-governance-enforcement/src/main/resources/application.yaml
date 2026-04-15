@@ -5,9 +5,8 @@ spring:
   application:
     name: gls-governance-enforcement
 
-  data:
-    mongodb:
-      uri: mongodb://root:${MONGO_PASSWORD:example}@localhost:27017/${MONGO_DB_NAME:governance_led_storage_main}?authSource=admin
+  mongodb:
+    uri: mongodb://root:${MONGO_PASSWORD:example}@localhost:27017/${MONGO_DB_NAME:governance_led_storage_main}?authSource=admin
 
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
@@ -20,6 +19,10 @@ minio:
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin}
   bucket: ${MINIO_BUCKET:gls-documents}
+
+pipeline:
+  execution-engine:
+    enabled: ${PIPELINE_EXECUTION_ENGINE_ENABLED:false}
 
 management:
   endpoints:
