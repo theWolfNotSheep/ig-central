@@ -104,6 +104,30 @@ public class SyncLlmNodeExecutor {
             payload.put("blockId", blockId);
             payload.put("mode", mode);
 
+            // Per-node LLM overrides from the visual editor (provider, model, temperature,
+            // maxTokens, timeoutSeconds, prompt-injection toggles).
+            if (nodeConfig.get("provider") != null && !nodeConfig.get("provider").toString().isBlank()) {
+                payload.put("provider", nodeConfig.get("provider").toString());
+            }
+            if (nodeConfig.get("model") != null && !nodeConfig.get("model").toString().isBlank()) {
+                payload.put("model", nodeConfig.get("model").toString());
+            }
+            if (nodeConfig.get("temperature") != null) {
+                payload.put("temperature", toDouble(nodeConfig.get("temperature")));
+            }
+            if (nodeConfig.get("maxTokens") != null) {
+                payload.put("maxTokens", toInt(nodeConfig.get("maxTokens"), 0));
+            }
+            if (nodeConfig.get("timeoutSeconds") != null) {
+                payload.put("timeoutSeconds", toInt(nodeConfig.get("timeoutSeconds"), 0));
+            }
+            // Prompt-injection toggles — pre-load taxonomy/sensitivities/etc. to skip MCP round-trips
+            for (String key : new String[]{"injectTaxonomy", "injectSensitivities", "injectTraits", "injectPiiTypes"}) {
+                if (nodeConfig.get(key) != null) {
+                    payload.put(key, Boolean.parseBoolean(nodeConfig.get(key).toString()));
+                }
+            }
+
             String requestBody = objectMapper.writeValueAsString(payload);
 
             HttpRequest request = HttpRequest.newBuilder()
@@ -235,5 +259,11 @@ public class SyncLlmNodeExecutor {
         if (val instanceof Number n) return n.intValue();
         if (val instanceof String s) { try { return Integer.parseInt(s); } catch (Exception e) { return defaultVal; } }
         return defaultVal;
+    }
+
+    private static Double toDouble(Object val) {
+        if (val instanceof Number n) return n.doubleValue();
+        if (val instanceof String s) { try { return Double.parseDouble(s); } catch (Exception e) { return null; } }
+        return null;
     }
 }

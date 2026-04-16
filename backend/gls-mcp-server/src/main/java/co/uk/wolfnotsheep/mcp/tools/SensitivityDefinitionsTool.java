@@ -4,7 +4,9 @@ import co.uk.wolfnotsheep.governance.models.SensitivityDefinition;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.repositories.SensitivityDefinitionRepository;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
+import co.uk.wolfnotsheep.mcp.config.CacheConfig;
 import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -20,6 +22,7 @@ public class SensitivityDefinitionsTool {
         this.toolLog = toolLog;
     }
 
+    @Cacheable(CacheConfig.CACHE_SENSITIVITIES)
     @McpTool(name = "get_sensitivity_definitions",
             description = "Retrieve the definitions of all sensitivity labels with their guidelines and examples. " +
                     "Use this to determine the correct sensitivity level for a document based on its content.")

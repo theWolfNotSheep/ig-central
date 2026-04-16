@@ -2,7 +2,9 @@ package co.uk.wolfnotsheep.mcp.tools;
 
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
+import co.uk.wolfnotsheep.mcp.config.CacheConfig;
 import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -16,6 +18,7 @@ public class ClassificationTaxonomyTool {
         this.toolLog = toolLog;
     }
 
+    @Cacheable(CacheConfig.CACHE_TAXONOMY)
     @McpTool(name = "get_classification_taxonomy",
             description = "Retrieve the full document classification taxonomy as a hierarchical tree. " +
                     "Each category includes its name, description, default sensitivity label, and keywords. " +

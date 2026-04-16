@@ -75,9 +75,10 @@ function deriveStepType(def: NodeTypeDefinition | undefined): string {
     if (!def) return "BUILT_IN";
     switch (def.executionCategory) {
         case "ACCELERATOR": return "ACCELERATOR";
+        case "GENERIC_HTTP": return "ACCELERATOR";
+        case "SYNC_LLM": return "SYNC_LLM";
         case "ASYNC_BOUNDARY": return "LLM_PROMPT";
         case "NOOP": return "BUILT_IN";
-        case "GENERIC_HTTP": return "ACCELERATOR";
         default: return "BUILT_IN";
     }
 }
@@ -243,6 +244,10 @@ function NodeInspector({ node, blocks, onUpdate, defMap }: {
     const config = d.config ?? {};
     const def = defMap.get(nodeType);
 
+    // Test node state
+    const [testing, setTesting] = useState(false);
+    const [testResult, setTestResult] = useState<Record<string, string | number | boolean | null> | null>(null);
+
     const setConfig = useCallback((key: string, value: string) => {
         const newConfig = { ...config, [key]: value };
         onUpdate(node.id, { config: newConfig });
@@ -344,6 +349,56 @@ function NodeInspector({ node, blocks, onUpdate, defMap }: {
                         <p className="text-[10px] text-gray-400">Execution: <span className="font-semibold">{def.executionCategory}</span></p>
                     )}
                 </div>
+
+                {/* Test Node */}
+                {def?.executionCategory && def.executionCategory !== "NOOP" && (
+                    <div className="border-t border-gray-100 pt-3">
+                        <button
+                            disabled={testing}
+                            onClick={async () => {
+                                setTesting(true);
+                                setTestResult(null);
+                                try {
+                                    const { data } = await api.post("/admin/pipelines/test-node", {
+                                        nodeType,
+                                        config,
+                                    });
+                                    setTestResult(data);
+                                } catch {
+                                    setTestResult({ success: false, error: "Request failed" });
+                                } finally {
+                                    setTesting(false);
+                                }
+                            }}
+                            className="w-full px-3 py-1.5 text-xs font-medium rounded-md border border-gray-300 hover:bg-gray-50 disabled:opacity-50 flex items-center justify-center gap-1.5"
+                        >
+                            {testing ? <Loader2 className="size-3 animate-spin" /> : <AlertTriangle className="size-3" />}
+                            {testing ? "Testing..." : "Test Node"}
+                        </button>
+                        {testResult && (
+                            <div className={`mt-2 p-2.5 rounded-md text-[11px] ${
+                                testResult.success ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"
+                            }`}>
+                                <p className={`font-semibold ${testResult.success ? "text-green-700" : "text-red-700"}`}>
+                                    {testResult.success ? "Pass" : "Fail"}
+                                </p>
+                                {testResult.message && <p className="text-gray-600 mt-0.5">{String(testResult.message)}</p>}
+                                {testResult.error && <p className="text-red-600 mt-0.5">{String(testResult.error)}</p>}
+                                {testResult.latencyMs != null && (
+                                    <p className="text-gray-500 mt-0.5">Latency: {String(testResult.latencyMs)}ms</p>
+                                )}
+                                {testResult.classifyStatus != null && (
+                                    <p className="text-gray-500 mt-0.5">Classify endpoint: HTTP {String(testResult.classifyStatus)}</p>
+                                )}
+                                {testResult.classifyResponse && (
+                                    <pre className="mt-1 text-[9px] text-gray-500 bg-white rounded p-1.5 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap break-all">
+                                        {String(testResult.classifyResponse)}
+                                    </pre>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -363,7 +418,7 @@ export default function PipelineEditor({ pipeline, onSaved }: {
     const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
 
     // Load node type definitions from backend
-    const { definitions } = useNodeTypeDefinitions();
+    const { definitions, error: nodeTypeError, refresh: refreshNodeTypes } = useNodeTypeDefinitions();
 
     // Build derived data structures from definitions
     const defMap = useMemo(() => buildDefMap(definitions), [definitions]);
@@ -693,6 +748,12 @@ export default function PipelineEditor({ pipeline, onSaved }: {
                         <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Node Palette</h4>
                     </div>
                     <div className="p-2 space-y-3">
+                        {nodeTypeError && (
+                            <div className="px-2 py-2 bg-red-50 border border-red-200 rounded text-[10px] text-red-700">
+                                <p>{nodeTypeError}</p>
+                                <button onClick={refreshNodeTypes} className="mt-1 text-red-600 underline hover:text-red-800">Retry</button>
+                            </div>
+                        )}
                         {paletteCategories.map(cat => (
                             <div key={cat.name}>
                                 <h5 className="text-[9px] font-bold text-gray-400 uppercase tracking-widest px-1 mb-1.5">{cat.name}</h5>

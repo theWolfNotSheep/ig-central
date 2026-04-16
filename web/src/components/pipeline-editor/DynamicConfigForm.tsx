@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -16,6 +16,7 @@ type PropertySchema = {
     "ui:placeholder"?: string;
     "ui:help"?: string;
     "ui:step"?: number;
+    "ui:group"?: string;
 };
 
 type ConfigSchema = {
@@ -61,18 +62,41 @@ export default function DynamicConfigForm({ schema, config, onConfigChange, cust
         return <p className="text-[10px] text-gray-400">No configuration options.</p>;
     }
 
+    // Group fields by ui:group, preserving insertion order. Ungrouped fields go into "" (rendered first).
+    const groups: Record<string, [string, PropertySchema][]> = {};
+    const groupOrder: string[] = [];
+    for (const [key, prop] of Object.entries(schema.properties)) {
+        const group = prop["ui:group"] ?? "";
+        if (!groups[group]) {
+            groups[group] = [];
+            groupOrder.push(group);
+        }
+        groups[group].push([key, prop]);
+    }
+
     return (
-        <div className="space-y-3">
-            {Object.entries(schema.properties).map(([key, prop]) => (
-                <DynamicField
-                    key={key}
-                    fieldKey={key}
-                    prop={prop}
-                    value={config[key] ?? ""}
-                    onChange={onConfigChange}
-                    config={config}
-                    customWidgets={customWidgets}
-                />
+        <div className="space-y-4">
+            {groupOrder.map(groupName => (
+                <div key={groupName} className={groupName ? "rounded-md border border-gray-200 bg-gray-50/50 p-3" : ""}>
+                    {groupName && (
+                        <h5 className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-2">
+                            {groupName}
+                        </h5>
+                    )}
+                    <div className="space-y-3">
+                        {groups[groupName].map(([key, prop]) => (
+                            <DynamicField
+                                key={key}
+                                fieldKey={key}
+                                prop={prop}
+                                value={config[key] ?? ""}
+                                onChange={onConfigChange}
+                                config={config}
+                                customWidgets={customWidgets}
+                            />
+                        ))}
+                    </div>
+                </div>
             ))}
         </div>
     );
@@ -194,6 +218,9 @@ function DynamicField({ fieldKey, prop, value, onChange, config, customWidgets }
                 </div>
             );
 
+        case "password":
+            return <PasswordField id={id} label={label} value={value} onChange={handleChange} placeholder={placeholder} help={help} />;
+
         case "number":
             return (
                 <div>
@@ -241,4 +268,39 @@ function inferWidget(prop: PropertySchema): string {
     if (prop.type === "boolean") return "checkbox";
     if (prop.type === "integer" || prop.type === "number") return "number";
     return "text";
+}
+
+/* ------------------------------------------------------------------ */
+/*  Password field with show/hide toggle                               */
+/* ------------------------------------------------------------------ */
+
+function PasswordField({ id, label, value, onChange, placeholder, help }: {
+    id: string; label: string; value: string; onChange: (v: string) => void;
+    placeholder?: string; help?: string;
+}) {
+    const [visible, setVisible] = useState(false);
+    return (
+        <div>
+            <label htmlFor={id} className="text-[10px] font-medium text-gray-500 block mb-1">{label}</label>
+            <div className="relative">
+                <input
+                    id={id}
+                    type={visible ? "text" : "password"}
+                    value={value}
+                    onChange={e => onChange(e.target.value)}
+                    placeholder={placeholder}
+                    className="w-full text-sm border border-gray-300 rounded-md px-2.5 py-1.5 pr-8"
+                />
+                <button
+                    type="button"
+                    onClick={() => setVisible(!visible)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-400 hover:text-gray-600"
+                    aria-label={visible ? "Hide" : "Show"}
+                >
+                    {visible ? "Hide" : "Show"}
+                </button>
+            </div>
+            {help && <p className="text-[10px] text-gray-400 mt-0.5">{help}</p>}
+        </div>
+    );
 }

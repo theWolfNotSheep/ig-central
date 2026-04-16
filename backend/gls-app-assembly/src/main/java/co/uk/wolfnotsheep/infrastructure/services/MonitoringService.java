@@ -75,21 +75,16 @@ public class MonitoringService {
     private String s2Name;
     @Value("${monitoring.services[2].url:http://localhost:8082/actuator/health}")
     private String s2Url;
-    @Value("${monitoring.services[3].name:doc-processor}")
+    @Value("${monitoring.services[3].name:bert-classifier}")
     private String s3Name;
-    @Value("${monitoring.services[3].url:http://localhost:8083/actuator/health}")
+    @Value("${monitoring.services[3].url:http://bert-classifier:8000/health}")
     private String s3Url;
-    @Value("${monitoring.services[4].name:governance-enforcer}")
-    private String s4Name;
-    @Value("${monitoring.services[4].url:http://localhost:8084/actuator/health}")
-    private String s4Url;
 
     @jakarta.annotation.PostConstruct
     void init() {
         services.addAll(List.of(
                 new ServiceDef(s0Name, s0Url), new ServiceDef(s1Name, s1Url),
-                new ServiceDef(s2Name, s2Url), new ServiceDef(s3Name, s3Url),
-                new ServiceDef(s4Name, s4Url)));
+                new ServiceDef(s2Name, s2Url), new ServiceDef(s3Name, s3Url)));
     }
 
     // ── Service Health ────────────────────────────────────

@@ -16,7 +16,13 @@ public interface ClassificationCorrectionRepository extends MongoRepository<Clas
 
     List<ClassificationCorrection> findByCorrectionTypeOrderByCorrectedAtDesc(CorrectionType type);
 
+    List<ClassificationCorrection> findTop50ByCorrectionTypeOrderByCorrectedAtDesc(CorrectionType type);
+
     List<ClassificationCorrection> findByMimeTypeOrderByCorrectedAtDesc(String mimeType);
+
+    List<ClassificationCorrection> findTop50ByOriginalCategoryIdOrderByCorrectedAtDesc(String categoryId);
+
+    List<ClassificationCorrection> findTop50ByMimeTypeOrderByCorrectedAtDesc(String mimeType);
 
     List<ClassificationCorrection> findTop20ByOrderByCorrectedAtDesc();
 

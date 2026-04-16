@@ -71,7 +71,8 @@ public class GenericHttpNodeExecutor {
         // Resolve URL: runtime override > httpConfig default
         String baseUrl = toString(nodeConfig.get("serviceUrl"),
                 httpConfig.defaultUrl() != null ? httpConfig.defaultUrl() : "http://localhost:8000");
-        String path = httpConfig.path() != null ? httpConfig.path() : "/classify";
+        String path = toString(nodeConfig.get("path"),
+                httpConfig.path() != null ? httpConfig.path() : "/classify");
         String fullUrl = baseUrl + path;
 
         // Security: validate host against allowlist
@@ -81,7 +82,8 @@ public class GenericHttpNodeExecutor {
         }
 
         int timeoutMs = toInt(nodeConfig.get("timeoutMs"), httpConfig.defaultTimeoutMs() > 0 ? httpConfig.defaultTimeoutMs() : 5000);
-        String method = httpConfig.method() != null ? httpConfig.method().toUpperCase() : "POST";
+        String method = toString(nodeConfig.get("method"),
+                httpConfig.method() != null ? httpConfig.method().toUpperCase() : "POST").toUpperCase();
 
         try {
             // Build request body from template
@@ -96,6 +98,12 @@ public class GenericHttpNodeExecutor {
             reqBuilder.header("Content-Type", "application/json");
             if (httpConfig.defaultHeaders() != null) {
                 httpConfig.defaultHeaders().forEach(reqBuilder::header);
+            }
+
+            // Auth token from node config (visual editor)
+            Object authToken = nodeConfig.get("authToken");
+            if (authToken != null && !authToken.toString().isBlank()) {
+                reqBuilder.header("Authorization", "Bearer " + authToken);
             }
 
             // Method + body

@@ -211,6 +211,15 @@ public class AdminUserController {
         return ResponseEntity.ok(grant);
     }
 
+    @PutMapping("/{userId}/taxonomy-grants/{grantId}")
+    public ResponseEntity<TaxonomyGrant> updateTaxonomyGrant(
+            @PathVariable String userId, @PathVariable String grantId,
+            @RequestBody TaxonomyGrantUpdateRequest request) {
+        TaxonomyGrant updated = accessService.updateGrant(
+                grantId, request.operations(), request.includeChildren());
+        return ResponseEntity.ok(updated);
+    }
+
     @DeleteMapping("/{userId}/taxonomy-grants/{grantId}")
     public ResponseEntity<Void> revokeTaxonomyAccess(
             @PathVariable String userId, @PathVariable String grantId) {
@@ -220,6 +229,8 @@ public class AdminUserController {
 
     record TaxonomyGrantRequest(String categoryId, boolean includeChildren,
                                  Set<String> operations, String reason) {}
+
+    record TaxonomyGrantUpdateRequest(Set<String> operations, Boolean includeChildren) {}
 
     // ── DTOs ──────────────────────────────────────────
 

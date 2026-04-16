@@ -10,6 +10,7 @@ import {
 import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
 import { usePipelineSSE } from "@/hooks/use-pipeline-sse";
+import PipelineRunsTab from "@/components/monitoring/pipeline-runs-tab";
 
 type ServiceStatus = {
     name: string;
@@ -42,8 +43,7 @@ const SERVICE_LABELS: Record<string, string> = {
     api: "API Server",
     "mcp-server": "MCP Server",
     "llm-worker": "LLM Worker",
-    "doc-processor": "Doc Processor",
-    "governance-enforcer": "Gov Enforcer",
+    "bert-classifier": "BERT Classifier",
     minio: "MinIO Storage",
     ollama: "Ollama (Local LLM)",
 };
@@ -121,7 +121,7 @@ export default function MonitoringPage() {
         setRefreshing(false);
     };
 
-    const [monTab, setMonTab] = useState<"overview" | "pipeline" | "errors">("overview");
+    const [monTab, setMonTab] = useState<"overview" | "pipeline" | "runs" | "errors">("overview");
     const [pipelineDocs, setPipelineDocs] = useState<any[]>([]);
     const [pipelineDocsLoading, setPipelineDocsLoading] = useState(false);
     const [pipelineFilter, setPipelineFilter] = useState<string | null>(null);
@@ -213,6 +213,10 @@ export default function MonitoringPage() {
                     {pipeline && (pipeline.statusCounts?.PROCESSING > 0 || pipeline.statusCounts?.CLASSIFYING > 0) && (
                         <span className="ml-1.5 size-2 rounded-full bg-blue-500 animate-pulse inline-block" />
                     )}
+                </button>
+                <button onClick={() => setMonTab("runs")}
+                    className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${monTab === "runs" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"}`}>
+                    Runs
                 </button>
                 <button onClick={() => setMonTab("errors")}
                     className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${monTab === "errors" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"}`}>
@@ -367,6 +371,9 @@ export default function MonitoringPage() {
                     </section>
                 </div>
             )}
+
+            {/* ── Runs Tab ──────────────────────────────── */}
+            {monTab === "runs" && <PipelineRunsTab />}
 
             {/* ── Overview Tab ──────────────────────────── */}
             {monTab === "overview" && <>

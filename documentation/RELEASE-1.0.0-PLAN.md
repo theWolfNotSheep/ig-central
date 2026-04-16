@@ -729,32 +729,32 @@ With 70% accelerator hit rate on a 100K document backlog:
 ```
 [x] Frontend: Remove duplicate /pipelines and /blocks routes (consolidated under /ai/*)
 [x] Frontend: Update internal links from /blocks to /ai/blocks
-[ ] WP1: PipelineRun/NodeRun models and repositories
-[ ] WP1: Async LLM job events and RabbitMQ topology
-[ ] WP1: PipelineExecutionEngine refactored for async nodes
-[ ] WP1: PipelineResumer for callback-driven resume
-[ ] WP1: Monitoring page updated with execution timeline
-[ ] WP1: Idempotency keys and late-arrival handling
-[ ] WP2: Caffeine cache on MCP tools
-[ ] WP2: Cache eviction on governance admin changes
-[ ] WP2: Bounded PII queries (.limit())
-[ ] WP2: Consumer concurrency + virtual threads enabled
-[ ] WP3: Test infrastructure (JUnit, Testcontainers)
-[ ] WP3: Unit tests for pipeline engine, auth, governance
-[ ] WP3: Integration tests for upload->classify->enforce flow
+[x] WP1: PipelineRun/NodeRun models and repositories
+[x] WP1: Async LLM job events and RabbitMQ topology
+[x] WP1: PipelineExecutionEngine refactored for async nodes
+[x] WP1: PipelineResumer for callback-driven resume
+[x] WP1: Monitoring page updated with execution timeline
+[x] WP1: Idempotency keys and late-arrival handling
+[x] WP2: Caffeine cache on MCP tools
+[x] WP2: Cache eviction on governance admin changes
+[x] WP2: Bounded PII queries (.limit())
+[x] WP2: Consumer concurrency + virtual threads enabled
+[x] WP3: Test infrastructure (JUnit, Testcontainers)
+[x] WP3: Unit tests for pipeline engine, auth, governance
+[x] WP3: Integration tests for upload->classify->enforce flow
 [ ] WP3: Frontend tests for critical flows
-[ ] WP4: GitHub Actions CI workflow
-[ ] WP4: Release workflow for tagged builds
-[ ] WP5: docker-compose.prod.yml with resource limits
-[ ] WP5: Secret management via .env.production
-[ ] WP5: Security headers in nginx
-[ ] WP5: Rate limiting on auth + upload
-[ ] WP5: Backup automation
-[ ] WP6: Prometheus + Grafana containers
-[ ] WP6: Micrometer metrics on all services
-[ ] WP6: Grafana dashboards provisioned
-[ ] WP7: Governance seeder verified
-[ ] WP7: DEPLOYMENT.md written
+[x] WP4: GitHub Actions CI workflow
+[x] WP4: Release workflow for tagged builds
+[x] WP5: docker-compose.prod.yml with resource limits
+[x] WP5: Secret management via .env.production
+[x] WP5: Security headers in nginx
+[x] WP5: Rate limiting on auth + upload
+[x] WP5: Backup automation
+[x] WP6: Prometheus + Grafana containers
+[x] WP6: Micrometer metrics on all services
+[x] WP6: Grafana dashboards provisioned
+[x] WP7: Governance seeder verified
+[x] WP7: DEPLOYMENT.md written
 [ ] WP7: Final QA pass
 [ ] Tag v1.0.0
 ```

@@ -204,6 +204,11 @@ export default function AiSettingsPage() {
                     <Brain className="size-5 text-indigo-500" />
                     <h3 className="text-base font-semibold text-gray-900">LLM Provider</h3>
                 </div>
+                <div className="px-6 py-2 bg-blue-50/50 border-b border-blue-100">
+                    <p className="text-[10px] text-blue-600">
+                        These are <strong>global defaults</strong>. Individual pipeline nodes can override model, temperature, and tokens in the visual editor.
+                    </p>
+                </div>
 
                 {/* Provider selector */}
                 <div className="px-6 py-4 flex items-center justify-between border-b border-gray-200">
@@ -301,46 +306,18 @@ export default function AiSettingsPage() {
                                 className="w-full text-sm border border-gray-300 rounded-md px-3 py-2" />
                         </div>
 
-                        {/* Installed models */}
-                        <div>
-                            <div className="flex items-center justify-between mb-2">
-                                <span className="text-xs font-medium text-gray-700">Installed Models</span>
-                                <button onClick={loadOllamaModels} disabled={ollamaLoading} className="text-xs text-gray-400 hover:text-gray-600">
-                                    <RefreshCw className={`size-3.5 ${ollamaLoading ? "animate-spin" : ""}`} />
-                                </button>
-                            </div>
-                            {ollamaModels.length > 0 ? (
-                                <div className="space-y-1.5">
-                                    {ollamaModels.map(m => (
-                                        <div key={m.name} className="flex items-center justify-between bg-white rounded-lg border border-gray-200 px-3 py-2">
-                                            <div className="flex items-center gap-3">
-                                                <Brain className="size-4 text-purple-500 shrink-0" />
-                                                <div>
-                                                    <span className="text-sm font-medium text-gray-900">{m.name}</span>
-                                                    <div className="text-[10px] text-gray-400">{m.details?.parameter_size} {m.details?.quantization_level} {fmtSize(m.size)}</div>
-                                                </div>
-                                            </div>
-                                            <button onClick={() => handleDeleteModel(m.name)} className="text-xs text-red-400 hover:text-red-600">Delete</button>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : ollamaReachable ? <p className="text-xs text-gray-400">No models. Pull one below.</p> : null}
-                        </div>
-
-                        {/* Pull model */}
-                        <div>
-                            <label htmlFor="ollama-pull" className="text-xs font-medium text-gray-700 block mb-1">Pull New Model</label>
-                            <div className="flex gap-2">
-                                <input id="ollama-pull" value={pullName} onChange={e => setPullName(e.target.value)}
-                                    onKeyDown={e => { if (e.key === "Enter") handlePull(); }}
-                                    placeholder="e.g. qwen2.5:72b" disabled={pulling}
-                                    className="flex-1 text-sm border border-gray-300 rounded-md px-3 py-2 disabled:opacity-50" />
-                                <button onClick={handlePull} disabled={pulling || !pullName.trim()}
-                                    className="px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-md hover:bg-purple-700 disabled:opacity-50">
-                                    {pulling ? "Pulling..." : "Pull"}
-                                </button>
-                            </div>
-                            {pullProgress && <div className="mt-2 text-xs text-purple-600 font-mono bg-purple-50 rounded px-3 py-1.5">{pullProgress}</div>}
+                        {/* Link to Models tab */}
+                        <div className="border-t border-purple-200 pt-3">
+                            <p className="text-xs text-gray-500">
+                                {ollamaModels.length > 0
+                                    ? `${ollamaModels.length} model${ollamaModels.length !== 1 ? "s" : ""} installed.`
+                                    : "No models installed."
+                                }
+                                {" "}
+                                <a href="/ai#models" className="text-purple-600 hover:text-purple-800 font-medium underline">
+                                    Manage models in the Models tab
+                                </a>
+                            </p>
                         </div>
                     </div>
                 )}
@@ -365,6 +342,31 @@ export default function AiSettingsPage() {
                     <SliderRow id="auto-approve" label="Auto-Approve Threshold" value={Number(getValue("pipeline.confidence.auto_approve_threshold") ?? 0.95)}
                         onChange={v => setValue("pipeline.confidence.auto_approve_threshold", v)} min={0} max={1} step={0.05}
                         hint="Documents above this score are auto-approved." />
+                </div>
+            </div>
+
+            {/* Per-Provider Timeouts */}
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
+                <div className="flex items-center gap-2 px-6 py-4 border-b border-gray-200">
+                    <Brain className="size-5 text-gray-500" />
+                    <h3 className="text-base font-semibold text-gray-900">LLM Timeouts</h3>
+                </div>
+                <div className="px-6 py-4 space-y-4">
+                    <p className="text-xs text-gray-500">
+                        Hard timeout per LLM classification call, configurable per provider.
+                        If a model wanders past the limit the call is aborted and the auto-retry kicks in (then fails).
+                        Pipeline nodes can override these with a per-node value if needed.
+                    </p>
+                    <NumberRow id="timeout-anthropic" label="Anthropic (Claude) Timeout — seconds"
+                        value={Number(getValue("pipeline.llm.timeout_seconds.anthropic") ?? 60)}
+                        onChange={v => setValue("pipeline.llm.timeout_seconds.anthropic", v)}
+                        min={10} max={600} step={5}
+                        hint="Cloud — Claude is fast (5-15s typical). 60s is a generous default." />
+                    <NumberRow id="timeout-ollama" label="Ollama (Local) Timeout — seconds"
+                        value={Number(getValue("pipeline.llm.timeout_seconds.ollama") ?? 240)}
+                        onChange={v => setValue("pipeline.llm.timeout_seconds.ollama", v)}
+                        min={30} max={900} step={10}
+                        hint="Local — depends on hardware. 240s is generous for qwen2.5:32b on Apple Silicon." />
                 </div>
             </div>
 

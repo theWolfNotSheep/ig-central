@@ -8,6 +8,7 @@ import co.uk.wolfnotsheep.document.repositories.AuditEventRepository;
 import co.uk.wolfnotsheep.document.repositories.SystemErrorRepository;
 import co.uk.wolfnotsheep.document.services.DocumentService;
 import co.uk.wolfnotsheep.document.services.ObjectStorageService;
+import co.uk.wolfnotsheep.governance.models.DocumentClassificationResult;
 import co.uk.wolfnotsheep.governance.models.GovernancePolicy;
 import co.uk.wolfnotsheep.governance.models.PipelineBlock;
 import co.uk.wolfnotsheep.governance.models.RetentionSchedule;
@@ -76,13 +77,26 @@ public class EnforcementService {
         doc.setTags(event.tags());
         doc.setAppliedPolicyIds(event.applicablePolicyIds());
 
-        // Copy summary from classification result
+        // Copy summary from classification result, plus denormalised ISO 15489 fields
         var classHistory = governanceService.getClassificationHistory(event.documentId());
         if (!classHistory.isEmpty()) {
-            String summary = classHistory.getFirst().getSummary();
+            DocumentClassificationResult latest = classHistory.getFirst();
+            String summary = latest.getSummary();
             if (summary != null && !summary.isBlank()) {
                 doc.setSummary(summary);
             }
+            // ISO 15489 denormalisation — copy from result onto document for queries/display
+            doc.setClassificationCode(latest.getClassificationCode());
+            doc.setClassificationPath(latest.getClassificationPath());
+            doc.setClassificationLevel(latest.getClassificationLevel());
+            doc.setJurisdiction(latest.getJurisdiction());
+            doc.setLegalCitation(latest.getLegalCitation());
+            doc.setCategoryPersonalData(latest.isCategoryPersonalData());
+            doc.setVitalRecord(latest.isVitalRecord());
+            doc.setTaxonomyVersion(latest.getTaxonomyVersion());
+            doc.setRetentionTrigger(latest.getRetentionTrigger());
+            doc.setRetentionPeriodText(latest.getRetentionPeriodText());
+            doc.setExpectedDispositionAction(latest.getExpectedDispositionAction());
         }
 
         // Extract traits from classification result metadata
@@ -206,10 +220,67 @@ public class EnforcementService {
         }
 
         doc.setRetentionScheduleId(retentionScheduleId);
-        doc.setRetentionExpiresAt(Instant.now().plus(schedule.getRetentionDays(), ChronoUnit.DAYS));
+        doc.setExpectedDispositionAction(schedule.getDispositionAction());
 
-        log.info("Applied retention to document {}: {} days (expires {})",
-                doc.getId(), schedule.getRetentionDays(), doc.getRetentionExpiresAt());
+        // Decide retention status + expiry based on the trigger type.
+        // If the doc has an explicit trigger (from the category), prefer it; else
+        // fall back to the schedule's trigger; else default to DATE_CREATED.
+        co.uk.wolfnotsheep.governance.models.ClassificationCategory.RetentionTrigger trigger = doc.getRetentionTrigger();
+        if (trigger == null && schedule.getRetentionTrigger() != null && !schedule.getRetentionTrigger().isBlank()) {
+            try {
+                trigger = co.uk.wolfnotsheep.governance.models.ClassificationCategory.RetentionTrigger
+                        .valueOf(schedule.getRetentionTrigger());
+                doc.setRetentionTrigger(trigger);
+            } catch (IllegalArgumentException ignored) { /* unknown — leave null */ }
+        }
+        if (trigger == null) {
+            trigger = co.uk.wolfnotsheep.governance.models.ClassificationCategory.RetentionTrigger.DATE_CREATED;
+            doc.setRetentionTrigger(trigger);
+        }
+
+        int days = schedule.getRetentionDays();
+        boolean permanent = days < 0
+                || schedule.getDispositionAction() == RetentionSchedule.DispositionAction.PERMANENT;
+
+        if (permanent) {
+            doc.setRetentionExpiresAt(null);
+            doc.setRetentionStatus(co.uk.wolfnotsheep.document.models.RetentionStatus.RUNNING);
+            log.info("Applied PERMANENT retention to document {}", doc.getId());
+            return;
+        }
+
+        Instant base = null;
+        switch (trigger) {
+            case DATE_CREATED -> base = doc.getCreatedAt() != null ? doc.getCreatedAt() : Instant.now();
+            case DATE_LAST_MODIFIED -> base = doc.getUpdatedAt() != null ? doc.getUpdatedAt() : Instant.now();
+            case END_OF_FINANCIAL_YEAR -> base = endOfCurrentUkFinancialYear();
+            // Event-based triggers don't have a known start until the event happens.
+            case DATE_CLOSED, EVENT_BASED, SUPERSEDED -> base = null;
+        }
+
+        if (base == null) {
+            // Awaiting trigger event — no expiry yet.
+            doc.setRetentionExpiresAt(null);
+            doc.setRetentionStatus(co.uk.wolfnotsheep.document.models.RetentionStatus.AWAITING_TRIGGER);
+            log.info("Document {} retention is AWAITING_TRIGGER ({}) — period {} days",
+                    doc.getId(), trigger, days);
+        } else {
+            Instant expiry = base.plus(days, ChronoUnit.DAYS);
+            doc.setRetentionExpiresAt(expiry);
+            doc.setRetentionStatus(expiry.isAfter(Instant.now())
+                    ? co.uk.wolfnotsheep.document.models.RetentionStatus.RUNNING
+                    : co.uk.wolfnotsheep.document.models.RetentionStatus.EXPIRED);
+            log.info("Applied retention to document {}: trigger={} base={} +{}d expires={}",
+                    doc.getId(), trigger, base, days, expiry);
+        }
+    }
+
+    /** UK financial year ends 5 April. */
+    private static Instant endOfCurrentUkFinancialYear() {
+        java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneOffset.UTC);
+        int year = today.getMonthValue() < 4 || (today.getMonthValue() == 4 && today.getDayOfMonth() <= 5)
+                ? today.getYear() : today.getYear() + 1;
+        return java.time.LocalDate.of(year, 4, 5).atStartOfDay(java.time.ZoneOffset.UTC).toInstant();
     }
 
     private void migrateStorageTier(DocumentModel doc) {

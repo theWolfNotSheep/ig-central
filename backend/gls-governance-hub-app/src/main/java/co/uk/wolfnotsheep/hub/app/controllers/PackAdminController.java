@@ -26,6 +26,25 @@ public class PackAdminController {
         this.versionService = versionService;
     }
 
+    @GetMapping
+    public ResponseEntity<List<GovernancePack>> listPacks() {
+        return ResponseEntity.ok(packService.listAll());
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<GovernancePack> getPack(@PathVariable String id) {
+        try {
+            return ResponseEntity.ok(packService.getPackById(id));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @GetMapping("/{id}/versions")
+    public ResponseEntity<List<PackVersion>> listVersions(@PathVariable String id) {
+        return ResponseEntity.ok(versionService.getVersions(id));
+    }
+
     @PostMapping
     public ResponseEntity<GovernancePack> createPack(@RequestBody GovernancePack pack) {
         try {

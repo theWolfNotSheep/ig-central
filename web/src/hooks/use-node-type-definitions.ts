@@ -54,13 +54,15 @@ export type BranchLabel = {
 export function useNodeTypeDefinitions() {
     const [definitions, setDefinitions] = useState<NodeTypeDefinition[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     const load = useCallback(async () => {
+        setError(null);
         try {
             const { data } = await api.get<NodeTypeDefinition[]>("/admin/node-types");
             setDefinitions(data);
         } catch {
-            // Silently fail — fallback to hardcoded defaults in the editor
+            setError("Failed to load node types — check that the API server is running");
         } finally {
             setLoading(false);
         }
@@ -68,5 +70,5 @@ export function useNodeTypeDefinitions() {
 
     useEffect(() => { load(); }, [load]);
 
-    return { definitions, loading, refresh: load };
+    return { definitions, loading, error, refresh: load };
 }

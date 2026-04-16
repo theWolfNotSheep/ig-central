@@ -20,9 +20,20 @@ public class RabbitMqConfig {
     public static final String QUEUE_CLASSIFIED = "gls.documents.classified";
     public static final String QUEUE_DLQ = "gls.documents.dlq";
 
+    // ── Pipeline async queues ───────────────────────────
+    public static final String PIPELINE_EXCHANGE = "gls.pipeline";
+    public static final String QUEUE_LLM_JOBS = "gls.pipeline.llm.jobs";
+    public static final String QUEUE_LLM_COMPLETED = "gls.pipeline.llm.completed";
+    public static final String QUEUE_PIPELINE_RESUME = "gls.pipeline.resume";
+    public static final String QUEUE_PIPELINE_DLQ = "gls.pipeline.dlq";
+
     public static final String ROUTING_INGESTED = "document.ingested";
     public static final String ROUTING_PROCESSED = "document.processed";
     public static final String ROUTING_CLASSIFIED = "document.classified";
+
+    public static final String ROUTING_LLM_JOB_REQUESTED = "pipeline.llm.requested";
+    public static final String ROUTING_LLM_JOB_COMPLETED = "pipeline.llm.completed";
+    public static final String ROUTING_PIPELINE_RESUME = "pipeline.resume";
 
     @Bean
     public TopicExchange documentExchange() {
@@ -80,6 +91,62 @@ public class RabbitMqConfig {
     @Bean
     public Binding classifiedBinding() {
         return BindingBuilder.bind(classifiedQueue()).to(documentExchange()).with(ROUTING_CLASSIFIED);
+    }
+
+    // ── Pipeline exchange and queues ────────────────────
+
+    @Bean
+    public TopicExchange pipelineExchange() {
+        return new TopicExchange(PIPELINE_EXCHANGE, true, false);
+    }
+
+    @Bean
+    public Queue llmJobsQueue() {
+        return QueueBuilder.durable(QUEUE_LLM_JOBS)
+                .withArgument("x-dead-letter-exchange", PIPELINE_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", "pipeline.dlq")
+                .build();
+    }
+
+    @Bean
+    public Queue llmCompletedQueue() {
+        return QueueBuilder.durable(QUEUE_LLM_COMPLETED)
+                .withArgument("x-dead-letter-exchange", PIPELINE_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", "pipeline.dlq")
+                .build();
+    }
+
+    @Bean
+    public Queue pipelineResumeQueue() {
+        return QueueBuilder.durable(QUEUE_PIPELINE_RESUME)
+                .withArgument("x-dead-letter-exchange", PIPELINE_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", "pipeline.dlq")
+                .build();
+    }
+
+    @Bean
+    public Queue pipelineDlq() {
+        return QueueBuilder.durable(QUEUE_PIPELINE_DLQ).build();
+    }
+
+    @Bean
+    public Binding llmJobsBinding() {
+        return BindingBuilder.bind(llmJobsQueue()).to(pipelineExchange()).with(ROUTING_LLM_JOB_REQUESTED);
+    }
+
+    @Bean
+    public Binding llmCompletedBinding() {
+        return BindingBuilder.bind(llmCompletedQueue()).to(pipelineExchange()).with(ROUTING_LLM_JOB_COMPLETED);
+    }
+
+    @Bean
+    public Binding pipelineResumeBinding() {
+        return BindingBuilder.bind(pipelineResumeQueue()).to(pipelineExchange()).with(ROUTING_PIPELINE_RESUME);
+    }
+
+    @Bean
+    public Binding pipelineDlqBinding() {
+        return BindingBuilder.bind(pipelineDlq()).to(pipelineExchange()).with("pipeline.dlq");
     }
 
     @Bean

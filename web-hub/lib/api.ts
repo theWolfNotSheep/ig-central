@@ -1,4 +1,16 @@
-const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL || "http://localhost:8090";
+// Resolved lazily on first API call to avoid SSR window access
+let _hubUrl: string | null = null;
+function getHubUrl(): string {
+  if (_hubUrl !== null) return _hubUrl;
+  const env = process.env.NEXT_PUBLIC_HUB_URL;
+  if (env) { _hubUrl = env; return _hubUrl; }
+  if (typeof window !== "undefined" && window.location.port === "3002") {
+    _hubUrl = "http://localhost:8090";
+  } else {
+    _hubUrl = "";
+  }
+  return _hubUrl;
+}
 
 const CREDS_KEY = "hub_admin_credentials";
 
@@ -31,7 +43,7 @@ async function request<T>(
   path: string,
   body?: unknown
 ): Promise<T> {
-  const url = `${HUB_URL}${path}`;
+  const url = `${getHubUrl()}${path}`;
   const headers: Record<string, string> = {
     ...getAuthHeaders(),
     "Content-Type": "application/json",

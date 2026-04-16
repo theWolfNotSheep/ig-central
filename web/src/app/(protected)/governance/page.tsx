@@ -28,12 +28,32 @@ type SensitivityDef = {
 
 type Category = {
     id?: string;
+    classificationCode?: string;
     name: string;
     description: string;
     parentId?: string;
+    level?: "FUNCTION" | "ACTIVITY" | "TRANSACTION";
     keywords: string[];
     defaultSensitivity: string;
     retentionScheduleId?: string;
+    metadataSchemaId?: string;
+    scopeNotes?: string;
+    retentionTrigger?: string;
+    retentionTriggerDescription?: string;
+    legalCitation?: string;
+    jurisdiction?: string;
+    typicalRecords?: string[];
+    retentionPeriodText?: string;
+    owner?: string;
+    custodian?: string;
+    reviewCycleDuration?: string;
+    lastReviewedAt?: string;
+    nextReviewAt?: string;
+    personalDataFlag?: boolean;
+    vitalRecordFlag?: boolean;
+    status?: "ACTIVE" | "INACTIVE" | "DEPRECATED";
+    path?: string[];
+    version?: number;
     active: boolean;
 };
 
@@ -482,9 +502,21 @@ function TaxonomyPanel() {
 
     const toggle = (id: string) => setExpanded((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-    const newCategory = (parentId?: string): Category => ({
-        name: "", description: "", keywords: [], defaultSensitivity: "INTERNAL", active: true, parentId,
-    });
+    const newCategory = (parentId?: string): Category => {
+        // Infer level from depth: no parent = FUNCTION, parent is root = ACTIVITY, else TRANSACTION
+        let level: Category["level"] = "FUNCTION";
+        if (parentId) {
+            const parent = categories.find((c) => c.id === parentId);
+            level = parent?.level === "FUNCTION" ? "ACTIVITY" : "TRANSACTION";
+        }
+        return {
+            name: "", description: "", keywords: [], defaultSensitivity: "INTERNAL", active: true, parentId,
+            level,
+            status: "ACTIVE",
+            personalDataFlag: false,
+            vitalRecordFlag: false,
+        };
+    };
 
     const handleSave = async () => {
         if (!editing || !editing.name.trim()) return;
@@ -520,54 +552,99 @@ function TaxonomyPanel() {
 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 divide-y divide-gray-100">
                 {roots.map((cat) => (
-                    <div key={cat.id}>
-                        <div className="flex items-center gap-3 px-6 py-4 hover:bg-gray-50">
-                            <button onClick={() => toggle(cat.id!)} className="shrink-0">
-                                {childrenOf(cat.id!).length > 0 ? (expanded.has(cat.id!) ? <ChevronDown className="size-4 text-gray-400" /> : <ChevronRight className="size-4 text-gray-400" />) : <div className="w-4" />}
-                            </button>
-                            <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                    <span className="font-medium text-gray-900">{cat.name}</span>
-                                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${SC[cat.defaultSensitivity] ?? ""}`}>{cat.defaultSensitivity}</span>
-                                    {!cat.active && <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-500 rounded-full">Inactive</span>}
-                                </div>
-                                <p className="text-sm text-gray-500 mt-0.5">{cat.description}</p>
-                                {cat.keywords.length > 0 && <div className="flex flex-wrap gap-1 mt-1">{cat.keywords.map((kw) => <span key={kw} className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">{kw}</span>)}</div>}
-                            </div>
-                            <div className="flex gap-1 shrink-0">
-                                <button onClick={() => setEditing(newCategory(cat.id))} className={btnSecondary} title="Add child"><Plus className="size-3.5" /></button>
-                                <button onClick={() => setEditing({ ...cat })} className={btnSecondary} title="Edit"><Pencil className="size-3.5" /></button>
-                                <button onClick={() => handleDelete(cat.id!)} className={btnDanger} title="Deactivate"><Trash2 className="size-3.5" /></button>
-                            </div>
-                        </div>
-                        {expanded.has(cat.id!) && childrenOf(cat.id!).map((child) => (
-                            <div key={child.id} className="flex items-center gap-3 px-6 py-3 pl-14 bg-gray-50/50 border-t border-gray-50">
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
-                                        <span className="font-medium text-gray-800 text-sm">{child.name}</span>
-                                        <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${SC[child.defaultSensitivity] ?? ""}`}>{child.defaultSensitivity}</span>
-                                    </div>
-                                    <p className="text-xs text-gray-500 mt-0.5">{child.description}</p>
-                                    {child.keywords.length > 0 && <div className="flex flex-wrap gap-1 mt-1">{child.keywords.map((kw) => <span key={kw} className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">{kw}</span>)}</div>}
-                                </div>
-                                <div className="flex gap-1 shrink-0">
-                                    <button onClick={() => setEditing({ ...child })} className={btnSecondary}><Pencil className="size-3.5" /></button>
-                                    <button onClick={() => handleDelete(child.id!)} className={btnDanger}><Trash2 className="size-3.5" /></button>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                    <TaxonomyNode key={cat.id} cat={cat} depth={0}
+                        childrenOf={childrenOf} expanded={expanded} toggle={toggle}
+                        onAdd={(parentId) => setEditing(newCategory(parentId))}
+                        onEdit={(c) => setEditing({ ...c })}
+                        onDelete={handleDelete} />
                 ))}
             </div>
         </div>
     );
 }
 
+function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit, onDelete }: {
+    cat: Category; depth: number;
+    childrenOf: (pid: string) => Category[];
+    expanded: Set<string>; toggle: (id: string) => void;
+    onAdd: (parentId: string) => void;
+    onEdit: (c: Category) => void;
+    onDelete: (id: string) => void;
+}) {
+    const children = childrenOf(cat.id!);
+    const hasChildren = children.length > 0;
+    const isExpanded = expanded.has(cat.id!);
+    const indent = depth === 0 ? "pl-6" : depth === 1 ? "pl-14" : "pl-22";
+    const bg = depth === 0 ? "hover:bg-gray-50" : depth === 1 ? "bg-gray-50/50" : "bg-gray-100/40";
+    const textSize = depth === 0 ? "font-medium text-gray-900" : depth === 1 ? "font-medium text-gray-800 text-sm" : "text-gray-700 text-sm";
+
+    return (
+        <div>
+            <div className={`flex items-center gap-3 px-6 py-3 ${indent} ${bg} ${depth > 0 ? "border-t border-gray-100" : ""}`}>
+                <button onClick={() => toggle(cat.id!)} className="shrink-0">
+                    {hasChildren ? (isExpanded ? <ChevronDown className="size-4 text-gray-400" /> : <ChevronRight className="size-4 text-gray-400" />) : <div className="w-4" />}
+                </button>
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        {cat.classificationCode && <span className="font-mono text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{cat.classificationCode}</span>}
+                        <span className={textSize}>{cat.name}</span>
+                        {cat.level && <span className="px-1.5 py-0.5 text-xs text-gray-500 bg-gray-50 rounded">{cat.level.toLowerCase()}</span>}
+                        <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${SC[cat.defaultSensitivity] ?? ""}`}>{cat.defaultSensitivity}</span>
+                        {cat.jurisdiction && <span className="px-1.5 py-0.5 text-xs bg-indigo-50 text-indigo-700 rounded">{cat.jurisdiction}</span>}
+                        {cat.personalDataFlag && <span className="px-1.5 py-0.5 text-xs bg-purple-50 text-purple-700 rounded-full">PII</span>}
+                        {cat.vitalRecordFlag && <span className="px-1.5 py-0.5 text-xs bg-red-50 text-red-700 rounded-full">Vital</span>}
+                        {cat.status === "INACTIVE" && <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-500 rounded-full">Inactive</span>}
+                        {cat.status === "DEPRECATED" && <span className="px-2 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full">Deprecated</span>}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-0.5">{cat.description}</p>
+                    {cat.retentionPeriodText && <p className="text-xs text-gray-500 mt-0.5">Retention: {cat.retentionPeriodText}{cat.legalCitation && <> — <span className="text-gray-400">{cat.legalCitation}</span></>}</p>}
+                    {cat.typicalRecords && cat.typicalRecords.length > 0 && <p className="text-xs text-gray-400 mt-0.5">Typical: {cat.typicalRecords.join(", ")}</p>}
+                    {cat.scopeNotes && <p className="text-xs text-gray-400 mt-0.5 italic">{cat.scopeNotes}</p>}
+                    {cat.keywords.length > 0 && <div className="flex flex-wrap gap-1 mt-1">{cat.keywords.map((kw) => <span key={kw} className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">{kw}</span>)}</div>}
+                </div>
+                <div className="flex gap-1 shrink-0">
+                    {cat.level !== "TRANSACTION" && <button onClick={() => onAdd(cat.id!)} className={btnSecondary} title="Add child"><Plus className="size-3.5" /></button>}
+                    <button onClick={() => onEdit(cat)} className={btnSecondary} title="Edit"><Pencil className="size-3.5" /></button>
+                    <button onClick={() => onDelete(cat.id!)} className={btnDanger} title="Deactivate"><Trash2 className="size-3.5" /></button>
+                </div>
+            </div>
+            {isExpanded && children.map((child) => (
+                <TaxonomyNode key={child.id} cat={child} depth={depth + 1}
+                    childrenOf={childrenOf} expanded={expanded} toggle={toggle}
+                    onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} />
+            ))}
+        </div>
+    );
+}
+
+const TAXONOMY_LEVELS = ["FUNCTION", "ACTIVITY", "TRANSACTION"] as const;
+const NODE_STATUSES = ["ACTIVE", "INACTIVE", "DEPRECATED"] as const;
+const RETENTION_TRIGGERS = ["DATE_CREATED", "DATE_LAST_MODIFIED", "DATE_CLOSED", "EVENT_BASED", "END_OF_FINANCIAL_YEAR", "SUPERSEDED"] as const;
+
 function CategoryForm({ category, categories, onChange, onSave, onCancel, saving }: {
     category: Category | null; categories: Category[]; onChange: (c: Category) => void;
     onSave: () => void; onCancel: () => void; saving: boolean;
 }) {
-    const roots = categories.filter((c) => !c.parentId && c.id !== category?.id);
+    // Build parent options: all non-TRANSACTION categories, excluding self, with hierarchy indentation
+    const parentOptions: { id: string; label: string; depth: number }[] = [];
+    const buildParentOpts = (parentId: string | undefined, depth: number) => {
+        categories
+            .filter((c) => c.parentId === (parentId ?? undefined) && c.id !== category?.id && c.level !== "TRANSACTION")
+            .forEach((c) => {
+                const prefix = c.classificationCode ? `[${c.classificationCode}] ` : "";
+                parentOptions.push({ id: c.id!, label: `${"  ".repeat(depth)}${prefix}${c.name}`, depth });
+                buildParentOpts(c.id, depth + 1);
+            });
+    };
+    if (category) {
+        // roots have parentId undefined/null
+        categories.filter((c) => !c.parentId && c.id !== category.id && c.level !== "TRANSACTION").forEach((c) => {
+            const prefix = c.classificationCode ? `[${c.classificationCode}] ` : "";
+            parentOptions.push({ id: c.id!, label: `${prefix}${c.name}`, depth: 0 });
+            buildParentOpts(c.id, 1);
+        });
+    }
+
     return (
         <FormModal title={category?.id ? "Edit Category" : "New Category"} open={!!category} onClose={onCancel} width="lg"
             footer={<>
@@ -575,28 +652,93 @@ function CategoryForm({ category, categories, onChange, onSave, onCancel, saving
                 <button onClick={onCancel} className={btnSecondary}><X className="size-3.5" />Cancel</button>
             </>}>
             {category && (<>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                     <FormField label="Name" id="cat-name" required>
                         <input id="cat-name" value={category.name} onChange={(e) => onChange({ ...category, name: e.target.value })} className={input} />
                     </FormField>
+                    <FormField label="Classification Code" id="cat-code" hint="Auto-generated if blank">
+                        <input id="cat-code" value={category.classificationCode ?? ""} onChange={(e) => onChange({ ...category, classificationCode: e.target.value })} className={input} placeholder="e.g. HR-EMP" />
+                    </FormField>
+                    <FormField label="Level" id="cat-level">
+                        <select id="cat-level" value={category.level ?? ""} onChange={(e) => onChange({ ...category, level: e.target.value as Category["level"] })} className={input}>
+                            {TAXONOMY_LEVELS.map((l) => <option key={l} value={l}>{l.charAt(0) + l.slice(1).toLowerCase()}</option>)}
+                        </select>
+                    </FormField>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
                     <FormField label="Parent" id="cat-parent">
                         <select id="cat-parent" value={category.parentId ?? ""} onChange={(e) => onChange({ ...category, parentId: e.target.value || undefined })} className={input}>
                             <option value="">Root (no parent)</option>
-                            {roots.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                            {parentOptions.map((opt) => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
+                        </select>
+                    </FormField>
+                    <FormField label="Status" id="cat-status">
+                        <select id="cat-status" value={category.status ?? "ACTIVE"} onChange={(e) => onChange({ ...category, status: e.target.value as Category["status"] })} className={input}>
+                            {NODE_STATUSES.map((s) => <option key={s} value={s}>{s.charAt(0) + s.slice(1).toLowerCase()}</option>)}
                         </select>
                     </FormField>
                 </div>
                 <FormField label="Description" id="cat-description">
                     <input id="cat-description" value={category.description} onChange={(e) => onChange({ ...category, description: e.target.value })} className={input} />
                 </FormField>
+                <FormField label="Scope Notes" id="cat-scope" hint="Inclusion/exclusion guidance for classifiers">
+                    <textarea id="cat-scope" value={category.scopeNotes ?? ""} onChange={(e) => onChange({ ...category, scopeNotes: e.target.value })} className={input} rows={2} />
+                </FormField>
                 <FormField label="Keywords" id="cat-keywords">
                     <TagInput tags={category.keywords} onChange={(kw) => onChange({ ...category, keywords: kw })} placeholder="Type keyword and press Enter..." />
                 </FormField>
-                <FormField label="Default Sensitivity" id="cat-sensitivity">
-                    <select id="cat-sensitivity" value={category.defaultSensitivity} onChange={(e) => onChange({ ...category, defaultSensitivity: e.target.value })} className={input}>
-                        {SENSITIVITIES.map((s) => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                <div className="grid grid-cols-2 gap-3">
+                    <FormField label="Default Sensitivity" id="cat-sensitivity">
+                        <select id="cat-sensitivity" value={category.defaultSensitivity} onChange={(e) => onChange({ ...category, defaultSensitivity: e.target.value })} className={input}>
+                            {SENSITIVITIES.map((s) => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                    </FormField>
+                    <FormField label="Retention Trigger" id="cat-trigger">
+                        <select id="cat-trigger" value={category.retentionTrigger ?? ""} onChange={(e) => onChange({ ...category, retentionTrigger: e.target.value || undefined })} className={input}>
+                            <option value="">Inherit from parent</option>
+                            {RETENTION_TRIGGERS.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ").toLowerCase()}</option>)}
+                        </select>
+                    </FormField>
+                </div>
+                {category.retentionTrigger === "EVENT_BASED" && (
+                    <FormField label="Trigger Description" id="cat-trigger-desc" hint="Describe the triggering event">
+                        <input id="cat-trigger-desc" value={category.retentionTriggerDescription ?? ""} onChange={(e) => onChange({ ...category, retentionTriggerDescription: e.target.value })} className={input} />
+                    </FormField>
+                )}
+                <div className="grid grid-cols-2 gap-3">
+                    <FormField label="Jurisdiction" id="cat-jurisdiction">
+                        <input id="cat-jurisdiction" value={category.jurisdiction ?? ""} onChange={(e) => onChange({ ...category, jurisdiction: e.target.value })} className={input} placeholder="e.g. US, UK, EU" />
+                    </FormField>
+                    <FormField label="Retention Period" id="cat-retention-text" hint="Human-readable">
+                        <input id="cat-retention-text" value={category.retentionPeriodText ?? ""} onChange={(e) => onChange({ ...category, retentionPeriodText: e.target.value })} className={input} placeholder="e.g. 7 years after termination" />
+                    </FormField>
+                </div>
+                <FormField label="Legal Citation" id="cat-legal" hint="Legal/regulatory reference">
+                    <input id="cat-legal" value={category.legalCitation ?? ""} onChange={(e) => onChange({ ...category, legalCitation: e.target.value })} className={input} placeholder="e.g. IRS requirements (IRC §6001)" />
                 </FormField>
+                <div className="grid grid-cols-2 gap-3">
+                    <FormField label="Owner" id="cat-owner" hint="Business owner">
+                        <input id="cat-owner" value={category.owner ?? ""} onChange={(e) => onChange({ ...category, owner: e.target.value })} className={input} />
+                    </FormField>
+                    <FormField label="Custodian" id="cat-custodian" hint="Operational custodian">
+                        <input id="cat-custodian" value={category.custodian ?? ""} onChange={(e) => onChange({ ...category, custodian: e.target.value })} className={input} />
+                    </FormField>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                    <FormField label="Review Cycle" id="cat-review" hint="ISO 8601 duration">
+                        <input id="cat-review" value={category.reviewCycleDuration ?? ""} onChange={(e) => onChange({ ...category, reviewCycleDuration: e.target.value })} className={input} placeholder="e.g. P1Y" />
+                    </FormField>
+                    <div className="flex items-center gap-4 pt-6">
+                        <label className="flex items-center gap-2 text-sm">
+                            <input type="checkbox" checked={category.personalDataFlag ?? false} onChange={(e) => onChange({ ...category, personalDataFlag: e.target.checked })} className="rounded border-gray-300" />
+                            Personal data
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                            <input type="checkbox" checked={category.vitalRecordFlag ?? false} onChange={(e) => onChange({ ...category, vitalRecordFlag: e.target.checked })} className="rounded border-gray-300" />
+                            Vital record
+                        </label>
+                    </div>
+                </div>
             </>)}
         </FormModal>
     );

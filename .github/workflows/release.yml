@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and tag images
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          docker compose build
+          for svc in api llm-worker mcp-server web nginx; do
+            docker tag gls-${svc}:latest ghcr.io/${{ github.repository }}/gls-${svc}:${VERSION}
+            docker tag gls-${svc}:latest ghcr.io/${{ github.repository }}/gls-${svc}:latest
+          done
+
+      - name: Push images
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          for svc in api llm-worker mcp-server web nginx; do
+            docker push ghcr.io/${{ github.repository }}/gls-${svc}:${VERSION}
+            docker push ghcr.io/${{ github.repository }}/gls-${svc}:latest
+          done

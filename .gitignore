@@ -25,6 +25,7 @@ backend/BOOT-INF/
 
 # Persistent data (bind mounts)
 data/
+hub/data/
 
 # OS
 .DS_Store

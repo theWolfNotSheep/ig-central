@@ -3,7 +3,9 @@ package co.uk.wolfnotsheep.mcp.tools;
 import co.uk.wolfnotsheep.governance.models.ClassificationCorrection;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
+import co.uk.wolfnotsheep.mcp.config.CacheConfig;
 import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -24,6 +26,7 @@ public class OrgPiiPatternsTool {
         this.toolLog = toolLog;
     }
 
+    @Cacheable(CacheConfig.CACHE_PII_PATTERNS)
     @McpTool(name = "get_org_pii_patterns",
             description = "Retrieve organisation-specific PII patterns AND known false positives. " +
                     "Returns: (1) PII types that records managers flagged as missed by the system, " +

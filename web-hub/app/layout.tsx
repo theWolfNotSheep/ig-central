@@ -10,12 +10,14 @@ import {
   Download,
   Shield,
   LogOut,
+  Users,
 } from "lucide-react";
 import { clearCredentials, isAuthenticated } from "@/lib/api";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/packs", label: "Packs", icon: Package },
+  { href: "/users", label: "Users", icon: Users },
   { href: "/api-keys", label: "API Keys", icon: KeyRound },
   { href: "/downloads", label: "Downloads", icon: Download },
 ];

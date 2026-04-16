@@ -4,6 +4,7 @@ import co.uk.wolfnotsheep.document.models.DocumentModel;
 import co.uk.wolfnotsheep.document.models.PiiEntity;
 import co.uk.wolfnotsheep.governance.models.ClassificationCategory;
 import co.uk.wolfnotsheep.governance.models.DocumentClassificationResult;
+import co.uk.wolfnotsheep.governance.models.RetentionSchedule;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.repositories.ClassificationCategoryRepository;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
@@ -110,6 +111,45 @@ public class SaveClassificationTool {
 
         if (retentionScheduleId != null && !retentionScheduleId.isBlank()) {
             result.setRetentionScheduleId(retentionScheduleId);
+        }
+
+        // ── ISO 15489 denormalisation: copy fields from the chosen category ──
+        // The result is an immutable audit record — capture the category state
+        // at this moment in time so future taxonomy edits don't change history.
+        if (resolvedCategoryId != null) {
+            categoryRepo.findById(resolvedCategoryId).ifPresent(cat -> {
+                result.setClassificationCode(cat.getClassificationCode());
+                result.setClassificationPath(cat.getPath());
+                result.setClassificationLevel(cat.getLevel());
+                result.setJurisdiction(cat.getJurisdiction());
+                result.setLegalCitation(cat.getLegalCitation());
+                result.setCategoryPersonalData(cat.isPersonalDataFlag());
+                result.setVitalRecord(cat.isVitalRecordFlag());
+                result.setTaxonomyVersion(cat.getVersion());
+                result.setRetentionTrigger(cat.getRetentionTrigger());
+                result.setRetentionPeriodText(cat.getRetentionPeriodText());
+
+                // If LLM didn't supply a retention schedule but the category has one,
+                // pick it up automatically.
+                if (result.getRetentionScheduleId() == null && cat.getRetentionScheduleId() != null) {
+                    result.setRetentionScheduleId(cat.getRetentionScheduleId());
+                }
+            });
+        }
+        // Resolve disposition action from the linked retention schedule (if any)
+        if (result.getRetentionScheduleId() != null) {
+            RetentionSchedule sched = governanceService.getRetentionSchedule(result.getRetentionScheduleId());
+            if (sched != null) {
+                result.setExpectedDispositionAction(sched.getDispositionAction());
+                // Schedule-level trigger overrides category-level if set
+                if (sched.getRetentionTrigger() != null && !sched.getRetentionTrigger().isBlank()) {
+                    try {
+                        result.setRetentionTrigger(
+                                co.uk.wolfnotsheep.governance.models.ClassificationCategory.RetentionTrigger
+                                        .valueOf(sched.getRetentionTrigger()));
+                    } catch (IllegalArgumentException ignored) { /* leave as-is */ }
+                }
+            }
         }
 
         if (extractedMetadata != null && !extractedMetadata.isBlank()) {

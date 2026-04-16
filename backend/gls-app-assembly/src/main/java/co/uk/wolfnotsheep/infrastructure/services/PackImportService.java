@@ -1,11 +1,15 @@
 package co.uk.wolfnotsheep.infrastructure.services;
 
 import co.uk.wolfnotsheep.governance.models.*;
+import co.uk.wolfnotsheep.governance.models.ClassificationCategory.NodeStatus;
+import co.uk.wolfnotsheep.governance.models.ClassificationCategory.RetentionTrigger;
+import co.uk.wolfnotsheep.governance.models.ClassificationCategory.TaxonomyLevel;
 import co.uk.wolfnotsheep.governance.models.MetadataSchema.FieldType;
 import co.uk.wolfnotsheep.governance.models.MetadataSchema.MetadataField;
 import co.uk.wolfnotsheep.governance.models.PiiTypeDefinition.ApprovalStatus;
 import co.uk.wolfnotsheep.governance.models.RetentionSchedule.DispositionAction;
 import co.uk.wolfnotsheep.governance.repositories.*;
+import co.uk.wolfnotsheep.governance.services.ClassificationCodeGenerator;
 import co.uk.wolfnotsheep.infrastructure.services.HubPackDto.PackComponentDto;
 import co.uk.wolfnotsheep.infrastructure.services.HubPackDto.PackVersionDto;
 import org.slf4j.Logger;
@@ -313,6 +317,14 @@ public class PackImportService {
         rs.setSourcePackVersion(ctx.packVersion);
         rs.setImportedAt(ctx.importedAt);
 
+        // ISO 15489 fields
+        String duration = str(item, "retentionDuration");
+        if (duration != null) rs.setRetentionDuration(duration);
+        String trigger = str(item, "retentionTrigger");
+        if (trigger != null) rs.setRetentionTrigger(trigger);
+        String rsJurisdiction = str(item, "jurisdiction");
+        if (rsJurisdiction != null) rs.setJurisdiction(rsJurisdiction);
+
         List<String> legRefs = strList(item, "legislationRefs");
         if (!legRefs.isEmpty()) {
             rs.setLegislationIds(resolveLegislationRefs(legRefs, ctx));
@@ -557,7 +569,60 @@ public class PackImportService {
             created += counts[0]; updated += counts[1]; skipped += counts[2];
         }
 
+        // Rebuild materialised paths for all imported categories
+        if (ctx.mode != ImportMode.PREVIEW) {
+            rebuildCategoryPaths(ctx.categoryNameToId.values());
+        }
+
         return new ComponentResult("TAXONOMY_CATEGORIES", comp.name(), created, updated, skipped, 0, details);
+    }
+
+    /**
+     * Rebuild materialised paths for the given category IDs by walking up the parent chain.
+     */
+    private void rebuildCategoryPaths(Collection<String> categoryIds) {
+        Map<String, ClassificationCategory> allById = new HashMap<>();
+        for (String id : categoryIds) {
+            if (id != null) {
+                categoryRepo.findById(id).ifPresent(c -> allById.put(c.getId(), c));
+            }
+        }
+        // Also load parents that may not be in the import set
+        Set<String> parentIds = new HashSet<>();
+        for (ClassificationCategory cat : allById.values()) {
+            if (cat.getParentId() != null && !allById.containsKey(cat.getParentId())) {
+                parentIds.add(cat.getParentId());
+            }
+        }
+        for (String pid : parentIds) {
+            categoryRepo.findById(pid).ifPresent(c -> allById.put(c.getId(), c));
+        }
+
+        for (ClassificationCategory cat : allById.values()) {
+            List<String> path = new ArrayList<>();
+            buildPath(cat, allById, path);
+            Collections.reverse(path);
+            cat.setPath(path);
+        }
+        categoryRepo.saveAll(allById.values().stream()
+                .filter(c -> categoryIds.contains(c.getId()))
+                .toList());
+    }
+
+    private void buildPath(ClassificationCategory node, Map<String, ClassificationCategory> byId, List<String> path) {
+        if (node.getClassificationCode() != null) {
+            path.add(node.getClassificationCode());
+        }
+        if (node.getParentId() != null) {
+            ClassificationCategory parent = byId.get(node.getParentId());
+            if (parent == null) {
+                parent = categoryRepo.findById(node.getParentId()).orElse(null);
+                if (parent != null) byId.put(parent.getId(), parent);
+            }
+            if (parent != null) {
+                buildPath(parent, byId, path);
+            }
+        }
     }
 
     private int[] importCategory(Map<String, Object> item, String parentId, ImportContext ctx, List<String> details) {
@@ -593,10 +658,78 @@ public class PackImportService {
         cat.setDescription(str(item, "description"));
         cat.setParentId(parentId);
         cat.setKeywords(strList(item, "keywords"));
-        cat.setActive(true);
+        cat.setStatus(NodeStatus.ACTIVE);
         cat.setSourcePackSlug(ctx.packSlug);
         cat.setSourcePackVersion(ctx.packVersion);
         cat.setImportedAt(ctx.importedAt);
+
+        // ISO 15489 BCS fields
+        String code = str(item, "classificationCode");
+        if (code != null && !code.isEmpty()) {
+            // Check for code collision — append pack slug prefix if needed
+            if (categoryRepo.existsByClassificationCode(code) && cat.getId() == null) {
+                String existing = categoryRepo.findByClassificationCode(code)
+                        .map(ClassificationCategory::getId).orElse(null);
+                if (existing != null && !existing.equals(cat.getId())) {
+                    code = ctx.packSlug.substring(0, Math.min(3, ctx.packSlug.length())).toUpperCase() + "-" + code;
+                }
+            }
+            cat.setClassificationCode(code);
+        } else {
+            // Auto-generate code from name and parent
+            String parentCode = null;
+            if (parentId != null) {
+                parentCode = categoryRepo.findById(parentId)
+                        .map(ClassificationCategory::getClassificationCode).orElse(null);
+            }
+            cat.setClassificationCode(ClassificationCodeGenerator.generate(cat.getName(), parentCode));
+        }
+
+        String level = str(item, "level");
+        if (level != null && !level.isEmpty()) {
+            try { cat.setLevel(TaxonomyLevel.valueOf(level)); } catch (IllegalArgumentException ignored) {}
+        } else {
+            // Infer level from hierarchy position
+            cat.setLevel(parentId == null ? TaxonomyLevel.FUNCTION : TaxonomyLevel.ACTIVITY);
+        }
+
+        String scopeNotes = str(item, "scopeNotes");
+        if (scopeNotes != null) cat.setScopeNotes(scopeNotes);
+
+        String retTrigger = str(item, "retentionTrigger");
+        if (retTrigger != null && !retTrigger.isEmpty()) {
+            try { cat.setRetentionTrigger(RetentionTrigger.valueOf(retTrigger)); } catch (IllegalArgumentException ignored) {}
+        }
+
+        String retTriggerDesc = str(item, "retentionTriggerDescription");
+        if (retTriggerDesc != null) cat.setRetentionTriggerDescription(retTriggerDesc);
+
+        // ISO 15489 spreadsheet fields
+        String jurisdiction = str(item, "jurisdiction");
+        if (jurisdiction != null) cat.setJurisdiction(jurisdiction);
+
+        List<String> typicalRecords = strList(item, "typicalRecords");
+        if (!typicalRecords.isEmpty()) cat.setTypicalRecords(typicalRecords);
+
+        String retPeriodText = str(item, "retentionPeriodText");
+        if (retPeriodText != null) cat.setRetentionPeriodText(retPeriodText);
+
+        // legalCitation (also accept legacy "disposalAuthority" key)
+        String legalCitation = str(item, "legalCitation");
+        if (legalCitation == null) legalCitation = str(item, "disposalAuthority");
+        if (legalCitation != null) cat.setLegalCitation(legalCitation);
+
+        cat.setPersonalDataFlag(bool(item, "personalDataFlag"));
+        cat.setVitalRecordFlag(bool(item, "vitalRecordFlag"));
+
+        String reviewCycle = str(item, "reviewCycleDuration");
+        if (reviewCycle != null) cat.setReviewCycleDuration(reviewCycle);
+
+        String owner = str(item, "owner");
+        if (owner != null) cat.setOwner(owner);
+
+        String custodian = str(item, "custodian");
+        if (custodian != null) cat.setCustodian(custodian);
 
         // Resolve defaultSensitivity
         String sensitivity = str(item, "defaultSensitivity");

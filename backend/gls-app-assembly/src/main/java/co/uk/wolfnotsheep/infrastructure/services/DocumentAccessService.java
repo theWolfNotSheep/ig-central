@@ -142,6 +142,17 @@ public class DocumentAccessService {
     }
 
     /**
+     * Update operations/includeChildren on an existing grant.
+     */
+    public TaxonomyGrant updateGrant(String grantId, Set<String> operations, Boolean includeChildren) {
+        TaxonomyGrant grant = grantRepo.findById(grantId)
+                .orElseThrow(() -> new IllegalArgumentException("Grant not found: " + grantId));
+        if (operations != null) grant.setOperations(operations);
+        if (includeChildren != null) grant.setIncludeChildren(includeChildren);
+        return grantRepo.save(grant);
+    }
+
+    /**
      * Revoke a taxonomy grant.
      */
     public void revokeAccess(String grantId) {

@@ -3,7 +3,9 @@ package co.uk.wolfnotsheep.mcp.tools;
 import co.uk.wolfnotsheep.governance.models.TraitDefinition;
 import co.uk.wolfnotsheep.governance.repositories.TraitDefinitionRepository;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
+import co.uk.wolfnotsheep.mcp.config.CacheConfig;
 import org.springframework.ai.mcp.annotation.McpTool;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -24,6 +26,7 @@ public class TraitDetectionTool {
         this.toolLog = toolLog;
     }
 
+    @Cacheable(CacheConfig.CACHE_TRAITS)
     @McpTool(name = "get_document_traits",
             description = "Get the list of document traits to detect. Traits describe document characteristics " +
                     "like whether it's a template or real document, draft or final, inbound or outbound. " +

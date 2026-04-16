@@ -28,6 +28,13 @@ public class RabbitMqConfig {
     public static final String ROUTING_CLASSIFIED = "document.classified";
     public static final String ROUTING_FAILED = "document.classification.failed";
 
+    // ── Pipeline async queues ───────────────────────────
+    public static final String PIPELINE_EXCHANGE = "gls.pipeline";
+    public static final String QUEUE_LLM_JOBS = "gls.pipeline.llm.jobs";
+    public static final String QUEUE_LLM_COMPLETED = "gls.pipeline.llm.completed";
+    public static final String ROUTING_LLM_JOB_REQUESTED = "pipeline.llm.requested";
+    public static final String ROUTING_LLM_JOB_COMPLETED = "pipeline.llm.completed";
+
     @Bean
     public TopicExchange documentExchange() {
         return new TopicExchange(EXCHANGE, true, false);
@@ -80,6 +87,39 @@ public class RabbitMqConfig {
     @Bean
     public Binding failedBinding() {
         return BindingBuilder.bind(failedQueue()).to(documentExchange()).with(ROUTING_FAILED);
+    }
+
+    // ── Pipeline exchange and LLM job queues ────────────
+
+    @Bean
+    public TopicExchange pipelineExchange() {
+        return new TopicExchange(PIPELINE_EXCHANGE, true, false);
+    }
+
+    @Bean
+    public Queue llmJobsQueue() {
+        return QueueBuilder.durable(QUEUE_LLM_JOBS)
+                .withArgument("x-dead-letter-exchange", PIPELINE_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", "pipeline.dlq")
+                .build();
+    }
+
+    @Bean
+    public Queue llmCompletedQueue() {
+        return QueueBuilder.durable(QUEUE_LLM_COMPLETED)
+                .withArgument("x-dead-letter-exchange", PIPELINE_EXCHANGE)
+                .withArgument("x-dead-letter-routing-key", "pipeline.dlq")
+                .build();
+    }
+
+    @Bean
+    public Binding llmJobsBinding() {
+        return BindingBuilder.bind(llmJobsQueue()).to(pipelineExchange()).with(ROUTING_LLM_JOB_REQUESTED);
+    }
+
+    @Bean
+    public Binding llmCompletedBinding() {
+        return BindingBuilder.bind(llmCompletedQueue()).to(pipelineExchange()).with(ROUTING_LLM_JOB_COMPLETED);
     }
 
     @Bean

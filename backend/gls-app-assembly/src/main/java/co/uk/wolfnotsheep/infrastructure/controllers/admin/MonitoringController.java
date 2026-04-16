@@ -1,10 +1,9 @@
 package co.uk.wolfnotsheep.infrastructure.controllers.admin;
 
 import co.uk.wolfnotsheep.document.events.DocumentIngestedEvent;
-import co.uk.wolfnotsheep.document.models.DocumentModel;
-import co.uk.wolfnotsheep.document.models.DocumentStatus;
-import co.uk.wolfnotsheep.document.models.PiiEntity;
-import co.uk.wolfnotsheep.document.models.SystemError;
+import co.uk.wolfnotsheep.document.models.*;
+import co.uk.wolfnotsheep.document.repositories.NodeRunRepository;
+import co.uk.wolfnotsheep.document.repositories.PipelineRunRepository;
 import co.uk.wolfnotsheep.document.repositories.SystemErrorRepository;
 import co.uk.wolfnotsheep.document.services.DocumentService;
 import co.uk.wolfnotsheep.document.services.PiiPatternScanner;
@@ -45,6 +44,8 @@ public class MonitoringController {
     private final ElasticsearchIndexService esIndexService;
     private final SystemErrorRepository systemErrorRepo;
     private final PiiPatternScanner piiScanner;
+    private final PipelineRunRepository pipelineRunRepo;
+    private final NodeRunRepository nodeRunRepo;
 
     public MonitoringController(MonitoringService monitoringService,
                                 RabbitTemplate rabbitTemplate,
@@ -53,7 +54,9 @@ public class MonitoringController {
                                 PipelineEventBroadcaster broadcaster,
                                 ElasticsearchIndexService esIndexService,
                                 SystemErrorRepository systemErrorRepo,
-                                PiiPatternScanner piiScanner) {
+                                PiiPatternScanner piiScanner,
+                                PipelineRunRepository pipelineRunRepo,
+                                NodeRunRepository nodeRunRepo) {
         this.monitoringService = monitoringService;
         this.rabbitTemplate = rabbitTemplate;
         this.documentService = documentService;
@@ -62,6 +65,8 @@ public class MonitoringController {
         this.esIndexService = esIndexService;
         this.systemErrorRepo = systemErrorRepo;
         this.piiScanner = piiScanner;
+        this.pipelineRunRepo = pipelineRunRepo;
+        this.nodeRunRepo = nodeRunRepo;
     }
 
     /**
@@ -392,5 +397,82 @@ public class MonitoringController {
                 "updatedDocuments", updatedDocs,
                 "newFindings", newFindings
         ));
+    }
+
+    // ── Pipeline Run Tracking ───────────────────────────────────────────
+
+    /**
+     * Get pipeline run summary counts by status.
+     */
+    @GetMapping("/pipeline/runs/summary")
+    public ResponseEntity<Map<String, Object>> pipelineRunSummary() {
+        return ResponseEntity.ok(Map.of(
+                "running", pipelineRunRepo.countByStatus(PipelineRunStatus.RUNNING),
+                "waiting", pipelineRunRepo.countByStatus(PipelineRunStatus.WAITING),
+                "completed", pipelineRunRepo.countByStatus(PipelineRunStatus.COMPLETED),
+                "failed", pipelineRunRepo.countByStatus(PipelineRunStatus.FAILED)
+        ));
+    }
+
+    /**
+     * Get recent pipeline runs with their status, timing, and error info.
+     */
+    @GetMapping("/pipeline/runs")
+    public ResponseEntity<Page<PipelineRun>> pipelineRuns(
+            @RequestParam(required = false) String status,
+            Pageable pageable) {
+        if (status != null) {
+            try {
+                PipelineRunStatus prs = PipelineRunStatus.valueOf(status.toUpperCase());
+                return ResponseEntity.ok(pipelineRunRepo.findByStatus(prs, pageable));
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().build();
+            }
+        }
+        return ResponseEntity.ok(pipelineRunRepo.findAll(pageable));
+    }
+
+    /**
+     * Get a specific pipeline run with all its node runs.
+     */
+    @GetMapping("/pipeline/runs/{runId}")
+    public ResponseEntity<Map<String, Object>> pipelineRunDetail(@PathVariable String runId) {
+        return pipelineRunRepo.findById(runId)
+                .map(run -> {
+                    List<NodeRun> nodeRuns = nodeRunRepo.findByPipelineRunIdOrderByStartedAtAsc(runId);
+                    return ResponseEntity.ok(Map.<String, Object>of(
+                            "run", run,
+                            "nodeRuns", nodeRuns
+                    ));
+                })
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Get pipeline runs for a specific document.
+     */
+    @GetMapping("/pipeline/runs/by-document/{documentId}")
+    public ResponseEntity<List<PipelineRun>> pipelineRunsByDocument(@PathVariable String documentId) {
+        return ResponseEntity.ok(pipelineRunRepo.findByDocumentIdOrderByCreatedAtDesc(documentId));
+    }
+
+    /**
+     * Get currently waiting pipeline runs (documents awaiting LLM response).
+     */
+    @GetMapping("/pipeline/runs/waiting")
+    public ResponseEntity<List<PipelineRun>> waitingRuns() {
+        Instant cutoff = Instant.now().minus(10, ChronoUnit.MINUTES);
+        List<PipelineRun> stale = pipelineRunRepo.findByStatusAndUpdatedAtBefore(
+                PipelineRunStatus.WAITING, cutoff);
+        List<PipelineRun> allWaiting = pipelineRunRepo.findByStatus(
+                PipelineRunStatus.WAITING, Pageable.unpaged()).getContent();
+        // Mark stale runs
+        for (PipelineRun run : allWaiting) {
+            if (stale.contains(run)) {
+                // Annotate in a way the frontend can detect
+                run.setError("STALE: waiting > 10 minutes");
+            }
+        }
+        return ResponseEntity.ok(allWaiting);
     }
 }

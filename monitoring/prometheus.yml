@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: gls-api
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["api:8080"]
+
+  - job_name: gls-llm-worker
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["llm-worker:8082"]
+
+  - job_name: gls-mcp-server
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["mcp-server:8081"]

@@ -6,6 +6,7 @@ import co.uk.wolfnotsheep.governance.models.PipelineDefinition;
 import co.uk.wolfnotsheep.governance.models.PipelineDefinition.PipelineStep;
 import co.uk.wolfnotsheep.governance.repositories.PipelineBlockRepository;
 import co.uk.wolfnotsheep.governance.repositories.PipelineDefinitionRepository;
+import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.platform.config.services.AppConfigService;
 import org.springframework.stereotype.Component;
 
@@ -76,22 +77,83 @@ public class ClassificationPromptBuilder {
     private final PipelineDefinitionRepository pipelineRepo;
     private final PipelineBlockRepository blockRepo;
     private final AppConfigService configService;
+    private final GovernanceService governanceService;
 
     public ClassificationPromptBuilder(PipelineDefinitionRepository pipelineRepo,
                                         PipelineBlockRepository blockRepo,
-                                        AppConfigService configService) {
+                                        AppConfigService configService,
+                                        GovernanceService governanceService) {
         this.pipelineRepo = pipelineRepo;
         this.blockRepo = blockRepo;
         this.configService = configService;
+        this.governanceService = governanceService;
     }
 
     public String buildSystemPrompt() {
-        return buildSystemPrompt(null);
+        return buildSystemPrompt(null, java.util.Map.of());
     }
 
     public String buildSystemPrompt(String pipelineId) {
-        String prompt = getStepPrompt(pipelineId, "LLM_CLASSIFICATION", true);
-        return prompt != null ? prompt : DEFAULT_SYSTEM_PROMPT;
+        return buildSystemPrompt(pipelineId, java.util.Map.of());
+    }
+
+    /**
+     * Build the system prompt, optionally pre-injecting context that the LLM would
+     * otherwise have to fetch via MCP tool calls. The injection flags come from the
+     * pipeline node's configSchema (set in the visual editor), not hardcoded here.
+     *
+     * Recognised override keys:
+     *   - injectTaxonomy (boolean)        — pre-load classification taxonomy
+     *   - injectSensitivities (boolean)   — pre-load sensitivity definitions
+     *   - injectTraits (boolean)          — pre-load trait definitions
+     *   - injectPiiTypes (boolean)        — pre-load PII type definitions
+     */
+    public String buildSystemPrompt(String pipelineId, java.util.Map<String, Object> overrides) {
+        String basePrompt = getStepPrompt(pipelineId, "LLM_CLASSIFICATION", true);
+        if (basePrompt == null) basePrompt = DEFAULT_SYSTEM_PROMPT;
+
+        StringBuilder injection = new StringBuilder();
+        if (asBool(overrides, "injectTaxonomy")) {
+            String taxonomy = governanceService.getTaxonomyAsText();
+            if (taxonomy != null && !taxonomy.isBlank()) {
+                injection.append("\n\n================ PRE-LOADED TAXONOMY ================\n")
+                         .append("(Use this directly — do NOT call get_classification_taxonomy.)\n\n")
+                         .append(taxonomy);
+            }
+        }
+        if (asBool(overrides, "injectSensitivities")) {
+            String sens = governanceService.getSensitivityDefinitionsAsText();
+            if (sens != null && !sens.isBlank()) {
+                injection.append("\n\n================ PRE-LOADED SENSITIVITY LEVELS ================\n")
+                         .append("(Use this directly — do NOT call get_sensitivity_definitions.)\n\n")
+                         .append(sens);
+            }
+        }
+        if (asBool(overrides, "injectTraits")) {
+            String traits = governanceService.getTraitDefinitionsAsText();
+            if (traits != null && !traits.isBlank()) {
+                injection.append("\n\n================ PRE-LOADED DOCUMENT TRAITS ================\n")
+                         .append("(Use this directly — do NOT call get_document_traits.)\n\n")
+                         .append(traits);
+            }
+        }
+        if (asBool(overrides, "injectPiiTypes")) {
+            String pii = governanceService.getPiiTypeDefinitionsAsText();
+            if (pii != null && !pii.isBlank()) {
+                injection.append("\n\n================ PRE-LOADED PII TYPES ================\n")
+                         .append("(Use this directly — do NOT call get_org_pii_patterns for type info.)\n\n")
+                         .append(pii);
+            }
+        }
+        return injection.length() > 0 ? basePrompt + injection : basePrompt;
+    }
+
+    private static boolean asBool(java.util.Map<String, Object> map, String key) {
+        if (map == null) return false;
+        Object v = map.get(key);
+        if (v == null) return false;
+        if (v instanceof Boolean b) return b;
+        return Boolean.parseBoolean(v.toString());
     }
 
     public String buildUserPrompt(DocumentProcessedEvent event) {

@@ -23,6 +23,30 @@ public class DocumentClassificationResult {
     private String categoryId;
     private String categoryName;
 
+    // ── ISO 15489 — denormalised from category at classification time ──
+    /** Stable hierarchical code (e.g. "COR-GOV-BRD"). */
+    private String classificationCode;
+    /** Materialised path of codes (e.g. ["COR", "COR-GOV", "COR-GOV-BRD"]). */
+    private List<String> classificationPath;
+    /** Tier the category sits at (FUNCTION/ACTIVITY/TRANSACTION). */
+    private ClassificationCategory.TaxonomyLevel classificationLevel;
+    /** Jurisdiction (US, UK, EU). */
+    private String jurisdiction;
+    /** Legal authority for the classification (e.g. "IRS requirements (IRC §6001)"). */
+    private String legalCitation;
+    /** Whether this record class typically contains personal data. */
+    private boolean categoryPersonalData;
+    /** Whether this record class is vital for business continuity. */
+    private boolean vitalRecord;
+    /** Category version at classification time (immutable audit). */
+    private int taxonomyVersion;
+    /** Retention trigger derived from category or schedule. */
+    private ClassificationCategory.RetentionTrigger retentionTrigger;
+    /** Human-readable retention period (e.g. "7 years after termination"). */
+    private String retentionPeriodText;
+    /** Expected disposition action for this classification. */
+    private RetentionSchedule.DispositionAction expectedDispositionAction;
+
     /** Sensitivity label the LLM determined. */
     private SensitivityLabel sensitivityLabel;
 
@@ -67,6 +91,39 @@ public class DocumentClassificationResult {
 
     public String getCategoryName() { return categoryName; }
     public void setCategoryName(String categoryName) { this.categoryName = categoryName; }
+
+    public String getClassificationCode() { return classificationCode; }
+    public void setClassificationCode(String classificationCode) { this.classificationCode = classificationCode; }
+
+    public List<String> getClassificationPath() { return classificationPath; }
+    public void setClassificationPath(List<String> classificationPath) { this.classificationPath = classificationPath; }
+
+    public ClassificationCategory.TaxonomyLevel getClassificationLevel() { return classificationLevel; }
+    public void setClassificationLevel(ClassificationCategory.TaxonomyLevel classificationLevel) { this.classificationLevel = classificationLevel; }
+
+    public String getJurisdiction() { return jurisdiction; }
+    public void setJurisdiction(String jurisdiction) { this.jurisdiction = jurisdiction; }
+
+    public String getLegalCitation() { return legalCitation; }
+    public void setLegalCitation(String legalCitation) { this.legalCitation = legalCitation; }
+
+    public boolean isCategoryPersonalData() { return categoryPersonalData; }
+    public void setCategoryPersonalData(boolean categoryPersonalData) { this.categoryPersonalData = categoryPersonalData; }
+
+    public boolean isVitalRecord() { return vitalRecord; }
+    public void setVitalRecord(boolean vitalRecord) { this.vitalRecord = vitalRecord; }
+
+    public int getTaxonomyVersion() { return taxonomyVersion; }
+    public void setTaxonomyVersion(int taxonomyVersion) { this.taxonomyVersion = taxonomyVersion; }
+
+    public ClassificationCategory.RetentionTrigger getRetentionTrigger() { return retentionTrigger; }
+    public void setRetentionTrigger(ClassificationCategory.RetentionTrigger retentionTrigger) { this.retentionTrigger = retentionTrigger; }
+
+    public String getRetentionPeriodText() { return retentionPeriodText; }
+    public void setRetentionPeriodText(String retentionPeriodText) { this.retentionPeriodText = retentionPeriodText; }
+
+    public RetentionSchedule.DispositionAction getExpectedDispositionAction() { return expectedDispositionAction; }
+    public void setExpectedDispositionAction(RetentionSchedule.DispositionAction expectedDispositionAction) { this.expectedDispositionAction = expectedDispositionAction; }
 
     public SensitivityLabel getSensitivityLabel() { return sensitivityLabel; }
     public void setSensitivityLabel(SensitivityLabel sensitivityLabel) { this.sensitivityLabel = sensitivityLabel; }

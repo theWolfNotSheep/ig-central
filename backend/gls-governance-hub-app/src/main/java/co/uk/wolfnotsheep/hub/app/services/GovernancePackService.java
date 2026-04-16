@@ -30,6 +30,15 @@ public class GovernancePackService {
         this.mongoTemplate = mongoTemplate;
     }
 
+    public List<GovernancePack> listAll() {
+        return packRepository.findAll();
+    }
+
+    public GovernancePack getPackById(String id) {
+        return packRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Pack not found: " + id));
+    }
+
     public Page<GovernancePack> search(String query, String jurisdiction, String industry,
                                        String regulation, String tag, Boolean featured,
                                        Pageable pageable) {

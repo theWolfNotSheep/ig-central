@@ -4,8 +4,10 @@ import co.uk.wolfnotsheep.governance.models.GovernancePolicy;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
+import co.uk.wolfnotsheep.mcp.config.CacheConfig;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -25,6 +27,7 @@ public class GovernancePolicyTool {
         this.toolLog = toolLog;
     }
 
+    @Cacheable(value = CacheConfig.CACHE_POLICIES, key = "#categoryId + ':' + #sensitivityLabel")
     @McpTool(name = "get_governance_policies",
             description = "Retrieve active governance policies. Optionally filter by category ID or sensitivity label. " +
                     "Use this to understand what rules apply to a document based on its classification.")

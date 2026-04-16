@@ -8,6 +8,7 @@ import {
   Package,
   Plus,
   Pencil,
+  Copy,
   Loader2,
   X,
   ChevronRight,
@@ -88,6 +89,41 @@ export default function PacksPage() {
     setTagInput("");
     setError("");
     setShowForm(true);
+  }
+
+  async function clonePack(pack: GovernancePack) {
+    if (!confirm(`Clone "${pack.name}"? Creates a new draft pack with the latest version's components.`)) return;
+    try {
+      // Create the new draft pack
+      const newName = `${pack.name} (Copy)`;
+      const newSlug = `${pack.slug}-copy-${Date.now().toString(36).slice(-4)}`;
+      const created = await api.post<GovernancePack>("/api/hub/admin/packs", {
+        name: newName,
+        slug: newSlug,
+        description: pack.description,
+        jurisdiction: pack.jurisdiction,
+        industries: pack.industries,
+        regulations: pack.regulations,
+        tags: pack.tags,
+        author: pack.author,
+        status: "DRAFT",
+      });
+      // Copy latest version's components into the new pack
+      if (pack.latestVersionNumber > 0) {
+        const versions = await api.get<{ components: unknown[] }[]>(`/api/hub/admin/packs/${pack.id}/versions`);
+        const latest = versions[0];
+        if (latest) {
+          await api.post(`/api/hub/admin/packs/${created.id}/versions`, {
+            changelog: `Cloned from ${pack.name} v${pack.latestVersionNumber}`,
+            components: latest.components,
+            publishedBy: "admin",
+          });
+        }
+      }
+      await loadPacks();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Clone failed");
+    }
   }
 
   function openEditForm(pack: GovernancePack) {
@@ -537,7 +573,15 @@ export default function PacksPage() {
                   <td className="px-5 py-3.5 text-sm text-gray-600">
                     {(pack.downloadCount || 0).toLocaleString()}
                   </td>
-                  <td className="px-5 py-3.5 text-right">
+                  <td className="px-5 py-3.5 text-right space-x-1">
+                    <button
+                      onClick={() => clonePack(pack)}
+                      className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                      title="Clone pack with all components"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      Clone
+                    </button>
                     <button
                       onClick={() => openEditForm(pack)}
                       className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900"

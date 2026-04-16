@@ -16,7 +16,7 @@ import FormModal, { FormField } from "@/components/form-modal";
 // Dynamic import for React Flow (SSR incompatible)
 const PipelineEditor = dynamic(() => import("@/components/pipeline-editor/PipelineEditor"), { ssr: false });
 
-type StepType = "BUILT_IN" | "PATTERN" | "LLM_PROMPT" | "CONDITIONAL";
+type StepType = "BUILT_IN" | "PATTERN" | "LLM_PROMPT" | "CONDITIONAL" | "ACCELERATOR" | "SYNC_LLM";
 
 type PipelineStep = {
     order: number;
@@ -66,6 +66,8 @@ const STEP_ICONS: Record<StepType, React.ElementType> = {
     PATTERN: Scan,
     LLM_PROMPT: Brain,
     CONDITIONAL: GitBranch,
+    ACCELERATOR: Cog,
+    SYNC_LLM: Brain,
 };
 
 const STEP_COLORS: Record<StepType, string> = {
@@ -73,6 +75,8 @@ const STEP_COLORS: Record<StepType, string> = {
     PATTERN: "bg-blue-50 text-blue-700 border-blue-200",
     LLM_PROMPT: "bg-purple-50 text-purple-700 border-purple-200",
     CONDITIONAL: "bg-amber-50 text-amber-700 border-amber-200",
+    ACCELERATOR: "bg-violet-50 text-violet-700 border-violet-200",
+    SYNC_LLM: "bg-indigo-50 text-indigo-700 border-indigo-200",
 };
 
 export default function PipelinesPage() {
@@ -85,6 +89,9 @@ export default function PipelinesPage() {
     const [visualEditorPipeline, setVisualEditorPipeline] = useState<Pipeline | null>(null);
     const [saving, setSaving] = useState(false);
     const [scanning, setScanning] = useState(false);
+    const [showTemplates, setShowTemplates] = useState(false);
+    const [newName, setNewName] = useState("");
+    const [newDesc, setNewDesc] = useState("");
 
     const load = useCallback(async () => {
         try {
@@ -133,6 +140,102 @@ export default function PipelinesPage() {
         order, name: "", description: "", type: "BUILT_IN", enabled: true, config: {},
     });
 
+    // ── Pipeline templates ──────────────────────────────────────────
+    type PipelineTemplate = { name: string; description: string; icon: React.ElementType; nodes: { id: string; type: string; label: string; x: number; y: number }[]; edges: { id: string; source: string; target: string; sourceHandle?: string }[] };
+
+    const TEMPLATES: PipelineTemplate[] = [
+        {
+            name: "Blank", description: "Empty canvas — build from scratch", icon: Plus,
+            nodes: [{ id: "n1", type: "trigger", label: "Trigger", x: 250, y: 0 }],
+            edges: [],
+        },
+        {
+            name: "Standard Classification", description: "Full pipeline: extract, PII scan, classify, condition routing, governance + review", icon: Brain,
+            nodes: [
+                { id: "n1", type: "trigger", label: "Trigger", x: 250, y: 0 },
+                { id: "n2", type: "textExtraction", label: "Text Extraction", x: 250, y: 120 },
+                { id: "n3", type: "piiScanner", label: "PII Scanner", x: 250, y: 240 },
+                { id: "n4", type: "aiClassification", label: "AI Classification", x: 250, y: 360 },
+                { id: "n5", type: "condition", label: "Confidence Check", x: 250, y: 480 },
+                { id: "n6", type: "governance", label: "Governance", x: 100, y: 600 },
+                { id: "n7", type: "humanReview", label: "Human Review", x: 400, y: 600 },
+            ],
+            edges: [
+                { id: "e1", source: "n1", target: "n2" },
+                { id: "e2", source: "n2", target: "n3" },
+                { id: "e3", source: "n3", target: "n4" },
+                { id: "e4", source: "n4", target: "n5" },
+                { id: "e5", source: "n5", target: "n6", sourceHandle: "true" },
+                { id: "e6", source: "n5", target: "n7", sourceHandle: "false" },
+            ],
+        },
+        {
+            name: "Quick Classify", description: "Fast pipeline: extract, classify, enforce", icon: Workflow,
+            nodes: [
+                { id: "n1", type: "trigger", label: "Trigger", x: 250, y: 0 },
+                { id: "n2", type: "textExtraction", label: "Text Extraction", x: 250, y: 120 },
+                { id: "n3", type: "aiClassification", label: "AI Classification", x: 250, y: 240 },
+                { id: "n4", type: "governance", label: "Governance", x: 250, y: 360 },
+            ],
+            edges: [
+                { id: "e1", source: "n1", target: "n2" },
+                { id: "e2", source: "n2", target: "n3" },
+                { id: "e3", source: "n3", target: "n4" },
+            ],
+        },
+        {
+            name: "Accelerated", description: "BERT + fingerprint before LLM — saves cost on repeat documents", icon: Cog,
+            nodes: [
+                { id: "n1", type: "trigger", label: "Trigger", x: 250, y: 0 },
+                { id: "n2", type: "textExtraction", label: "Text Extraction", x: 250, y: 100 },
+                { id: "n3", type: "piiScanner", label: "PII Scanner", x: 250, y: 200 },
+                { id: "n4", type: "templateFingerprint", label: "Template Fingerprint", x: 250, y: 300 },
+                { id: "n5", type: "bertClassifier", label: "BERT Classifier", x: 250, y: 400 },
+                { id: "n6", type: "aiClassification", label: "AI Classification", x: 250, y: 500 },
+                { id: "n7", type: "condition", label: "Confidence Check", x: 250, y: 620 },
+                { id: "n8", type: "governance", label: "Governance", x: 100, y: 740 },
+                { id: "n9", type: "humanReview", label: "Human Review", x: 400, y: 740 },
+            ],
+            edges: [
+                { id: "e1", source: "n1", target: "n2" },
+                { id: "e2", source: "n2", target: "n3" },
+                { id: "e3", source: "n3", target: "n4" },
+                { id: "e4", source: "n4", target: "n5" },
+                { id: "e5", source: "n5", target: "n6" },
+                { id: "e6", source: "n6", target: "n7" },
+                { id: "e7", source: "n7", target: "n8", sourceHandle: "true" },
+                { id: "e8", source: "n7", target: "n9", sourceHandle: "false" },
+            ],
+        },
+    ];
+
+    const handleCreateFromTemplate = async (template: PipelineTemplate) => {
+        if (!newName.trim()) { toast.error("Pipeline name is required"); return; }
+        setSaving(true);
+        try {
+            const payload = {
+                name: newName.trim(),
+                description: newDesc.trim(),
+                active: true,
+                isDefault: false,
+                applicableCategoryIds: [],
+                includeSubCategories: true,
+                steps: [],
+                visualNodes: template.nodes.map(n => ({ ...n, data: {} })),
+                visualEdges: template.edges,
+            };
+            const { data } = await api.post("/admin/pipelines", payload);
+            toast.success("Pipeline created");
+            setShowTemplates(false);
+            setNewName("");
+            setNewDesc("");
+            await load();
+            // Open visual editor immediately
+            setVisualEditorPipeline(data);
+        } catch { toast.error("Failed to create pipeline"); }
+        finally { setSaving(false); }
+    };
+
     // Full-screen visual editor mode
     if (visualEditorPipeline) {
         return (
@@ -162,7 +265,7 @@ export default function PipelinesPage() {
                         {scanning ? <Loader2 className="size-4 animate-spin" /> : <Scan className="size-4" />}
                         Batch PII Scan
                     </button>
-                    <button onClick={() => setEditing(newPipeline())}
+                    <button onClick={() => { setShowTemplates(true); setNewName(""); setNewDesc(""); }}
                         className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700">
                         <Plus className="size-4" /> New Pipeline
                     </button>
@@ -290,6 +393,45 @@ export default function PipelinesPage() {
                 </>)}
             </FormModal>
 
+            {/* Template Picker Modal */}
+            <FormModal title="Create New Pipeline" open={showTemplates} onClose={() => setShowTemplates(false)} width="2xl"
+                footer={<button onClick={() => setShowTemplates(false)}
+                    className="px-3 py-1.5 border border-gray-300 text-gray-700 text-xs font-medium rounded-md hover:bg-gray-50">Cancel</button>}>
+                <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                        <FormField label="Pipeline Name" id="tpl-name" required>
+                            <input id="tpl-name" value={newName} onChange={e => setNewName(e.target.value)}
+                                placeholder="e.g. HR Document Pipeline"
+                                className="w-full text-sm border border-gray-300 rounded-md px-3 py-1.5" />
+                        </FormField>
+                        <FormField label="Description" id="tpl-desc">
+                            <input id="tpl-desc" value={newDesc} onChange={e => setNewDesc(e.target.value)}
+                                placeholder="Optional description"
+                                className="w-full text-sm border border-gray-300 rounded-md px-3 py-1.5" />
+                        </FormField>
+                    </div>
+                    <p className="text-xs font-semibold text-gray-700 uppercase">Choose a Template</p>
+                    <div className="grid grid-cols-2 gap-3">
+                        {TEMPLATES.map((tpl) => {
+                            const TplIcon = tpl.icon;
+                            return (
+                                <button key={tpl.name} onClick={() => handleCreateFromTemplate(tpl)} disabled={saving || !newName.trim()}
+                                    className="flex items-start gap-3 p-4 border border-gray-200 rounded-lg hover:border-blue-400 hover:bg-blue-50/50 text-left transition disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <div className="size-10 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
+                                        <TplIcon className="size-5 text-blue-600" />
+                                    </div>
+                                    <div>
+                                        <p className="text-sm font-medium text-gray-900">{tpl.name}</p>
+                                        <p className="text-xs text-gray-500 mt-0.5">{tpl.description}</p>
+                                        <p className="text-[10px] text-gray-400 mt-1">{tpl.nodes.length} nodes</p>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            </FormModal>
+
             {/* Pipeline List */}
             <div className="space-y-4">
                 {pipelines.map((p) => (
@@ -403,6 +545,8 @@ const STEP_BLOCK_TYPES: Record<StepType, string[]> = {
     PATTERN: ["REGEX_SET"],
     BUILT_IN: ["EXTRACTOR", "ENFORCER"],
     CONDITIONAL: ["ROUTER"],
+    ACCELERATOR: ["BERT_CLASSIFIER"],
+    SYNC_LLM: ["PROMPT"],
 };
 
 const BLOCK_TYPE_ICONS: Record<string, { icon: React.ElementType; color: string }> = {

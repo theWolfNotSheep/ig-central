@@ -183,8 +183,26 @@ public class GovernanceAdminController {
 
     @PostMapping("/taxonomy")
     public ResponseEntity<ClassificationCategory> createCategory(@RequestBody ClassificationCategory category) {
-        category.setActive(true);
-        return ResponseEntity.ok(categoryRepository.save(category));
+        category.setStatus(ClassificationCategory.NodeStatus.ACTIVE);
+        if (category.getClassificationCode() == null || category.getClassificationCode().isBlank()) {
+            String parentCode = null;
+            if (category.getParentId() != null) {
+                parentCode = categoryRepository.findById(category.getParentId())
+                        .map(ClassificationCategory::getClassificationCode).orElse(null);
+            }
+            category.setClassificationCode(
+                    co.uk.wolfnotsheep.governance.services.ClassificationCodeGenerator.generate(
+                            category.getName(), parentCode));
+        }
+        if (category.getLevel() == null) {
+            category.setLevel(category.getParentId() == null
+                    ? ClassificationCategory.TaxonomyLevel.FUNCTION
+                    : ClassificationCategory.TaxonomyLevel.ACTIVITY);
+        }
+        category.setVersion(1);
+        ClassificationCategory saved = categoryRepository.save(category);
+        governanceService.rebuildPaths();
+        return ResponseEntity.ok(saved);
     }
 
     @PutMapping("/taxonomy/{id}")
@@ -198,7 +216,47 @@ public class GovernanceAdminController {
                     existing.setKeywords(updates.getKeywords());
                     existing.setDefaultSensitivity(updates.getDefaultSensitivity());
                     existing.setRetentionScheduleId(updates.getRetentionScheduleId());
-                    return ResponseEntity.ok(categoryRepository.save(existing));
+                    existing.setMetadataSchemaId(updates.getMetadataSchemaId());
+                    // ISO 15489 fields
+                    if (updates.getClassificationCode() != null) existing.setClassificationCode(updates.getClassificationCode());
+                    if (updates.getLevel() != null) existing.setLevel(updates.getLevel());
+                    if (updates.getScopeNotes() != null) existing.setScopeNotes(updates.getScopeNotes());
+                    if (updates.getRetentionTrigger() != null) existing.setRetentionTrigger(updates.getRetentionTrigger());
+                    if (updates.getRetentionTriggerDescription() != null) existing.setRetentionTriggerDescription(updates.getRetentionTriggerDescription());
+                    if (updates.getLegalCitation() != null) existing.setLegalCitation(updates.getLegalCitation());
+                    if (updates.getJurisdiction() != null) existing.setJurisdiction(updates.getJurisdiction());
+                    if (updates.getTypicalRecords() != null) existing.setTypicalRecords(updates.getTypicalRecords());
+                    if (updates.getRetentionPeriodText() != null) existing.setRetentionPeriodText(updates.getRetentionPeriodText());
+                    if (updates.getOwner() != null) existing.setOwner(updates.getOwner());
+                    if (updates.getCustodian() != null) existing.setCustodian(updates.getCustodian());
+                    if (updates.getReviewCycleDuration() != null) existing.setReviewCycleDuration(updates.getReviewCycleDuration());
+                    existing.setPersonalDataFlag(updates.isPersonalDataFlag());
+                    existing.setVitalRecordFlag(updates.isVitalRecordFlag());
+                    if (updates.getStatus() != null) existing.setStatus(updates.getStatus());
+                    existing.setVersion(existing.getVersion() + 1);
+                    ClassificationCategory saved = categoryRepository.save(existing);
+                    governanceService.rebuildPaths();
+                    return ResponseEntity.ok(saved);
+                })
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @PutMapping("/taxonomy/{id}/review")
+    public ResponseEntity<ClassificationCategory> markCategoryReviewed(@PathVariable String id) {
+        return categoryRepository.findById(id)
+                .map(cat -> {
+                    cat.setLastReviewedAt(Instant.now());
+                    // Calculate next review based on cycle duration
+                    if (cat.getReviewCycleDuration() != null) {
+                        try {
+                            java.time.Period period = java.time.Period.parse(cat.getReviewCycleDuration());
+                            cat.setNextReviewAt(Instant.now().plus(period.getDays(), java.time.temporal.ChronoUnit.DAYS));
+                        } catch (Exception e) {
+                            // Default to 1 year if parsing fails
+                            cat.setNextReviewAt(Instant.now().plus(365, java.time.temporal.ChronoUnit.DAYS));
+                        }
+                    }
+                    return ResponseEntity.ok(categoryRepository.save(cat));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -207,11 +265,84 @@ public class GovernanceAdminController {
     public ResponseEntity<Void> deactivateCategory(@PathVariable String id) {
         return categoryRepository.findById(id)
                 .map(cat -> {
-                    cat.setActive(false);
+                    cat.setStatus(ClassificationCategory.NodeStatus.INACTIVE);
                     categoryRepository.save(cat);
                     return ResponseEntity.ok().<Void>build();
                 })
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Export taxonomy in the ISO 15489 9-column format matching the reference spreadsheet.
+     * Columns: Tier 1 Function, Function Code, Tier 2 Activity, Tier 3 Record Class,
+     *          Record Code, Typical Records, Jurisdiction, Retention Period, Legal Citation
+     */
+    @GetMapping("/taxonomy/export")
+    public ResponseEntity<String> exportTaxonomyCsv() {
+        List<ClassificationCategory> all = governanceService.getFullTaxonomy();
+        Map<String, ClassificationCategory> byId = all.stream()
+                .filter(c -> c.getId() != null)
+                .collect(java.util.stream.Collectors.toMap(ClassificationCategory::getId, c -> c));
+
+        StringBuilder csv = new StringBuilder();
+        csv.append("Tier 1 Function,Function Code,Tier 2 Activity,Tier 3 Record Class,Record Code,Typical Records,Jurisdiction,Retention Period,Legal Citation\n");
+
+        for (ClassificationCategory cat : all) {
+            // Resolve ancestors
+            String functionName = "", functionCode = "", activityName = "", recordClass = "", recordCode = "";
+            ClassificationCategory.TaxonomyLevel level = cat.getLevel();
+
+            if (level == ClassificationCategory.TaxonomyLevel.FUNCTION) {
+                functionName = cat.getName();
+                functionCode = cat.getClassificationCode() != null ? cat.getClassificationCode() : "";
+            } else if (level == ClassificationCategory.TaxonomyLevel.ACTIVITY) {
+                activityName = cat.getName();
+                ClassificationCategory parent = cat.getParentId() != null ? byId.get(cat.getParentId()) : null;
+                if (parent != null) {
+                    functionName = parent.getName();
+                    functionCode = parent.getClassificationCode() != null ? parent.getClassificationCode() : "";
+                }
+            } else if (level == ClassificationCategory.TaxonomyLevel.TRANSACTION) {
+                recordClass = cat.getName();
+                recordCode = cat.getClassificationCode() != null ? cat.getClassificationCode() : "";
+                ClassificationCategory activity = cat.getParentId() != null ? byId.get(cat.getParentId()) : null;
+                if (activity != null) {
+                    activityName = activity.getName();
+                    ClassificationCategory function = activity.getParentId() != null ? byId.get(activity.getParentId()) : null;
+                    if (function != null) {
+                        functionName = function.getName();
+                        functionCode = function.getClassificationCode() != null ? function.getClassificationCode() : "";
+                    }
+                }
+            }
+
+            // Only export TRANSACTION-level nodes as rows (matching spreadsheet format)
+            if (level != ClassificationCategory.TaxonomyLevel.TRANSACTION) continue;
+
+            String typicalRecords = cat.getTypicalRecords() != null ? String.join(", ", cat.getTypicalRecords()) : "";
+
+            csv.append(esc(functionName)).append(",");
+            csv.append(esc(functionCode)).append(",");
+            csv.append(esc(activityName)).append(",");
+            csv.append(esc(recordClass)).append(",");
+            csv.append(esc(recordCode)).append(",");
+            csv.append(esc(typicalRecords)).append(",");
+            csv.append(esc(cat.getJurisdiction())).append(",");
+            csv.append(esc(cat.getRetentionPeriodText())).append(",");
+            csv.append(esc(cat.getLegalCitation())).append("\n");
+        }
+        return ResponseEntity.ok()
+                .header("Content-Type", "text/csv")
+                .header("Content-Disposition", "attachment; filename=taxonomy-export.csv")
+                .body(csv.toString());
+    }
+
+    private String esc(String val) {
+        if (val == null) return "";
+        if (val.contains(",") || val.contains("\"") || val.contains("\n")) {
+            return "\"" + val.replace("\"", "\"\"") + "\"";
+        }
+        return val;
     }
 
     // ── Retention Schedules ──────────────────────────────

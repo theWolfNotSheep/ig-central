@@ -1,5 +1,8 @@
 package co.uk.wolfnotsheep.document.models;
 
+import co.uk.wolfnotsheep.governance.models.ClassificationCategory.RetentionTrigger;
+import co.uk.wolfnotsheep.governance.models.ClassificationCategory.TaxonomyLevel;
+import co.uk.wolfnotsheep.governance.models.RetentionSchedule.DispositionAction;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -55,9 +58,30 @@ public class DocumentModel {
     private String summary; // LLM-generated document summary
     private Map<String, String> extractedMetadata;
 
+    // ── ISO 15489 — denormalised from category at classification time ──
+    @Indexed
+    private String classificationCode;          // "COR-GOV-BRD" — stable hierarchical code
+    private List<String> classificationPath;    // ["COR", "COR-GOV", "COR-GOV-BRD"]
+    @Indexed
+    private TaxonomyLevel classificationLevel;  // FUNCTION, ACTIVITY, TRANSACTION
+    @Indexed
+    private String jurisdiction;                // "US", "UK", "EU"
+    private String legalCitation;               // "IRS requirements (IRC §6001)"
+    @Indexed
+    private boolean categoryPersonalData;       // record class typically contains personal data
+    @Indexed
+    private boolean vitalRecord;                // critical for business continuity
+    private int taxonomyVersion;                // category version at the time of classification
+
     // ── Governance ───────────────────────────────────────
     private String retentionScheduleId;
     private Instant retentionExpiresAt;
+    private RetentionTrigger retentionTrigger;          // DATE_CREATED, DATE_CLOSED, EVENT_BASED, etc.
+    private String retentionPeriodText;                 // human-readable, e.g. "7 years after termination"
+    private Instant retentionTriggerEventDate;          // null until trigger event happens (for non-DATE_CREATED triggers)
+    @Indexed
+    private RetentionStatus retentionStatus;            // AWAITING_TRIGGER, RUNNING, EXPIRED, DISPOSED, SUPERSEDED
+    private DispositionAction expectedDispositionAction; // DELETE, ARCHIVE, TRANSFER, REVIEW, ANONYMISE, PERMANENT
     private boolean legalHold;
     private String legalHoldReason;
     private List<String> appliedPolicyIds;
@@ -187,11 +211,50 @@ public class DocumentModel {
     public Map<String, String> getExtractedMetadata() { return extractedMetadata; }
     public void setExtractedMetadata(Map<String, String> extractedMetadata) { this.extractedMetadata = extractedMetadata; }
 
+    public String getClassificationCode() { return classificationCode; }
+    public void setClassificationCode(String classificationCode) { this.classificationCode = classificationCode; }
+
+    public List<String> getClassificationPath() { return classificationPath; }
+    public void setClassificationPath(List<String> classificationPath) { this.classificationPath = classificationPath; }
+
+    public TaxonomyLevel getClassificationLevel() { return classificationLevel; }
+    public void setClassificationLevel(TaxonomyLevel classificationLevel) { this.classificationLevel = classificationLevel; }
+
+    public String getJurisdiction() { return jurisdiction; }
+    public void setJurisdiction(String jurisdiction) { this.jurisdiction = jurisdiction; }
+
+    public String getLegalCitation() { return legalCitation; }
+    public void setLegalCitation(String legalCitation) { this.legalCitation = legalCitation; }
+
+    public boolean isCategoryPersonalData() { return categoryPersonalData; }
+    public void setCategoryPersonalData(boolean categoryPersonalData) { this.categoryPersonalData = categoryPersonalData; }
+
+    public boolean isVitalRecord() { return vitalRecord; }
+    public void setVitalRecord(boolean vitalRecord) { this.vitalRecord = vitalRecord; }
+
+    public int getTaxonomyVersion() { return taxonomyVersion; }
+    public void setTaxonomyVersion(int taxonomyVersion) { this.taxonomyVersion = taxonomyVersion; }
+
     public String getRetentionScheduleId() { return retentionScheduleId; }
     public void setRetentionScheduleId(String retentionScheduleId) { this.retentionScheduleId = retentionScheduleId; }
 
     public Instant getRetentionExpiresAt() { return retentionExpiresAt; }
     public void setRetentionExpiresAt(Instant retentionExpiresAt) { this.retentionExpiresAt = retentionExpiresAt; }
+
+    public RetentionTrigger getRetentionTrigger() { return retentionTrigger; }
+    public void setRetentionTrigger(RetentionTrigger retentionTrigger) { this.retentionTrigger = retentionTrigger; }
+
+    public String getRetentionPeriodText() { return retentionPeriodText; }
+    public void setRetentionPeriodText(String retentionPeriodText) { this.retentionPeriodText = retentionPeriodText; }
+
+    public Instant getRetentionTriggerEventDate() { return retentionTriggerEventDate; }
+    public void setRetentionTriggerEventDate(Instant retentionTriggerEventDate) { this.retentionTriggerEventDate = retentionTriggerEventDate; }
+
+    public RetentionStatus getRetentionStatus() { return retentionStatus; }
+    public void setRetentionStatus(RetentionStatus retentionStatus) { this.retentionStatus = retentionStatus; }
+
+    public DispositionAction getExpectedDispositionAction() { return expectedDispositionAction; }
+    public void setExpectedDispositionAction(DispositionAction expectedDispositionAction) { this.expectedDispositionAction = expectedDispositionAction; }
 
     public boolean isLegalHold() { return legalHold; }
     public void setLegalHold(boolean legalHold) { this.legalHold = legalHold; }

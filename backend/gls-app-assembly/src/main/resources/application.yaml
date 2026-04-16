@@ -93,6 +93,9 @@ management:
       enabled: true
 
 monitoring:
+  # The doc-processor and governance-enforcer modules are bundled into the `api` container
+  # — they no longer run as separate services. BERT classifier is monitored via the
+  # @Value default at index 3 in MonitoringService.
   services:
     - name: api
       url: http://localhost:8080/actuator/health
@@ -100,10 +103,6 @@ monitoring:
       url: ${MCP_SERVER_HEALTH:http://localhost:8081/actuator/health}
     - name: llm-worker
       url: ${LLM_WORKER_HEALTH:http://localhost:8082/actuator/health}
-    - name: doc-processor
-      url: ${DOC_PROCESSOR_HEALTH:http://localhost:8083/actuator/health}
-    - name: governance-enforcer
-      url: ${GOVERNANCE_ENFORCER_HEALTH:http://localhost:8084/actuator/health}
   rabbitmq-management-url: http://${RABBITMQ_HOST:localhost}:15672/api
   health-check-timeout-ms: 3000
 

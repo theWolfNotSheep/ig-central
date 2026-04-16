@@ -163,7 +163,8 @@ services:
       SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
       # Google OAuth, Hub connection, and LLM config come from Settings UI (app_config in MongoDB)
       # These are fallback defaults only
-      GOVERNANCE_HUB_URL: http://governance-hub:8090
+      # Hub runs as a separate stack — point at its public URL (override via Settings UI)
+      GOVERNANCE_HUB_URL: ${GOVERNANCE_HUB_URL:-https://hub.igcentral.com}
       GOVERNANCE_HUB_API_KEY: ""
       GOOGLE_OAUTH_CLIENT_ID: ""
       GOOGLE_OAUTH_CLIENT_SECRET: ""
@@ -258,76 +259,6 @@ services:
     networks:
       - gls
 
-  doc-processor:
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-doc-processor
-    restart: unless-stopped
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.docprocessing
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
-      SERVER_PORT: "8083"
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
-      PIPELINE_EXECUTION_ENGINE_ENABLED: "true"
-    depends_on:
-      mongo:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8083/actuator/info"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    logging: *default-logging
-    networks:
-      - gls
-
-  governance-enforcer:
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-governance-enforcer
-    restart: unless-stopped
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.enforcement
-    environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
-      SERVER_PORT: "8084"
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
-      PIPELINE_EXECUTION_ENGINE_ENABLED: "true"
-    depends_on:
-      mongo:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8084/actuator/info"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    logging: *default-logging
-    networks:
-      - gls
-
   web:
     container_name: ${COMPOSE_PROJECT_NAME:-gls}-web
     restart: unless-stopped
@@ -379,77 +310,39 @@ services:
       - gls
 
   # ── Governance Hub ──────────────────────────────────────
-  web-hub:
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-web-hub
-    restart: unless-stopped
-    build:
-      context: ./web-hub
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_HUB_URL: ${HUB_API_URL:-http://localhost:8090}
-    ports:
-      - "3002:3001"
-    environment:
-      NODE_ENV: production
-      PORT: "3001"
-    depends_on:
-      governance-hub:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    logging: *default-logging
-    networks:
-      - gls
+  # The hub runs as a standalone stack on its own network.
+  # See hub/docker-compose.yml and hub/README.md.
 
-  hub-mongo:
-    image: mongo:7
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-hub-mongo
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-prometheus
     restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: ${HUB_MONGO_PASSWORD:-hubpassword123}
     volumes:
-      - ./data/hub-mongo:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    logging: *default-logging
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
     networks:
       - gls
 
-  governance-hub:
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-governance-hub
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-grafana
     restart: unless-stopped
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.hub
     ports:
-      - "8090:8090"
+      - "3003:3000"
     environment:
-      SPRING_PROFILES_ACTIVE: docker
-      SPRING_MONGODB_URI: mongodb://root:${HUB_MONGO_PASSWORD:-hubpassword123}@hub-mongo:27017/governance_hub?authSource=admin
-      SERVER_PORT: "8090"
-      HUB_ADMIN_USERNAME: ${HUB_ADMIN_USERNAME:-admin}
-      HUB_ADMIN_PASSWORD: ${HUB_ADMIN_PASSWORD:-ChangeMe123!}
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./monitoring/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data:/var/lib/grafana
     depends_on:
-      hub-mongo:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8090/actuator/info"]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    logging: *default-logging
+      - prometheus
     networks:
       - gls
+
+volumes:
+  grafana_data:
 
 networks:
   gls:

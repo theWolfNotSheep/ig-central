@@ -65,7 +65,19 @@ public class ClassificationController {
                 Instant.now()
         );
 
-        ClassifyResponse response = classificationPipeline.classifyInternal(event);
+        // Build per-node LLM overrides from request
+        var overrides = new java.util.HashMap<String, Object>();
+        if (request.provider() != null) overrides.put("provider", request.provider());
+        if (request.model() != null) overrides.put("model", request.model());
+        if (request.temperature() != null) overrides.put("temperature", request.temperature());
+        if (request.maxTokens() != null) overrides.put("maxTokens", request.maxTokens());
+        if (request.timeoutSeconds() != null) overrides.put("timeoutSeconds", request.timeoutSeconds());
+        if (request.injectTaxonomy() != null) overrides.put("injectTaxonomy", request.injectTaxonomy());
+        if (request.injectSensitivities() != null) overrides.put("injectSensitivities", request.injectSensitivities());
+        if (request.injectTraits() != null) overrides.put("injectTraits", request.injectTraits());
+        if (request.injectPiiTypes() != null) overrides.put("injectPiiTypes", request.injectPiiTypes());
+
+        ClassifyResponse response = classificationPipeline.classifyInternal(event, overrides);
         return ResponseEntity.ok(response);
     }
 

@@ -2,8 +2,10 @@ package co.uk.wolfnotsheep.mcp.tools;
 
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
+import co.uk.wolfnotsheep.mcp.config.CacheConfig;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 /**
@@ -22,6 +24,7 @@ public class CorrectionHistoryTool {
         this.toolLog = toolLog;
     }
 
+    @Cacheable(value = CacheConfig.CACHE_CORRECTIONS, key = "#categoryId + ':' + #mimeType")
     @McpTool(name = "get_correction_history",
             description = "Retrieve past human corrections to LLM classifications. " +
                     "ALWAYS call this BEFORE making a classification decision. " +

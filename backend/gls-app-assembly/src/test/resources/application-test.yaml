@@ -1,0 +1,67 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+  application:
+    name: gls-integration-test
+    jwtSecret: testSecretKeyThatIsLongEnoughForHS512AlgorithmRequirements1234567890abcdefghijklmnopqrstuvwxyz
+    jwtExpirationMs: 172800000
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2ClientAutoConfiguration
+      - org.springframework.boot.autoconfigure.elasticsearch.ElasticsearchClientAutoConfiguration
+      - org.springframework.boot.autoconfigure.elasticsearch.ElasticsearchRestClientAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.elasticsearch.ElasticsearchDataAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.elasticsearch.ElasticsearchRepositoriesAutoConfiguration
+      - org.springframework.boot.autoconfigure.mail.MailSenderAutoConfiguration
+  data:
+    mongodb:
+      auto-index-creation: true
+
+pipeline:
+  execution-engine:
+    enabled: true
+  bert:
+    service-url: http://localhost:19999
+  llm:
+    service-url: http://localhost:19998
+    timeout-ms: 5000
+
+minio:
+  endpoint: http://localhost:19997
+  access-key: testaccess
+  secret-key: testsecret
+  bucket: test-bucket
+
+management:
+  health:
+    mail:
+      enabled: false
+    elasticsearch:
+      enabled: false
+
+google:
+  oauth:
+    client-id: test-client-id
+    client-secret: test-client-secret
+    redirect-uri: http://localhost/api/drives/google/callback
+
+governance-hub:
+  url: http://localhost:19996
+  api-key: test-key
+
+public:
+  url: http://localhost
+frontend:
+  url: http://localhost
+backend:
+  base-url: http://localhost:8080
+
+app:
+  admin:
+    email: admin@test.com
+    password: TestPass123!
+  environment: TEST
+
+logging:
+  level:
+    co.uk.wolfnotsheep: INFO

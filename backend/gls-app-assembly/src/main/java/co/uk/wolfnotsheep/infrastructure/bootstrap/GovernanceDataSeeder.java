@@ -1,11 +1,14 @@
 package co.uk.wolfnotsheep.infrastructure.bootstrap;
 
 import co.uk.wolfnotsheep.governance.models.*;
+import co.uk.wolfnotsheep.governance.models.ClassificationCategory.RetentionTrigger;
+import co.uk.wolfnotsheep.governance.models.ClassificationCategory.TaxonomyLevel;
 import co.uk.wolfnotsheep.governance.models.PiiTypeDefinition.ApprovalStatus;
 import co.uk.wolfnotsheep.governance.models.PipelineDefinition.PipelineStep;
 import co.uk.wolfnotsheep.governance.models.PipelineDefinition.PipelineStep.StepType;
 import co.uk.wolfnotsheep.governance.models.RetentionSchedule.DispositionAction;
 import co.uk.wolfnotsheep.governance.repositories.*;
+import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.platform.config.services.AppConfigService;
 import java.util.ArrayList;
 import org.slf4j.Logger;
@@ -41,6 +44,7 @@ public class GovernanceDataSeeder implements ApplicationRunner {
     private final TraitDefinitionRepository traitRepo;
     private final NodeTypeDefinitionRepository nodeTypeRepo;
     private final co.uk.wolfnotsheep.governance.services.NodeTypeDefinitionService nodeTypeService;
+    private final GovernanceService governanceService;
     private final AppConfigService configService;
 
     public GovernanceDataSeeder(
@@ -57,6 +61,7 @@ public class GovernanceDataSeeder implements ApplicationRunner {
             TraitDefinitionRepository traitRepo,
             NodeTypeDefinitionRepository nodeTypeRepo,
             co.uk.wolfnotsheep.governance.services.NodeTypeDefinitionService nodeTypeService,
+            GovernanceService governanceService,
             AppConfigService configService) {
         this.legislationRepo = legislationRepo;
         this.retentionRepo = retentionRepo;
@@ -71,6 +76,7 @@ public class GovernanceDataSeeder implements ApplicationRunner {
         this.traitRepo = traitRepo;
         this.nodeTypeRepo = nodeTypeRepo;
         this.nodeTypeService = nodeTypeService;
+        this.governanceService = governanceService;
         this.configService = configService;
     }
 
@@ -78,19 +84,26 @@ public class GovernanceDataSeeder implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         log.info("Governance data seeder starting...");
 
-        Map<String, String> legislationIds = seedLegislation();
+        // Jurisdiction-specific governance content (legislation, retention schedules,
+        // metadata schemas, categories, policies) is no longer seeded by the platform.
+        // The Governance Hub is the source of truth — admins import packs at /governance/hub.
+        // Sensitivity definitions, storage tiers, traits, PII patterns, and pipeline
+        // infrastructure ARE still seeded as they're universal/app-functional.
+        log.info("Skipping legislation/retention/metadata/category/policy seed — comes from hub packs");
+        Map<String, String> legislationIds = existingIdMap(legislationRepo);
         seedSensitivityDefinitions();
-        Map<String, String> retentionIds = seedRetentionSchedules(legislationIds);
+        Map<String, String> retentionIds = existingRetentionIdMap();
         seedStorageTiers();
-        Map<String, String> schemaIds = seedMetadataSchemas();
+        Map<String, String> schemaIds = existingSchemaIdMap();
         Map<String, String> categoryIds = seedCategories(retentionIds, schemaIds);
-        seedPolicies(categoryIds, legislationIds);
+        governanceService.rebuildPaths();
         seedNodeTypeDefinitions();
         migrateNodeTypeDefinitions();
         nodeTypeService.refresh(); // reload cache after seed/migration
         Map<String, String> blockIds = seedPipelineBlocks();
         seedDefaultPipeline(blockIds);
         seedPipelineConfig();
+        seedBertTrainingConfig();
         seedPiiTypeDefinitions();
         seedTraitDefinitions();
 
@@ -228,28 +241,28 @@ public class GovernanceDataSeeder implements ApplicationRunner {
         List<RetentionSchedule> schedules = List.of(
                 retention("Short-Term",
                         "Documents with no regulatory requirement — deleted after 1 year",
-                        365, DispositionAction.DELETE, false,
-                        "Internal policy",
+                        365, "P1Y", "DATE_CREATED", DispositionAction.DELETE, false,
+                        "Internal policy", "UK",
                         List.of(), legislationIds),
                 retention("Standard",
                         "General business records — archived after 7 years per Companies Act 2006",
-                        2555, DispositionAction.ARCHIVE, false,
-                        "Companies Act 2006",
+                        2555, "P7Y", "DATE_CREATED", DispositionAction.ARCHIVE, false,
+                        "Companies Act 2006", "UK",
                         List.of("COMPANIES_ACT_2006"), legislationIds),
                 retention("Financial Statutory",
                         "Financial and tax records — reviewed after 7 years per HMRC requirements",
-                        2555, DispositionAction.REVIEW, true,
-                        "HMRC requirements, Companies Act 2006 s.386",
+                        2555, "P7Y", "END_OF_FINANCIAL_YEAR", DispositionAction.REVIEW, true,
+                        "HMRC requirements, Companies Act 2006 s.386", "UK",
                         List.of("HMRC_RECORD_KEEPING", "COMPANIES_ACT_2006"), legislationIds),
                 retention("Regulatory Extended",
                         "Regulated records — reviewed after 10 years per FCA/GDPR requirements",
-                        3650, DispositionAction.REVIEW, true,
-                        "FCA SYSC 9, GDPR Art.17 derogations",
+                        3650, "P10Y", "DATE_CREATED", DispositionAction.REVIEW, true,
+                        "FCA SYSC 9, GDPR Art.17 derogations", "UK",
                         List.of("FCA_SYSC_9", "LIMITATION_ACT_1980"), legislationIds),
                 retention("Permanent",
                         "Records that must be retained indefinitely — corporate constitution, board minutes",
-                        36500, DispositionAction.ARCHIVE, true,
-                        "Legal requirement, corporate constitution",
+                        36500, "PERMANENT", null, DispositionAction.PERMANENT, true,
+                        "Legal requirement, corporate constitution", "UK",
                         List.of("COMPANIES_ACT_2006"), legislationIds)
         );
 
@@ -259,15 +272,20 @@ public class GovernanceDataSeeder implements ApplicationRunner {
     }
 
     private RetentionSchedule retention(String name, String desc, int days,
+                                        String duration, String trigger,
                                         DispositionAction action, boolean legalHold, String basis,
+                                        String jurisdiction,
                                         List<String> legislationKeys, Map<String, String> legislationIds) {
         RetentionSchedule rs = new RetentionSchedule();
         rs.setName(name);
         rs.setDescription(desc);
         rs.setRetentionDays(days);
+        rs.setRetentionDuration(duration);
+        rs.setRetentionTrigger(trigger);
         rs.setDispositionAction(action);
         rs.setLegalHoldOverride(legalHold);
         rs.setRegulatoryBasis(basis);
+        rs.setJurisdiction(jurisdiction);
         rs.setLegislationIds(legislationKeys.stream()
                 .map(legislationIds::get)
                 .filter(java.util.Objects::nonNull)
@@ -329,92 +347,151 @@ public class GovernanceDataSeeder implements ApplicationRunner {
     // ── Classification Categories ──────────────────────────
 
     private Map<String, String> seedCategories(Map<String, String> retentionIds, Map<String, String> schemaIds) {
-        if (categoryRepo.count() > 0) {
-            log.info("Classification categories already seeded, skipping.");
-            return categoryRepo.findAll().stream()
-                    .collect(Collectors.toMap(ClassificationCategory::getName, ClassificationCategory::getId));
-        }
+        // Classification categories are no longer seeded by the platform — the
+        // Governance Hub is the source of truth. Admins import them via packs at
+        // /governance/hub. Returning the existing map keeps any hub-imported
+        // categories visible to dependent seeders (e.g. policies).
+        log.info("Classification category seeding is disabled — taxonomies come from hub packs. " +
+                "Existing categories: {}", categoryRepo.count());
+        return categoryRepo.findAll().stream()
+                .collect(Collectors.toMap(ClassificationCategory::getName, ClassificationCategory::getId, (a, b) -> a));
 
+        /* Original UK seed data left in place but unreachable — kept for reference
+           in case anyone wants to restore the platform-default starter taxonomy.
         Map<String, String> ids = new HashMap<>();
 
-        // Root categories
+        // Root categories (FUNCTION level)
         ids.putAll(saveCategories(List.of(
-                category("Legal",
+                category("LEG", "Legal",
                         "Legal documents, correspondence, and advice",
-                        null, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
-                        List.of("contract", "agreement", "litigation", "court", "solicitor", "barrister", "legal opinion", "NDA")),
-                category("Finance",
+                        null, TaxonomyLevel.FUNCTION, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
+                        List.of("contract", "agreement", "litigation", "court", "solicitor", "barrister", "legal opinion", "NDA"),
+                        null, "UK", null,
+                        null, null, false, true,
+                        "Includes: all legal correspondence, contracts, court documents. Excludes: compliance/regulatory (see COM)."),
+                category("FIN", "Finance",
                         "Financial records, accounting, and tax documentation",
-                        null, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Financial Statutory"),
-                        List.of("invoice", "receipt", "budget", "P&L", "balance sheet", "accounts", "tax", "HMRC", "VAT")),
-                category("HR",
+                        null, TaxonomyLevel.FUNCTION, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Financial Statutory"),
+                        List.of("invoice", "receipt", "budget", "P&L", "balance sheet", "accounts", "tax", "HMRC", "VAT"),
+                        null, "UK", null,
+                        RetentionTrigger.END_OF_FINANCIAL_YEAR, null, false, true,
+                        "Includes: all financial transactions, budgets, forecasts."),
+                category("HR", "HR",
                         "Human resources, personnel records, and employee management",
-                        null, SensitivityLabel.RESTRICTED, retentionIds.get("Standard"),
-                        List.of("employee", "payroll", "disciplinary", "grievance", "recruitment", "appraisal", "absence")),
-                category("Operations",
+                        null, TaxonomyLevel.FUNCTION, SensitivityLabel.RESTRICTED, retentionIds.get("Standard"),
+                        List.of("employee", "payroll", "disciplinary", "grievance", "recruitment", "appraisal", "absence"),
+                        null, "UK", null,
+                        null, "DPA 2018", true, false,
+                        "Includes: all employee-related records."),
+                category("OPS", "Operations",
                         "Operational procedures, workflows, and logistics documentation",
-                        null, SensitivityLabel.INTERNAL, retentionIds.get("Standard"),
-                        List.of("procedure", "SOP", "process", "workflow", "logistics", "supply chain", "facilities")),
-                category("Compliance",
+                        null, TaxonomyLevel.FUNCTION, SensitivityLabel.INTERNAL, retentionIds.get("Standard"),
+                        List.of("procedure", "SOP", "process", "workflow", "logistics", "supply chain", "facilities"),
+                        null, "UK", null,
+                        RetentionTrigger.SUPERSEDED, null, false, false,
+                        "Includes: SOPs, project documentation, process maps."),
+                category("COM", "Compliance",
                         "Regulatory compliance, audits, and risk management",
-                        null, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
-                        List.of("audit", "regulation", "FCA", "ICO", "risk assessment", "DPA", "GDPR", "compliance")),
-                category("IT",
+                        null, TaxonomyLevel.FUNCTION, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
+                        List.of("audit", "regulation", "FCA", "ICO", "risk assessment", "DPA", "GDPR", "compliance"),
+                        null, "UK", null,
+                        null, null, false, true,
+                        "Includes: audit reports, risk registers, regulatory correspondence."),
+                category("IT", "IT",
                         "Information technology documentation, architecture, and security",
-                        null, SensitivityLabel.INTERNAL, retentionIds.get("Short-Term"),
-                        List.of("system", "network", "architecture", "security", "incident", "change request", "SLA")),
-                category("Marketing",
+                        null, TaxonomyLevel.FUNCTION, SensitivityLabel.INTERNAL, retentionIds.get("Short-Term"),
+                        List.of("system", "network", "architecture", "security", "incident", "change request", "SLA"),
+                        null, "UK", null,
+                        null, null, false, false,
+                        "Includes: system documentation, change records, architecture diagrams."),
+                category("MKT", "Marketing",
                         "Marketing materials, campaigns, and external communications",
-                        null, SensitivityLabel.PUBLIC, retentionIds.get("Short-Term"),
-                        List.of("campaign", "brochure", "press release", "social media", "brand", "event", "newsletter"))
+                        null, TaxonomyLevel.FUNCTION, SensitivityLabel.PUBLIC, retentionIds.get("Short-Term"),
+                        List.of("campaign", "brochure", "press release", "social media", "brand", "event", "newsletter"),
+                        null, "UK", null,
+                        RetentionTrigger.SUPERSEDED, null, false, false,
+                        "Includes: campaign briefs, press releases, brand guidelines.")
         )));
 
-        // Child categories
+        // Child categories (ACTIVITY level)
         ids.putAll(saveCategories(List.of(
-                category("Contracts",
+                category("LEG-CON", "Contracts",
                         "Commercial agreements, NDAs, service contracts, and leases",
-                        ids.get("Legal"), SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
-                        List.of("NDA", "service agreement", "SLA", "terms", "lease", "employment contract", "vendor agreement")),
-                category("Service Agreements",
+                        ids.get("Legal"), TaxonomyLevel.ACTIVITY, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
+                        List.of("NDA", "service agreement", "SLA", "terms", "lease", "employment contract", "vendor agreement"),
+                        null, "UK", null,
+                        RetentionTrigger.DATE_CLOSED, "Limitation Act 1980 s.5", false, false,
+                        "Includes: service agreements, NDAs, employment contracts. Excludes: purchase orders (see FIN-IR)."),
+                category("LEG-SA", "Service Agreements",
                         "Service level agreements, outsourcing contracts, and managed service terms",
-                        ids.get("Legal"), SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
-                        List.of("SLA", "service agreement", "managed service", "outsourcing", "MSA", "statement of work")),
-                category("Litigation",
+                        ids.get("Legal"), TaxonomyLevel.ACTIVITY, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
+                        List.of("SLA", "service agreement", "managed service", "outsourcing", "MSA", "statement of work"),
+                        null, "UK", null,
+                        RetentionTrigger.DATE_CLOSED, "Limitation Act 1980 s.5", false, false,
+                        "Includes: SLAs, MSAs, outsourcing contracts, statements of work."),
+                category("LEG-LIT", "Litigation",
                         "Disputes, court proceedings, tribunal records, and legal privilege",
-                        ids.get("Legal"), SensitivityLabel.RESTRICTED, retentionIds.get("Permanent"),
-                        List.of("claim", "dispute", "court order", "tribunal", "settlement", "counsel advice", "legal privilege")),
-                category("Invoices & Receipts",
+                        ids.get("Legal"), TaxonomyLevel.ACTIVITY, SensitivityLabel.RESTRICTED, retentionIds.get("Permanent"),
+                        List.of("claim", "dispute", "court order", "tribunal", "settlement", "counsel advice", "legal privilege"),
+                        null, "UK", null,
+                        RetentionTrigger.DATE_CLOSED, "Limitation Act 1980", false, true,
+                        "Includes: court filings, correspondence with solicitors, settlement agreements."),
+                category("FIN-IR", "Invoices & Receipts",
                         "Invoices, purchase orders, credit notes, expense claims, and VAT receipts",
-                        ids.get("Finance"), SensitivityLabel.INTERNAL, retentionIds.get("Financial Statutory"),
-                        List.of("invoice", "purchase order", "credit note", "expense claim", "VAT receipt", "payment", "bill")),
-                category("Payroll",
+                        ids.get("Finance"), TaxonomyLevel.ACTIVITY, SensitivityLabel.INTERNAL, retentionIds.get("Financial Statutory"),
+                        List.of("invoice", "purchase order", "credit note", "expense claim", "VAT receipt", "payment", "bill"),
+                        null, "UK", null,
+                        RetentionTrigger.END_OF_FINANCIAL_YEAR, "HMRC Record Keeping Requirements", false, false,
+                        "Includes: purchase invoices, sales invoices, expense receipts."),
+                category("HR-PAY", "Payroll",
                         "Salary records, P45/P60, pensions, and PAYE documentation",
-                        ids.get("HR"), SensitivityLabel.RESTRICTED, retentionIds.get("Financial Statutory"),
-                        List.of("salary", "P45", "P60", "pension", "national insurance", "PAYE", "payslip")),
-                category("Employee Records",
+                        ids.get("HR"), TaxonomyLevel.ACTIVITY, SensitivityLabel.RESTRICTED, retentionIds.get("Financial Statutory"),
+                        List.of("salary", "P45", "P60", "pension", "national insurance", "PAYE", "payslip"),
+                        null, "UK", null,
+                        RetentionTrigger.END_OF_FINANCIAL_YEAR, "HMRC: payroll records 3 years after end of tax year", true, false,
+                        "Includes: P45s, P60s, pension contributions, salary records."),
+                category("HR-EMP", "Employee Records",
                         "Personnel files, employment contracts, and employee documentation",
-                        ids.get("HR"), SensitivityLabel.RESTRICTED, retentionIds.get("Standard"),
-                        List.of("personnel", "employee file", "employment contract", "starter form", "leaver form", "employee record")),
-                category("HR Letters",
+                        ids.get("HR"), TaxonomyLevel.ACTIVITY, SensitivityLabel.RESTRICTED, retentionIds.get("Standard"),
+                        List.of("personnel", "employee file", "employment contract", "starter form", "leaver form", "employee record"),
+                        null, "UK", null,
+                        RetentionTrigger.DATE_CLOSED, "DPA 2018 Schedule 1", true, false,
+                        "Includes: employment contracts, disciplinary records, grievances. Excludes: recruitment (see HR-REC)."),
+                category("HR-LET", "HR Letters",
                         "Leave confirmations, disciplinary letters, reference letters, and HR correspondence",
-                        ids.get("HR"), SensitivityLabel.CONFIDENTIAL, retentionIds.get("Standard"),
-                        List.of("leave confirmation", "maternity", "paternity", "disciplinary letter", "reference letter", "HR letter", "absence")),
-                category("Recruitment",
+                        ids.get("HR"), TaxonomyLevel.ACTIVITY, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Standard"),
+                        List.of("leave confirmation", "maternity", "paternity", "disciplinary letter", "reference letter", "HR letter", "absence"),
+                        null, "UK", null,
+                        RetentionTrigger.DATE_CREATED, "DPA 2018", true, false,
+                        "Includes: leave confirmations, disciplinary letters, reference letters."),
+                category("HR-REC", "Recruitment",
                         "CVs, job descriptions, offer letters, interviews, and references",
-                        ids.get("HR"), SensitivityLabel.CONFIDENTIAL, retentionIds.get("Standard"),
-                        List.of("CV", "job description", "offer letter", "interview", "reference", "candidate")),
-                category("Audit Reports",
+                        ids.get("HR"), TaxonomyLevel.ACTIVITY, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Standard"),
+                        List.of("CV", "job description", "offer letter", "interview", "reference", "candidate"),
+                        null, "UK", null,
+                        RetentionTrigger.EVENT_BASED, "GDPR Art.17", true, false,
+                        "Includes: CVs, application forms, interview notes. Trigger: position filled or application withdrawn."),
+                category("COM-AUD", "Audit Reports",
                         "Internal and external audit findings, ISO compliance, and remediation",
-                        ids.get("Compliance"), SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
-                        List.of("internal audit", "external audit", "findings", "remediation", "ISO", "certification")),
-                category("Security Incidents",
+                        ids.get("Compliance"), TaxonomyLevel.ACTIVITY, SensitivityLabel.CONFIDENTIAL, retentionIds.get("Regulatory Extended"),
+                        List.of("internal audit", "external audit", "findings", "remediation", "ISO", "certification"),
+                        null, "UK", null,
+                        RetentionTrigger.DATE_CREATED, "Companies Act 2006", false, false,
+                        "Includes: internal audit reports, external audit findings, management responses."),
+                category("IT-SEC", "Security Incidents",
                         "Breach reports, vulnerability assessments, penetration tests, and forensics",
-                        ids.get("IT"), SensitivityLabel.RESTRICTED, retentionIds.get("Regulatory Extended"),
-                        List.of("breach", "vulnerability", "penetration test", "SIEM", "forensic", "incident response")),
-                category("Press & Media",
+                        ids.get("IT"), TaxonomyLevel.ACTIVITY, SensitivityLabel.RESTRICTED, retentionIds.get("Regulatory Extended"),
+                        List.of("breach", "vulnerability", "penetration test", "SIEM", "forensic", "incident response"),
+                        null, "UK", null,
+                        RetentionTrigger.DATE_CLOSED, "GDPR Art.33", true, false,
+                        "Includes: incident reports, breach notifications, forensic reports."),
+                category("MKT-PM", "Press & Media",
                         "Press releases, media enquiries, and PR materials",
-                        ids.get("Marketing"), SensitivityLabel.PUBLIC, retentionIds.get("Short-Term"),
-                        List.of("press release", "media enquiry", "spokesperson brief", "PR", "public statement"))
+                        ids.get("Marketing"), TaxonomyLevel.ACTIVITY, SensitivityLabel.PUBLIC, retentionIds.get("Short-Term"),
+                        List.of("press release", "media enquiry", "spokesperson brief", "PR", "public statement"),
+                        null, "UK", null,
+                        RetentionTrigger.SUPERSEDED, null, false, false,
+                        "Includes: press releases, media responses, PR materials.")
         )));
 
         // Link categories to metadata schemas
@@ -426,6 +503,7 @@ public class GovernanceDataSeeder implements ApplicationRunner {
 
         log.info("Seeded {} classification categories.", ids.size());
         return ids;
+        */
     }
 
     private void linkCategoryToSchema(Map<String, String> categoryIds, String categoryName,
@@ -449,17 +527,37 @@ public class GovernanceDataSeeder implements ApplicationRunner {
         return saved.stream().collect(Collectors.toMap(ClassificationCategory::getName, ClassificationCategory::getId));
     }
 
-    private ClassificationCategory category(String name, String desc, String parentId,
+    private ClassificationCategory category(String code, String name, String desc, String parentId,
+                                            ClassificationCategory.TaxonomyLevel level,
                                             SensitivityLabel sensitivity, String retentionId,
-                                            List<String> keywords) {
+                                            List<String> keywords,
+                                            List<String> typicalRecords,
+                                            String jurisdiction,
+                                            String retentionPeriodText,
+                                            ClassificationCategory.RetentionTrigger retentionTrigger,
+                                            String legalCitation,
+                                            boolean personalData, boolean vitalRecord,
+                                            String scopeNotes) {
         ClassificationCategory cat = new ClassificationCategory();
+        cat.setClassificationCode(code);
         cat.setName(name);
         cat.setDescription(desc);
         cat.setParentId(parentId);
+        cat.setLevel(level);
         cat.setDefaultSensitivity(sensitivity);
         cat.setRetentionScheduleId(retentionId);
         cat.setKeywords(keywords);
-        cat.setActive(true);
+        cat.setTypicalRecords(typicalRecords);
+        cat.setJurisdiction(jurisdiction);
+        cat.setRetentionPeriodText(retentionPeriodText);
+        cat.setStatus(ClassificationCategory.NodeStatus.ACTIVE);
+        cat.setRetentionTrigger(retentionTrigger);
+        cat.setLegalCitation(legalCitation);
+        cat.setPersonalDataFlag(personalData);
+        cat.setVitalRecordFlag(vitalRecord);
+        cat.setScopeNotes(scopeNotes);
+        cat.setOwner("System");
+        cat.setVersion(1);
         return cat;
     }
 
@@ -718,14 +816,22 @@ public class GovernanceDataSeeder implements ApplicationRunner {
         configService.save("pipeline.confidence.auto_approve_threshold", "pipeline",
                 0.95, "Confidence score above which classification is auto-approved without review (0.0-1.0)");
 
-        configService.save("pipeline.llm.model", "pipeline",
-                "claude-sonnet-4-20250514", "Anthropic model ID used for document classification");
+        // Note: pipeline.llm.model removed — use llm.anthropic.model or llm.ollama.model instead
 
         configService.save("pipeline.llm.temperature", "pipeline",
                 0.1, "LLM temperature — lower is more deterministic (0.0-1.0)");
 
         configService.save("pipeline.llm.max_tokens", "pipeline",
                 4096, "Maximum tokens in the LLM classification response");
+
+        configService.save("pipeline.llm.timeout_seconds", "pipeline",
+                90, "Legacy global timeout. Per-provider keys below take precedence.");
+
+        configService.save("pipeline.llm.timeout_seconds.anthropic", "pipeline",
+                60, "Hard timeout for Anthropic (Claude) classification calls (seconds).");
+
+        configService.save("pipeline.llm.timeout_seconds.ollama", "pipeline",
+                240, "Hard timeout for Ollama (local) classification calls (seconds). Local models are slower; set generously.");
 
         configService.save("pipeline.text.max_length", "pipeline",
                 100000, "Maximum characters of document text sent to the LLM");
@@ -739,77 +845,30 @@ public class GovernanceDataSeeder implements ApplicationRunner {
         configService.save("pipeline.governance.auto_enforce", "pipeline",
                 true, "Automatically apply governance rules after classification");
 
-        configService.save("pipeline.system_prompt", "pipeline",
-                """
-                You are a document classification and information governance specialist.
-                Your job is to analyse documents and classify them according to the organisation's
-                governance framework.
-
-                You have access to tools that let you query the organisation's:
-                - Classification taxonomy (document categories)
-                - Sensitivity label definitions
-                - Governance policies (rules that apply to documents)
-                - Retention schedules (how long documents must be kept)
-                - Storage capabilities (where documents can be stored)
-
-                For each document you receive, you MUST:
-
-                1. First, retrieve the classification taxonomy and sensitivity definitions
-                   to understand the organisation's framework.
-
-                2. Read the document text carefully. Consider:
-                   - What type of document is this? (contract, invoice, memo, report, etc.)
-                   - Does it contain personally identifiable information (PII)?
-                   - Does it contain financial, legal, or health-related information?
-                   - Who is the intended audience?
-
-                3. Classify the document into the most specific category in the taxonomy.
-                   If no category fits well, use the closest parent category.
-
-                4. Assign a sensitivity label. When uncertain, choose the HIGHER level.
-
-                5. Extract relevant tags and structured metadata (dates, names, amounts, etc.).
-
-                6. Retrieve applicable governance policies and the correct retention schedule.
-
-                7. Save the classification result using the save_classification_result tool.
-                   Include your confidence score (0.0-1.0) and detailed reasoning.
-
-                Confidence guidelines:
-                - 0.9-1.0: Clear, unambiguous classification
-                - 0.7-0.89: High confidence but some ambiguity
-                - 0.5-0.69: Moderate confidence — flag for human review
-                - Below 0.5: Low confidence — definitely requires human review
-
-                IMPORTANT: Always err on the side of higher sensitivity. A document
-                classified as too sensitive is an inconvenience; a document classified
-                as not sensitive enough is a compliance risk.
-                """,
-                "System prompt sent to the LLM for document classification. Defines the LLM's role, tools, and classification process.");
-
-        configService.save("pipeline.user_prompt_template", "pipeline",
-                """
-                Please classify the following document.
-
-                **Document ID:** {documentId}
-                **File name:** {fileName}
-                **MIME type:** {mimeType}
-                **File size:** {fileSizeBytes} bytes
-                **Uploaded by:** {uploadedBy}
-
-                IMPORTANT: When calling save_classification_result, you MUST use the exact
-                Document ID shown above ({documentId}) as the documentId parameter. Do NOT use the
-                file name as the document ID.
-
-                ---
-
-                **Document text:**
-
-                {extractedText}
-                """,
-                "User prompt template sent to the LLM. Placeholders: {documentId}, {fileName}, {mimeType}, {fileSizeBytes}, {uploadedBy}, {extractedText}");
+        // Note: pipeline.system_prompt and pipeline.user_prompt_template removed
+        // Prompts are defined in pipeline PROMPT blocks, not in app_config
 
         log.info("Seeded pipeline configuration.");
+    }
+
+    private void seedBertTrainingConfig() {
+        if (!configService.getByCategory("bert").isEmpty()) {
+            log.info("BERT training config already seeded, skipping.");
+            return;
+        }
+
+        configService.save("bert.training.auto_collect_enabled", "bert",
+                false, "Automatically collect training data from classified documents");
+        configService.save("bert.training.auto_collect_min_confidence", "bert",
+                0.8, "Minimum classification confidence to auto-collect a training sample (0.0-1.0)");
+        configService.save("bert.training.auto_collect_categories", "bert",
+                List.of(), "Category IDs to auto-collect from (empty = all categories)");
+        configService.save("bert.training.auto_collect_corrected_only", "bert",
+                false, "Only collect training data from human-corrected classifications");
+        configService.save("bert.training.max_text_length", "bert",
+                2000, "Maximum characters per training sample (BERT typically uses 512 tokens ~ 2000 chars)");
+
+        log.info("Seeded BERT training configuration.");
     }
 
     private GovernancePolicy policy(String name, String desc, List<String> rules,
@@ -1007,7 +1066,15 @@ public class GovernanceDataSeeder implements ApplicationRunner {
                             "- Only extract fields defined in the metadata schema for the matched category\n" +
                             "- If no schema exists, do NOT include extractedMetadata\n" +
                             "- For required fields you cannot find, set value to \"NOT_FOUND\"\n" +
-                            "- Be precise: dates ISO, amounts with currency, full names",
+                            "- Be precise: dates ISO, amounts with currency, full names\n\n" +
+                            "================= CRITICAL OUTPUT REQUIREMENT =================\n" +
+                            "Your final action MUST be a call to save_classification_result.\n" +
+                            "Do NOT write a prose conclusion. Do NOT explain your decision in text.\n" +
+                            "The categoryId you pass MUST come from get_classification_taxonomy — never invent one.\n" +
+                            "If you cannot determine a confident category, still call save_classification_result\n" +
+                            "with the closest applicable category and a low confidence score (e.g. 0.3).\n" +
+                            "A response without a save_classification_result tool call is a failed classification\n" +
+                            "and the document will be marked as failed. Always end with the tool call.",
                     "userPromptTemplate", "Please classify the following document.\n\n" +
                             "**Document ID:** {documentId}\n" +
                             "**File name:** {fileName}\n" +
@@ -1320,11 +1387,6 @@ public class GovernanceDataSeeder implements ApplicationRunner {
     // ── Node Type Definitions ────────────────────────────────────────────
 
     private void seedNodeTypeDefinitions() {
-        if (nodeTypeRepo.count() > 0) {
-            log.info("Node type definitions already seeded — skipping");
-            return;
-        }
-
         var now = Instant.now();
 
         // Standard handles: top input, bottom output, right error
@@ -1361,7 +1423,7 @@ public class GovernanceDataSeeder implements ApplicationRunner {
                 new NodeTypeDefinition.HandleDefinition("source", "Bottom", "fail", "!bg-red-500", Map.of("left", "70%"))
         );
 
-        List<NodeTypeDefinition> types = List.of(
+        List<NodeTypeDefinition> types = new java.util.ArrayList<>(List.of(
                 // ── TRIGGERS ──
                 nodeType("trigger", "Trigger", "Pipeline entry point — determines what starts processing",
                         "TRIGGER", 0, "NOOP", null, false, "PRE_CLASSIFICATION",
@@ -1395,10 +1457,47 @@ public class GovernanceDataSeeder implements ApplicationRunner {
                 nodeType("aiClassification", "AI Classification", "Classifies documents using an LLM (Claude, Ollama) via MCP tools. Each call adds 10-30 seconds of processing time.",
                         "PROCESSING", 2, "SYNC_LLM", null, false, "BOTH",
                         "Brain", "indigo", stdHandles, null,
-                        Map.of("properties", Map.of(
-                                "model", Map.of("type", "string", "ui:widget", "readonly",
-                                        "ui:placeholder", "e.g. Claude Sonnet 4", "ui:help", "Set by linked PROMPT block")
-                        )),
+                        Map.of("properties", new java.util.LinkedHashMap<String, Object>() {{
+                                // ── LLM model selection ──
+                                put("provider", Map.of("type", "string", "enum", List.of("", "anthropic", "ollama"),
+                                        "ui:widget", "select", "ui:placeholder", "Global default",
+                                        "ui:group", "Model",
+                                        "ui:help", "LLM provider. Leave blank to use global AI Settings default."));
+                                put("model", Map.of("type", "string",
+                                        "ui:placeholder", "e.g. claude-sonnet-4-20250514",
+                                        "ui:group", "Model",
+                                        "ui:help", "Model ID. Leave blank to use global default."));
+                                put("temperature", Map.of("type", "number", "minimum", 0, "maximum", 1,
+                                        "ui:widget", "range", "ui:step", 0.05,
+                                        "ui:group", "Model",
+                                        "ui:help", "0 = deterministic, 1 = creative. Leave blank for global default."));
+                                put("maxTokens", Map.of("type", "integer", "minimum", 256, "maximum", 16384,
+                                        "ui:widget", "number",
+                                        "ui:group", "Model",
+                                        "ui:help", "Max response tokens. Leave blank for global default."));
+                                put("timeoutSeconds", Map.of("type", "integer", "minimum", 10, "maximum", 900,
+                                        "ui:widget", "number",
+                                        "ui:group", "Model",
+                                        "ui:help", "Hard timeout for this node (seconds). Leave blank to use the per-provider default from Settings."));
+
+                                // ── Prompt injection — pre-load context to skip MCP round-trips ──
+                                put("injectTaxonomy", Map.of("type", "boolean", "default", true,
+                                        "ui:widget", "checkbox",
+                                        "ui:group", "Prompt Injection",
+                                        "ui:help", "Pre-load the taxonomy directly into the system prompt. Saves an MCP round-trip and stops the model 'wandering' looking for it. Recommended ON."));
+                                put("injectSensitivities", Map.of("type", "boolean", "default", true,
+                                        "ui:widget", "checkbox",
+                                        "ui:group", "Prompt Injection",
+                                        "ui:help", "Pre-load sensitivity definitions directly into the system prompt. Saves an MCP round-trip. Recommended ON."));
+                                put("injectTraits", Map.of("type", "boolean", "default", false,
+                                        "ui:widget", "checkbox",
+                                        "ui:group", "Prompt Injection",
+                                        "ui:help", "Pre-load document trait definitions directly into the system prompt. Disable if you don't use traits."));
+                                put("injectPiiTypes", Map.of("type", "boolean", "default", false,
+                                        "ui:widget", "checkbox",
+                                        "ui:group", "Prompt Injection",
+                                        "ui:help", "Pre-load PII type definitions into the prompt. Most pipelines do PII scanning before classification — leave OFF unless your prompt needs it."));
+                        }}),
                         "PROMPT", null,
                         "{{blockName}} v{{blockVersion}}", "blockId", now),
 
@@ -1530,10 +1629,80 @@ public class GovernanceDataSeeder implements ApplicationRunner {
                         )),
                         null, null,
                         "{{retryCount}} retries, {{retryDelay}}ms", null, now)
-        );
+        ));
 
-        nodeTypeRepo.saveAll(types);
-        log.info("Seeded {} node type definitions", types.size());
+        // External Service node — needs httpConfig set after construction
+        var externalService = nodeType("externalService", "External Service",
+                "Calls an external HTTP service (classifier, enrichment API, etc.). Configure the URL, auth token, and request/response mapping.",
+                "PROCESSING", 3, "GENERIC_HTTP", null, false, "PRE_CLASSIFICATION",
+                "Globe", "slate", stdHandles, null,
+                Map.of("properties", Map.of(
+                        "serviceUrl", Map.of("type", "string",
+                                "ui:placeholder", "https://my-service:8080",
+                                "ui:help", "Base URL of the external service"),
+                        "path", Map.of("type", "string",
+                                "ui:placeholder", "/api/classify",
+                                "ui:help", "API path appended to the base URL"),
+                        "method", Map.of("type", "string", "enum", List.of("POST", "GET", "PUT"),
+                                "default", "POST", "ui:widget", "select"),
+                        "authToken", Map.of("type", "string",
+                                "ui:widget", "password",
+                                "ui:help", "Bearer token for Authorization header. Leave blank if not required."),
+                        "timeoutMs", Map.of("type", "integer", "minimum", 1000, "maximum", 60000,
+                                "default", 10000, "ui:step", 1000,
+                                "ui:help", "Request timeout in milliseconds"),
+                        "confidenceThreshold", Map.of("type", "number", "minimum", 0, "maximum", 1,
+                                "default", 0.8, "ui:widget", "range", "ui:step", 0.05,
+                                "ui:help", "Minimum confidence to accept the result (accelerator mode)")
+                )),
+                null, null,
+                "{{method}} {{serviceUrl}}{{path}}", "serviceUrl", now);
+        externalService.setHttpConfig(new NodeTypeDefinition.GenericHttpConfig(
+                "http://localhost:8000", "/classify", "POST", 10000,
+                Map.of("Content-Type", "application/json"),
+                "{\"text\": \"{{extractedText}}\", \"document_id\": \"{{documentId}}\", \"mime_type\": \"{{mimeType}}\"}",
+                Map.of("categoryId", "category_id", "categoryName", "category_name",
+                        "confidence", "confidence", "sensitivityLabel", "sensitivity_label")
+        ));
+        externalService.setPerformanceImpact("medium");
+        externalService.setPerformanceWarning("Adds network latency. Ensure the service is running and reachable.");
+        types.add(externalService);
+
+        // Upsert by key so new/updated node types are added to existing deployments
+        int created = 0;
+        int updated = 0;
+        for (NodeTypeDefinition def : types) {
+            var existing = nodeTypeRepo.findByKey(def.getKey());
+            if (existing.isPresent()) {
+                var e = existing.get();
+                e.setDisplayName(def.getDisplayName());
+                e.setDescription(def.getDescription());
+                e.setCategory(def.getCategory());
+                e.setSortOrder(def.getSortOrder());
+                e.setExecutionCategory(def.getExecutionCategory());
+                e.setHandlerBeanName(def.getHandlerBeanName());
+                e.setRequiresDocReload(def.isRequiresDocReload());
+                e.setPipelinePhase(def.getPipelinePhase());
+                e.setIconName(def.getIconName());
+                e.setColorTheme(def.getColorTheme());
+                e.setHandles(def.getHandles());
+                e.setBranchLabels(def.getBranchLabels());
+                e.setConfigSchema(def.getConfigSchema());
+                e.setCompatibleBlockType(def.getCompatibleBlockType());
+                e.setSummaryTemplate(def.getSummaryTemplate());
+                e.setValidationExpression(def.getValidationExpression());
+                if (def.getHttpConfig() != null) e.setHttpConfig(def.getHttpConfig());
+                if (def.getPerformanceImpact() != null) e.setPerformanceImpact(def.getPerformanceImpact());
+                if (def.getPerformanceWarning() != null) e.setPerformanceWarning(def.getPerformanceWarning());
+                e.setUpdatedAt(now);
+                nodeTypeRepo.save(e);
+                updated++;
+            } else {
+                nodeTypeRepo.save(def);
+                created++;
+            }
+        }
+        log.info("Node type definitions: {} created, {} updated", created, updated);
     }
 
     private NodeTypeDefinition nodeType(String key, String displayName, String description,
@@ -1571,5 +1740,27 @@ public class GovernanceDataSeeder implements ApplicationRunner {
         def.setCreatedAt(now);
         def.setUpdatedAt(now);
         return def;
+    }
+
+    // ── Helpers for hub-only governance content ────────────────
+    // Used by run() to give downstream code access to existing items
+    // (now sourced exclusively from hub packs) without re-seeding them.
+
+    private Map<String, String> existingIdMap(LegislationRepository repo) {
+        return repo.findAll().stream()
+                .filter(l -> l.getKey() != null)
+                .collect(Collectors.toMap(Legislation::getKey, Legislation::getId, (a, b) -> a));
+    }
+
+    private Map<String, String> existingRetentionIdMap() {
+        return retentionRepo.findAll().stream()
+                .filter(r -> r.getName() != null)
+                .collect(Collectors.toMap(RetentionSchedule::getName, RetentionSchedule::getId, (a, b) -> a));
+    }
+
+    private Map<String, String> existingSchemaIdMap() {
+        return metadataSchemaRepo.findAll().stream()
+                .filter(s -> s.getName() != null)
+                .collect(Collectors.toMap(MetadataSchema::getName, MetadataSchema::getId, (a, b) -> a));
     }
 }

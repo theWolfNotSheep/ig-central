@@ -1,26 +1,27 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
-import { Brain, Workflow, Database, History, Settings } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Brain, Workflow, Database, History, Settings, Cpu } from "lucide-react";
 import dynamic from "next/dynamic";
 
 const PipelinesTab = dynamic(() => import("./pipelines/page"), { ssr: false });
 const BlocksTab = dynamic(() => import("./blocks/page"), { ssr: false });
+const ModelsTab = dynamic(() => import("./models/page"), { ssr: false });
 const UsageTab = dynamic(() => import("./usage/page"), { ssr: false });
 const SettingsTab = dynamic(() => import("./settings/page"), { ssr: false });
 
-type Tab = "pipelines" | "blocks" | "usage" | "settings";
+type Tab = "pipelines" | "blocks" | "models" | "usage" | "settings";
 
 const TABS: { key: Tab; label: string; icon: typeof Brain }[] = [
     { key: "pipelines", label: "Pipelines", icon: Workflow },
     { key: "blocks", label: "Blocks", icon: Database },
+    { key: "models", label: "Models", icon: Cpu },
     { key: "usage", label: "Usage Log", icon: History },
     { key: "settings", label: "Settings", icon: Settings },
 ];
 
 export default function AiPage() {
-    const searchParams = useSearchParams();
     const router = useRouter();
     const [tab, setTab] = useState<Tab>(() => {
         const hash = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
@@ -59,6 +60,7 @@ export default function AiPage() {
 
             {tab === "pipelines" && <PipelinesTab />}
             {tab === "blocks" && <BlocksTab />}
+            {tab === "models" && <ModelsTab />}
             {tab === "usage" && <UsageTab />}
             {tab === "settings" && <SettingsTab />}
         </>

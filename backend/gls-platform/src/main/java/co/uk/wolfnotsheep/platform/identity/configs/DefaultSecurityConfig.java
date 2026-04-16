@@ -86,8 +86,14 @@ public class DefaultSecurityConfig {
             http.oauth2Login(oauth2 -> oauth2.successHandler(oAuth2LoginSuccessHandler));
         }
 
-        http.exceptionHandling(exception
-                -> exception.authenticationEntryPoint(unauthorizedHandler));
+        http.exceptionHandling(exception -> exception
+                .authenticationEntryPoint(unauthorizedHandler)
+                .accessDeniedHandler((request, response, accessDeniedException) -> {
+                    response.setStatus(jakarta.servlet.http.HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType("application/json");
+                    response.getWriter().write(
+                            "{\"error\":\"ACCESS_DENIED\",\"message\":\"You do not have permission to perform this action\"}");
+                }));
         http.addFilterBefore(authenticationJwtTokenFilter,
                 UsernamePasswordAuthenticationFilter.class);
         http.formLogin(AbstractHttpConfigurer::disable);

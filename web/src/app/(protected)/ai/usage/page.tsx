@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-    Brain, Clock, FileText, AlertTriangle, CheckCircle, XCircle,
-    Loader2, ChevronDown, ChevronRight, Filter, User, Zap,
+    Brain, FileText, AlertTriangle, CheckCircle, XCircle,
+    Loader2, ChevronDown, ChevronRight, User, Zap,
     MessageSquare, Eye, Copy,
 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
 
@@ -159,6 +160,16 @@ export default function AiUsagePage() {
                                             <span className="text-sm text-gray-800 truncate flex-1">
                                                 {log.documentName || log.documentId || "System"}
                                             </span>
+                                            {log.documentId && (
+                                                <Link
+                                                    href={`/documents?doc=${log.documentId}`}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="shrink-0 inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                                                    title="Open document viewer"
+                                                >
+                                                    <Eye className="size-3" /> View
+                                                </Link>
+                                            )}
                                             <span className="text-xs text-gray-400 shrink-0">{log.provider}/{log.model}</span>
                                             {log.durationMs > 0 && (
                                                 <span className="text-xs text-gray-400 shrink-0 tabular-nums w-14 text-right">

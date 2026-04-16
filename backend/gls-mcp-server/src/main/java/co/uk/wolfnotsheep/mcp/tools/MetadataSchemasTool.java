@@ -3,8 +3,10 @@ package co.uk.wolfnotsheep.mcp.tools;
 import co.uk.wolfnotsheep.governance.repositories.ClassificationCategoryRepository;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
+import co.uk.wolfnotsheep.mcp.config.CacheConfig;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 /**
@@ -27,6 +29,7 @@ public class MetadataSchemasTool {
         this.toolLog = toolLog;
     }
 
+    @Cacheable(value = CacheConfig.CACHE_SCHEMAS, key = "#categoryId")
     @McpTool(name = "get_metadata_schemas",
             description = "Retrieve the metadata extraction schema for a document's category. " +
                     "The schema defines EXACTLY which structured fields to extract — extract ONLY those fields, nothing else. " +

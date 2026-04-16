@@ -3,8 +3,10 @@ package co.uk.wolfnotsheep.mcp.tools;
 import co.uk.wolfnotsheep.governance.models.RetentionSchedule;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
+import co.uk.wolfnotsheep.mcp.config.CacheConfig;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -24,6 +26,7 @@ public class RetentionScheduleTool {
         this.toolLog = toolLog;
     }
 
+    @Cacheable(value = CacheConfig.CACHE_RETENTION, key = "#scheduleId != null ? #scheduleId : 'all'")
     @McpTool(name = "get_retention_schedules",
             description = "Retrieve retention schedules that define how long documents must be kept and what happens at expiry. " +
                     "Use this after classification to determine the correct retention period.")

@@ -2,6 +2,7 @@ package co.uk.wolfnotsheep.governance.models;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.mapping.Field;
 
 import java.time.Instant;
 import java.util.List;
@@ -71,7 +72,7 @@ public class PipelineDefinition {
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 
     public record VisualNode(
-            String id,
+            @Field("_id") String id,
             String type,        // node type: trigger, textExtraction, piiScanner, aiClassification, condition, governance, humanReview, notification, errorHandler, webhook, transform
             String label,
             double x,
@@ -82,7 +83,7 @@ public class PipelineDefinition {
     ) {}
 
     public record VisualEdge(
-            String id,
+            @Field("_id") String id,
             String source,
             String target,
             String sourceHandle,
@@ -123,7 +124,9 @@ public class PipelineDefinition {
             BUILT_IN,       // Text extraction, governance enforcement
             PATTERN,        // Regex-based scanning (PII Tier 1)
             LLM_PROMPT,     // Send to Claude with a configurable prompt
-            CONDITIONAL     // Run only if condition met
+            CONDITIONAL,    // Run only if condition met
+            ACCELERATOR,    // Pre-classification accelerator (BERT, fingerprint, rules, similarity, external HTTP)
+            SYNC_LLM        // Synchronous LLM call via pipeline engine
         }
 
         public PipelineStep() {}

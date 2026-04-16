@@ -4,9 +4,11 @@ import co.uk.wolfnotsheep.docprocessing.extraction.TextExtractionService;
 import co.uk.wolfnotsheep.document.events.DocumentClassifiedEvent;
 import co.uk.wolfnotsheep.document.events.DocumentIngestedEvent;
 import co.uk.wolfnotsheep.document.events.DocumentProcessedEvent;
-import co.uk.wolfnotsheep.document.models.DocumentModel;
-import co.uk.wolfnotsheep.document.models.DocumentStatus;
-import co.uk.wolfnotsheep.document.models.PiiEntity;
+import co.uk.wolfnotsheep.document.events.LlmJobCompletedEvent;
+import co.uk.wolfnotsheep.document.events.LlmJobRequestedEvent;
+import co.uk.wolfnotsheep.document.models.*;
+import co.uk.wolfnotsheep.document.repositories.NodeRunRepository;
+import co.uk.wolfnotsheep.document.repositories.PipelineRunRepository;
 import co.uk.wolfnotsheep.document.services.DocumentService;
 import co.uk.wolfnotsheep.document.services.ObjectStorageService;
 import co.uk.wolfnotsheep.document.services.PiiPatternScanner;
@@ -25,6 +27,7 @@ import co.uk.wolfnotsheep.governance.services.PipelineRoutingService;
 import co.uk.wolfnotsheep.infrastructure.config.RabbitMqConfig;
 import co.uk.wolfnotsheep.governance.models.NodeTypeDefinition;
 import co.uk.wolfnotsheep.governance.services.NodeTypeDefinitionService;
+import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.infrastructure.services.pipeline.accelerators.AcceleratorHandler;
 import co.uk.wolfnotsheep.infrastructure.services.pipeline.accelerators.AcceleratorResult;
 import co.uk.wolfnotsheep.infrastructure.services.pipeline.accelerators.SmartTruncationService;
@@ -40,15 +43,11 @@ import java.util.*;
 
 /**
  * Pipeline execution engine that walks the visual graph defined in PipelineDefinition.
- * Replaces the hardcoded 3-consumer pipeline with a graph-driven approach.
  *
- * Execution is split into two phases separated by the async LLM boundary:
- * <ul>
- *   <li>Phase 1: trigger → textExtraction → piiScanner → aiClassification (publish to RabbitMQ, stop)</li>
- *   <li>Phase 2: (after LLM responds) condition → governance/humanReview → notification</li>
- * </ul>
- *
- * The document's pipelineNodeId field tracks the current position in the graph.
+ * Creates a PipelineRun to track overall execution and a NodeRun per node.
+ * When an LLM node is encountered, the engine publishes an LlmJobRequestedEvent,
+ * sets the PipelineRun to WAITING, and returns (releasing the thread).
+ * When the LLM job completes, {@link #resumePipeline} picks up from the next node.
  */
 @Service
 @ConditionalOnProperty(name = "pipeline.execution-engine.enabled", havingValue = "true")
@@ -85,6 +84,12 @@ public class PipelineExecutionEngine {
     private final GenericHttpNodeExecutor genericHttpExecutor;
     private final SyncLlmNodeExecutor syncLlmExecutor;
     private final SmartTruncationService smartTruncationService;
+    private final co.uk.wolfnotsheep.platform.config.services.AppConfigService appConfigService;
+    private final co.uk.wolfnotsheep.infrastructure.services.BertTrainingDataCollector bertTrainingDataCollector;
+
+    // Pipeline run tracking
+    private final PipelineRunRepository pipelineRunRepo;
+    private final NodeRunRepository nodeRunRepo;
 
     public PipelineExecutionEngine(TextExtractionService textExtractionService,
                                    DocumentService documentService,
@@ -102,7 +107,11 @@ public class PipelineExecutionEngine {
                                    GenericHttpNodeExecutor genericHttpExecutor,
                                    SyncLlmNodeExecutor syncLlmExecutor,
                                    SmartTruncationService smartTruncationService,
-                                   co.uk.wolfnotsheep.document.repositories.SystemErrorRepository systemErrorRepo) {
+                                   co.uk.wolfnotsheep.document.repositories.SystemErrorRepository systemErrorRepo,
+                                   co.uk.wolfnotsheep.platform.config.services.AppConfigService appConfigService,
+                                   co.uk.wolfnotsheep.infrastructure.services.BertTrainingDataCollector bertTrainingDataCollector,
+                                   PipelineRunRepository pipelineRunRepo,
+                                   NodeRunRepository nodeRunRepo) {
         this.textExtractionService = textExtractionService;
         this.documentService = documentService;
         this.objectStorage = objectStorage;
@@ -120,18 +129,21 @@ public class PipelineExecutionEngine {
         this.syncLlmExecutor = syncLlmExecutor;
         this.smartTruncationService = smartTruncationService;
         this.systemErrorRepo = systemErrorRepo;
+        this.appConfigService = appConfigService;
+        this.bertTrainingDataCollector = bertTrainingDataCollector;
+        this.pipelineRunRepo = pipelineRunRepo;
+        this.nodeRunRepo = nodeRunRepo;
     }
 
-    // ── Unified execution: walks the entire graph in a single pass ──────
+    // ── Main entry point: execute pipeline from the beginning ─────────
 
     /**
-     * Execute the entire pipeline in a single pass — no Phase 1/Phase 2 split.
-     * When an LLM node is encountered, it's called synchronously via the llm-worker REST API.
-     * Multiple LLM nodes are supported — each executes inline and the engine continues.
+     * Execute the pipeline for a newly ingested document.
+     * Creates a PipelineRun, walks the graph, and pauses at async LLM nodes.
      */
     public void executePipeline(DocumentIngestedEvent event) {
         String docId = event.documentId();
-        log.info("[Engine] Unified pipeline starting for document: {} ({})", docId, event.fileName());
+        log.info("[Engine] Pipeline starting for document: {} ({})", docId, event.fileName());
 
         try {
             DocumentModel doc = documentService.getById(docId);
@@ -140,7 +152,7 @@ public class PipelineExecutionEngine {
                     && doc.getCancelledAt().isAfter(event.ingestedAt())) {
                 log.info("[Engine] Document {} cancelled — skipping", docId); return;
             }
-            if (doc.getStatus() != co.uk.wolfnotsheep.document.models.DocumentStatus.UPLOADED) {
+            if (doc.getStatus() != DocumentStatus.UPLOADED) {
                 log.info("[Engine] Document {} status is {} (expected UPLOADED) — skipping", docId, doc.getStatus()); return;
             }
 
@@ -151,53 +163,262 @@ public class PipelineExecutionEngine {
             }
 
             List<VisualNode> executionOrder = topologicalSort(pipeline);
-            log.info("[Engine] Pipeline '{}' has {} nodes — running unified execution",
-                    pipeline != null ? pipeline.getName() : "default", executionOrder.size());
+            List<String> executionPlan = executionOrder.stream().map(VisualNode::id).toList();
 
-            // Track the most recent classification result for post-classification nodes
-            DocumentClassifiedEvent currentClassification = null;
-
-            for (VisualNode node : executionOrder) {
-                if (isNodeDisabled(node)) continue;
-
-                String nodeType = node.type();
-                doc.setPipelineNodeId(node.id());
-                documentService.save(doc);
-
-                NodeTypeDefinition typeDef = nodeTypeService.getByKey(nodeType).orElse(null);
-                String execCategory = typeDef != null ? typeDef.getExecutionCategory() : null;
-
-                if (execCategory == null) {
-                    log.debug("[Engine] Unknown node type: {} — skipping", nodeType);
-                    continue;
+            // Debug: log node IDs and edges
+            if (pipeline != null && pipeline.getVisualNodes() != null) {
+                for (var vn : pipeline.getVisualNodes()) {
+                    log.info("[Engine] VisualNode id={} type={} label={}", vn.id(), vn.type(), vn.label());
                 }
+            }
+            if (pipeline != null && pipeline.getVisualEdges() != null) {
+                for (var ve : pipeline.getVisualEdges()) {
+                    log.info("[Engine] VisualEdge {} -> {} (handle={})", ve.source(), ve.target(), ve.sourceHandle());
+                }
+            }
+            log.info("[Engine] Execution order: {}", executionPlan);
 
-                final DocumentModel currentDoc = doc;
-                final DocumentClassifiedEvent currentClassRef = currentClassification;
+            // Create PipelineRun
+            PipelineRun run = new PipelineRun();
+            run.setDocumentId(docId);
+            run.setOrganisationId(doc.getOrganisationId());
+            run.setPipelineId(pipeline != null ? pipeline.getId() : null);
+            run.setPipelineVersion(0); // PipelineDefinition versioning is future work
+            run.setStatus(PipelineRunStatus.RUNNING);
+            run.setCorrelationId(UUID.randomUUID().toString());
+            run.setExecutionPlan(executionPlan);
+            run.setCurrentNodeIndex(0);
+            run.setStartedAt(Instant.now());
+            run.setCreatedAt(Instant.now());
+            run.setUpdatedAt(Instant.now());
+            run = pipelineRunRepo.save(run);
 
+            log.info("[Engine] Created PipelineRun {} for document {} ({} nodes)",
+                    run.getId(), docId, executionOrder.size());
+
+            // Walk the graph
+            walkNodes(run, doc, event, pipeline, executionOrder, 0);
+
+        } catch (Exception e) {
+            log.error("[Engine] Pipeline failed for document {}: {}", docId, e.getMessage(), e);
+            handleNodeError(docId, event.fileName(), "PIPELINE", e, null);
+        }
+    }
+
+    // ── Resume: continue pipeline after async LLM completion ──────────
+
+    /**
+     * Resume a paused pipeline after an async LLM job completes.
+     * Loads the PipelineRun, updates the NodeRun, and continues walking from the next node.
+     */
+    public void resumePipeline(LlmJobCompletedEvent completedEvent) {
+        String pipelineRunId = completedEvent.pipelineRunId();
+        log.info("[Engine] Resuming pipeline run {} after LLM job {}", pipelineRunId, completedEvent.jobId());
+
+        PipelineRun run = pipelineRunRepo.findById(pipelineRunId).orElse(null);
+        if (run == null) {
+            log.error("[Engine] PipelineRun {} not found — cannot resume", pipelineRunId);
+            return;
+        }
+
+        if (run.getStatus() != PipelineRunStatus.WAITING) {
+            log.warn("[Engine] PipelineRun {} status is {} (expected WAITING) — ignoring late arrival",
+                    pipelineRunId, run.getStatus());
+            return;
+        }
+
+        // Update the NodeRun for the async node
+        NodeRun nodeRun = nodeRunRepo.findById(completedEvent.nodeRunId()).orElse(null);
+        if (nodeRun != null) {
+            if (nodeRun.getStatus() != NodeRunStatus.WAITING) {
+                log.warn("[Engine] NodeRun {} already {} — duplicate completion, ignoring",
+                        nodeRun.getId(), nodeRun.getStatus());
+                return;
+            }
+
+            nodeRun.setCompletedAt(Instant.now());
+            nodeRun.setDurationMs(java.time.Duration.between(nodeRun.getStartedAt(), Instant.now()).toMillis());
+
+            if (completedEvent.success()) {
+                nodeRun.setStatus(NodeRunStatus.SUCCEEDED);
+                Map<String, Object> output = new HashMap<>();
+                if (completedEvent.classificationResultId() != null)
+                    output.put("classificationResultId", completedEvent.classificationResultId());
+                if (completedEvent.categoryId() != null)
+                    output.put("categoryId", completedEvent.categoryId());
+                if (completedEvent.categoryName() != null)
+                    output.put("categoryName", completedEvent.categoryName());
+                if (completedEvent.sensitivityLabel() != null)
+                    output.put("sensitivityLabel", completedEvent.sensitivityLabel());
+                output.put("confidence", completedEvent.confidence());
+                output.put("requiresHumanReview", completedEvent.requiresHumanReview());
+                if (completedEvent.tags() != null) output.put("tags", completedEvent.tags());
+                if (completedEvent.retentionScheduleId() != null)
+                    output.put("retentionScheduleId", completedEvent.retentionScheduleId());
+                if (completedEvent.applicablePolicyIds() != null)
+                    output.put("applicablePolicyIds", completedEvent.applicablePolicyIds());
+                if (completedEvent.extractedMetadata() != null)
+                    output.put("extractedMetadata", completedEvent.extractedMetadata());
+                if (completedEvent.customResult() != null)
+                    output.put("customResult", completedEvent.customResult());
+                nodeRun.setOutput(output);
+            } else {
+                nodeRun.setStatus(NodeRunStatus.FAILED);
+                nodeRun.setError(completedEvent.error());
+            }
+            nodeRunRepo.save(nodeRun);
+        }
+
+        // Store LLM result in shared context
+        Map<String, Object> ctx = run.getSharedContext();
+        if (completedEvent.success()) {
+            ctx.put("classificationResultId", completedEvent.classificationResultId());
+            ctx.put("categoryId", completedEvent.categoryId());
+            ctx.put("categoryName", completedEvent.categoryName());
+            ctx.put("sensitivityLabel", completedEvent.sensitivityLabel());
+            ctx.put("confidence", completedEvent.confidence());
+            ctx.put("requiresHumanReview", completedEvent.requiresHumanReview());
+            if (completedEvent.tags() != null) ctx.put("tags", completedEvent.tags());
+            if (completedEvent.retentionScheduleId() != null)
+                ctx.put("retentionScheduleId", completedEvent.retentionScheduleId());
+            if (completedEvent.applicablePolicyIds() != null)
+                ctx.put("applicablePolicyIds", completedEvent.applicablePolicyIds());
+            if (completedEvent.extractedMetadata() != null)
+                ctx.put("extractedMetadata", completedEvent.extractedMetadata());
+            if (completedEvent.customResult() != null)
+                ctx.put("customResult", completedEvent.customResult());
+        }
+
+        // Update document with classification results
+        DocumentModel doc = documentService.getById(run.getDocumentId());
+        if (doc == null) {
+            log.error("[Engine] Document {} not found during resume", run.getDocumentId());
+            failRun(run, "RESUME", "Document not found during resume");
+            return;
+        }
+
+        // Auto-collect training data if enabled
+        if (completedEvent.success() && completedEvent.classificationResultId() != null) {
+            try {
+                var classResult = classificationResultRepo.findById(completedEvent.classificationResultId()).orElse(null);
+                if (classResult != null) bertTrainingDataCollector.tryCollect(classResult);
+            } catch (Exception e) {
+                log.debug("Auto-collect failed for doc {}: {}", doc.getId(), e.getMessage());
+            }
+        }
+
+        if (!completedEvent.success()) {
+            log.error("[Engine] LLM job failed for doc {}: {}", doc.getId(), completedEvent.error());
+            failRun(run, run.getCurrentNodeKey(), completedEvent.error());
+            documentService.setError(doc.getId(), DocumentStatus.CLASSIFICATION_FAILED,
+                    "LLM", completedEvent.error());
+            return;
+        }
+
+        // Apply classification to document
+        DocumentClassifiedEvent classifiedEvent = buildClassifiedEvent(completedEvent, doc.getId());
+        applyClassificationToDocument(doc, classifiedEvent);
+
+        // Store classification as the current context for post-classification nodes
+        ctx.put("currentClassification", "applied");
+        run.setSharedContext(ctx);
+
+        // Resume walking from the next node
+        run.setStatus(PipelineRunStatus.RUNNING);
+        int nextIndex = run.getCurrentNodeIndex() + 1;
+        run.setCurrentNodeIndex(nextIndex);
+        run.setUpdatedAt(Instant.now());
+        run = pipelineRunRepo.save(run);
+
+        // Resolve pipeline and execution order
+        PipelineDefinition pipeline = resolvePipeline(doc);
+        List<VisualNode> executionOrder = topologicalSort(pipeline);
+
+        // Reconstruct the ingested event for node handlers that need it
+        DocumentIngestedEvent ingestedEvent = new DocumentIngestedEvent(
+                doc.getId(), doc.getFileName(), doc.getMimeType(),
+                doc.getFileSizeBytes(), doc.getStorageBucket(), doc.getStorageKey(),
+                doc.getUploadedBy(), doc.getCreatedAt());
+
+        try {
+            walkNodes(run, doc, ingestedEvent, pipeline, executionOrder, nextIndex);
+        } catch (Exception e) {
+            log.error("[Engine] Pipeline resume failed for doc {}: {}", doc.getId(), e.getMessage(), e);
+            failRun(run, "RESUME", e.getMessage());
+            handleNodeError(doc.getId(), doc.getFileName(), "PIPELINE_RESUME", e, null);
+        }
+    }
+
+    // ── Core graph walker ─────────────────────────────────────────────
+
+    /**
+     * Walk pipeline nodes from the given startIndex.
+     * Creates NodeRun records, dispatches each node, and pauses at async LLM nodes.
+     */
+    private void walkNodes(PipelineRun run, DocumentModel doc, DocumentIngestedEvent event,
+                           PipelineDefinition pipeline, List<VisualNode> executionOrder, int startIndex) {
+        String docId = doc.getId();
+
+        // Build a classification context from shared context (for resumed pipelines)
+        DocumentClassifiedEvent currentClassification = buildClassificationFromContext(run.getSharedContext(), docId);
+
+        for (int i = startIndex; i < executionOrder.size(); i++) {
+            VisualNode node = executionOrder.get(i);
+            if (isNodeDisabled(node)) continue;
+
+            String nodeType = node.type();
+            doc.setPipelineNodeId(node.id());
+            documentService.save(doc);
+
+            // Update PipelineRun position
+            run.setCurrentNodeKey(node.id());
+            run.setCurrentNodeIndex(i);
+            run.setUpdatedAt(Instant.now());
+            pipelineRunRepo.save(run);
+
+            NodeTypeDefinition typeDef = nodeTypeService.getByKey(nodeType).orElse(null);
+            String execCategory = typeDef != null ? typeDef.getExecutionCategory() : null;
+            if (execCategory == null) {
+                log.debug("[Engine] Unknown node type: {} — skipping", nodeType);
+                continue;
+            }
+
+            // Create NodeRun
+            NodeRun nodeRun = new NodeRun();
+            nodeRun.setPipelineRunId(run.getId());
+            nodeRun.setDocumentId(docId);
+            nodeRun.setNodeKey(node.id());
+            nodeRun.setNodeType(nodeType);
+            nodeRun.setExecutionCategory(execCategory);
+            nodeRun.setStatus(NodeRunStatus.RUNNING);
+            nodeRun.setStartedAt(Instant.now());
+            nodeRun = nodeRunRepo.save(nodeRun);
+
+            final DocumentModel currentDoc = doc;
+            final DocumentClassifiedEvent currentClassRef = currentClassification;
+
+            try {
                 switch (execCategory) {
-                    case "NOOP" -> { /* trigger, errorHandler */ }
+                    case "NOOP" -> {
+                        completeNodeRun(nodeRun, null);
+                    }
 
                     case "BUILT_IN" -> {
                         switch (nodeType) {
-                            // Pre-classification built-ins
                             case "textExtraction" -> handleTextExtraction(doc, event, node);
                             case "piiScanner" -> handlePiiScan(doc, event, node);
                             case "smartTruncation" -> handleSmartTruncation(doc, node);
-                            // Post-classification built-ins (need currentClassification context)
                             case "condition" -> {
                                 if (currentClassification != null) {
                                     String nextNodeId = evaluateCondition(doc, currentClassification, node, pipeline);
+                                    completeNodeRun(nodeRun, Map.of("branch", nextNodeId != null ? nextNodeId : "none"));
                                     if (nextNodeId != null) {
-                                        executeFromNodeUnified(doc, currentClassification, event, pipeline, executionOrder, nextNodeId);
-                                        // After branch execution completes, the pipeline is done
-                                        doc.setPipelineNodeId(null);
-                                        documentService.save(doc);
-                                        log.info("[Engine] Unified pipeline complete for document: {}", docId);
+                                        executeBranch(run, doc, currentClassification, event, pipeline, executionOrder, nextNodeId);
+                                        completePipelineRun(run);
                                         return;
                                     }
                                 } else {
-                                    log.warn("[Engine] Condition node '{}' encountered before any classification — skipping", node.label());
+                                    log.warn("[Engine] Condition node '{}' before classification — skipping", node.label());
                                 }
                             }
                             case "governance" -> {
@@ -215,6 +436,9 @@ public class PipelineExecutionEngine {
                                     .ifPresent(h -> h.handle(new NodeHandlerContext(currentDoc, node,
                                             buildMergedConfig(node), event, currentClassRef)));
                         }
+                        if (!"condition".equals(nodeType)) {
+                            completeNodeRun(nodeRun, null);
+                        }
                     }
 
                     case "ACCELERATOR" -> {
@@ -228,10 +452,11 @@ public class PipelineExecutionEngine {
                                 nodeType + (accel.matched() ? " → HIT: " + accel.categoryName() : " → MISS"), null);
                         if (accel.matched()) {
                             currentClassification = applyAcceleratorResult(doc, accel);
+                            storeClassificationInContext(run, currentClassification);
                             log.info("[Engine] Accelerator '{}' short-circuited LLM for doc {} → {}",
                                     nodeType, docId, accel.categoryName());
-                            // Don't return — continue walking the graph
                         }
+                        completeNodeRun(nodeRun, Map.of("matched", accel.matched()));
                     }
 
                     case "GENERIC_HTTP" -> {
@@ -243,106 +468,141 @@ public class PipelineExecutionEngine {
                                 nodeType + (httpResult.matched() ? " → HIT: " + httpResult.categoryName() : " → MISS"), null);
                         if (httpResult.matched()) {
                             currentClassification = applyAcceleratorResult(doc, httpResult);
+                            storeClassificationInContext(run, currentClassification);
                         }
+                        completeNodeRun(nodeRun, Map.of("matched", httpResult.matched()));
                     }
 
                     case "SYNC_LLM" -> {
+                        // Check auto-classify toggle
+                        if (!appConfigService.getValue("pipeline.processing.auto_classify", true)) {
+                            log.info("[Engine] Auto-classify disabled — skipping LLM node for doc {}", docId);
+                            nodeRun.setStatus(NodeRunStatus.SKIPPED);
+                            nodeRun.setCompletedAt(Instant.now());
+                            nodeRunRepo.save(nodeRun);
+                            documentService.updateStatus(docId, DocumentStatus.PROCESSED, "SYSTEM");
+                            completePipelineRun(run);
+                            return;
+                        }
+
+                        // If there's already a classification from an accelerator, skip the LLM
+                        if (currentClassification != null) {
+                            log.info("[Engine] Skipping LLM node — already classified by accelerator");
+                            nodeRun.setStatus(NodeRunStatus.SKIPPED);
+                            nodeRun.setCompletedAt(Instant.now());
+                            nodeRunRepo.save(nodeRun);
+                            continue;
+                        }
+
+                        // Async LLM: publish job request and pause
                         Map<String, Object> mergedConfig = buildMergedConfig(node);
-                        // Pass blockId from the node config
                         if (node.blockId() != null) mergedConfig.put("blockId", node.blockId());
 
-                        statusNotifier.emitLog(doc.getId(),
+                        String jobId = UUID.randomUUID().toString();
+                        String idempotencyKey = run.getCorrelationId() + ":" + node.id();
+
+                        nodeRun.setStatus(NodeRunStatus.WAITING);
+                        nodeRun.setJobId(jobId);
+                        nodeRun.setIdempotencyKey(idempotencyKey);
+                        nodeRun = nodeRunRepo.save(nodeRun);
+
+                        // Determine LLM mode
+                        String blockId = mergedConfig.containsKey("blockId")
+                                ? mergedConfig.get("blockId").toString() : null;
+                        String mode = determineLlmMode(mergedConfig, blockId);
+
+                        LlmJobRequestedEvent jobEvent = new LlmJobRequestedEvent(
+                                jobId,
+                                run.getId(),
+                                nodeRun.getId(),
+                                docId,
+                                node.id(),
+                                mode,
+                                blockId,
+                                null, // blockVersion resolved by worker
+                                doc.getPipelineId(),
+                                doc.getExtractedText(),
+                                doc.getFileName(),
+                                doc.getMimeType(),
+                                doc.getFileSizeBytes(),
+                                doc.getUploadedBy(),
+                                idempotencyKey
+                        );
+
+                        // Pause the pipeline run
+                        run.setStatus(PipelineRunStatus.WAITING);
+                        run.setCurrentNodeKey(node.id());
+                        run.setCurrentNodeIndex(i);
+                        run.setUpdatedAt(Instant.now());
+                        pipelineRunRepo.save(run);
+
+                        // Update document status
+                        documentService.updateStatus(docId, DocumentStatus.CLASSIFYING, "SYSTEM");
+
+                        statusNotifier.emitLog(docId,
                                 doc.getOriginalFileName() != null ? doc.getOriginalFileName() : "",
                                 "LLM_CALL", "INFO",
-                                "Calling LLM for node '" + node.label() + "'", null);
+                                "Async LLM job published for node '" + node.label() + "'", null);
 
-                        long llmStart = System.currentTimeMillis();
-                        SyncLlmNodeExecutor.SyncLlmResult llmResult = syncLlmExecutor.execute(doc, mergedConfig, nodeType, event);
-                        long llmMs = System.currentTimeMillis() - llmStart;
+                        rabbitTemplate.convertAndSend(
+                                RabbitMqConfig.PIPELINE_EXCHANGE,
+                                RabbitMqConfig.ROUTING_LLM_JOB_REQUESTED,
+                                jobEvent);
 
-                        if (llmResult.success()) {
-                            if (llmResult.classificationEvent() != null) {
-                                // Classification mode — update tracking context
-                                currentClassification = llmResult.classificationEvent();
-                                // Apply classification fields to document
-                                doc.setCategoryId(currentClassification.categoryId());
-                                doc.setCategoryName(currentClassification.categoryName());
-                                doc.setSensitivityLabel(currentClassification.sensitivityLabel());
-                                doc.setClassificationResultId(currentClassification.classificationResultId());
-                                doc.setClassifiedAt(java.time.Instant.now());
-                                documentService.save(doc);
-
-                                statusNotifier.emitLog(doc.getId(), doc.getOriginalFileName() != null ? doc.getOriginalFileName() : "",
-                                        "LLM_CALL", "INFO",
-                                        "Classified as " + currentClassification.categoryName() + " (" + currentClassification.confidence() + ")",
-                                        llmMs);
-                            }
-                            if (llmResult.customResult() != null) {
-                                // Custom prompt mode — merge into document metadata
-                                mergeCustomResult(doc, llmResult.customResult(), node);
-                                statusNotifier.emitLog(doc.getId(), doc.getOriginalFileName() != null ? doc.getOriginalFileName() : "",
-                                        "LLM_CALL", "INFO",
-                                        "Custom prompt complete for '" + node.label() + "'", llmMs);
-                            }
-                        } else {
-                            statusNotifier.emitLog(doc.getId(), doc.getOriginalFileName() != null ? doc.getOriginalFileName() : "",
-                                    "LLM_CALL", "ERROR",
-                                    "LLM call failed: " + llmResult.error(), llmMs);
-                            log.error("[Engine] SYNC_LLM failed for doc {}: {}", docId, llmResult.error());
-                            // Continue pipeline — don't fail the whole thing for one LLM error
-                        }
+                        log.info("[Engine] Published LlmJobRequestedEvent {} — pipeline WAITING at node {}",
+                                jobId, node.id());
+                        return; // Release thread — pipeline resumes when LLM completes
                     }
 
                     case "ASYNC_BOUNDARY" -> {
-                        // Fallback for un-migrated definitions — old behavior
+                        // Legacy fallback — publish to old RabbitMQ topology
                         log.info("[Engine] ASYNC_BOUNDARY fallback — publishing to RabbitMQ for doc {}", docId);
                         handleAiClassification(doc, event, node);
-                        return; // stop and wait for async response
-                    }
-
-                    default -> log.debug("[Engine] Unknown execution category: {} for node {}", execCategory, nodeType);
-                }
-
-                // Data-driven document reload
-                if (typeDef != null && typeDef.isRequiresDocReload()) {
-                    doc = documentService.getById(docId);
-                    if (doc == null) {
-                        log.error("[Engine] Document {} disappeared after {} handler", docId, nodeType);
+                        completeNodeRun(nodeRun, null);
+                        // Mark run as waiting (legacy path)
+                        run.setStatus(PipelineRunStatus.WAITING);
+                        run.setUpdatedAt(Instant.now());
+                        pipelineRunRepo.save(run);
                         return;
                     }
+
+                    default -> {
+                        log.debug("[Engine] Unknown execution category: {} for node {}", execCategory, nodeType);
+                        completeNodeRun(nodeRun, null);
+                    }
                 }
+            } catch (Exception e) {
+                failNodeRun(nodeRun, e.getMessage());
+                failRun(run, node.id(), e.getMessage());
+                throw e; // re-throw so the outer catch handles document error status
             }
 
-            // Pipeline complete
-            doc.setPipelineNodeId(null);
-            documentService.save(doc);
-            log.info("[Engine] Unified pipeline complete for document: {}", docId);
-
-        } catch (Exception e) {
-            log.error("[Engine] Pipeline failed for document {}: {}", docId, e.getMessage(), e);
-            handleNodeError(docId, event.fileName(), "PIPELINE", e, null);
+            // Data-driven document reload
+            if (typeDef != null && typeDef.isRequiresDocReload()) {
+                doc = documentService.getById(docId);
+                if (doc == null) {
+                    log.error("[Engine] Document {} disappeared after {} handler", docId, nodeType);
+                    failRun(run, nodeType, "Document disappeared");
+                    return;
+                }
+            }
         }
-    }
 
-    /**
-     * Merge custom LLM result into document's extracted metadata.
-     */
-    private void mergeCustomResult(DocumentModel doc, Map<String, Object> customResult, VisualNode node) {
-        // Store under the node label as a key in extractedMetadata-style map
-        // For now, store as top-level fields on the document's metadata
-        if (customResult == null || customResult.isEmpty()) return;
-        log.info("[Engine] Storing custom LLM result for node '{}' on doc {}: {}", node.label(), doc.getId(), customResult.keySet());
-        // TODO: store in a structured metadata map on the document when the field exists
+        // Pipeline complete — all nodes executed without pausing
+        completePipelineRun(run);
+        doc.setPipelineNodeId(null);
         documentService.save(doc);
+        log.info("[Engine] Pipeline complete for document: {}", docId);
     }
 
     /**
-     * Execute from a specific node in the unified pipeline (for condition branches).
+     * Execute a condition branch: walks reachable nodes from startNodeId.
      */
-    private void executeFromNodeUnified(DocumentModel doc, DocumentClassifiedEvent classification,
-                                         DocumentIngestedEvent ingestedEvent,
-                                         PipelineDefinition pipeline, List<VisualNode> executionOrder,
-                                         String startNodeId) {
+    private void executeBranch(PipelineRun run, DocumentModel doc,
+                               DocumentClassifiedEvent classification,
+                               DocumentIngestedEvent ingestedEvent,
+                               PipelineDefinition pipeline, List<VisualNode> executionOrder,
+                               String startNodeId) {
         Set<String> reachable = new LinkedHashSet<>();
         Queue<String> bfs = new LinkedList<>();
         bfs.add(startNodeId);
@@ -366,37 +626,55 @@ public class PipelineExecutionEngine {
             NodeTypeDefinition typeDef = nodeTypeService.getByKey(nodeType).orElse(null);
             String execCategory = typeDef != null ? typeDef.getExecutionCategory() : "BUILT_IN";
 
-            switch (execCategory) {
-                case "NOOP" -> { }
-                case "BUILT_IN" -> {
-                    switch (nodeType) {
-                        case "condition" -> {
-                            String nextNodeId = evaluateCondition(doc, classification, node, pipeline);
-                            if (nextNodeId != null) {
-                                executeFromNodeUnified(doc, classification, ingestedEvent, pipeline, executionOrder, nextNodeId);
-                                return;
+            NodeRun nodeRun = new NodeRun();
+            nodeRun.setPipelineRunId(run.getId());
+            nodeRun.setDocumentId(doc.getId());
+            nodeRun.setNodeKey(node.id());
+            nodeRun.setNodeType(nodeType);
+            nodeRun.setExecutionCategory(execCategory);
+            nodeRun.setStatus(NodeRunStatus.RUNNING);
+            nodeRun.setStartedAt(Instant.now());
+            nodeRun = nodeRunRepo.save(nodeRun);
+
+            try {
+                switch (execCategory) {
+                    case "NOOP" -> { }
+                    case "BUILT_IN" -> {
+                        switch (nodeType) {
+                            case "condition" -> {
+                                String nextNodeId = evaluateCondition(doc, classification, node, pipeline);
+                                if (nextNodeId != null) {
+                                    completeNodeRun(nodeRun, Map.of("branch", nextNodeId));
+                                    executeBranch(run, doc, classification, ingestedEvent, pipeline, executionOrder, nextNodeId);
+                                    return;
+                                }
+                            }
+                            case "governance" -> handleGovernance(doc, classification, node);
+                            case "humanReview" -> handleHumanReview(doc, classification, node);
+                            case "notification" -> handleNotification(doc, classification, node);
+                            default -> {
+                                final DocumentModel cd = doc;
+                                handlerRegistry.getHandler(nodeType)
+                                        .ifPresent(h -> h.handle(new NodeHandlerContext(cd, node,
+                                                buildMergedConfig(node), ingestedEvent, classification)));
                             }
                         }
-                        case "governance" -> handleGovernance(doc, classification, node);
-                        case "humanReview" -> handleHumanReview(doc, classification, node);
-                        case "notification" -> handleNotification(doc, classification, node);
-                        default -> {
-                            final DocumentModel cd = doc;
-                            handlerRegistry.getHandler(nodeType)
-                                    .ifPresent(h -> h.handle(new NodeHandlerContext(cd, node,
-                                            buildMergedConfig(node), ingestedEvent, classification)));
+                    }
+                    case "SYNC_LLM" -> {
+                        // In branch context, use sync for custom prompts (classification already done)
+                        Map<String, Object> mergedConfig = buildMergedConfig(node);
+                        if (node.blockId() != null) mergedConfig.put("blockId", node.blockId());
+                        SyncLlmNodeExecutor.SyncLlmResult llmResult = syncLlmExecutor.execute(doc, mergedConfig, nodeType, ingestedEvent);
+                        if (llmResult.success() && llmResult.customResult() != null) {
+                            mergeCustomResult(doc, llmResult.customResult(), node);
                         }
                     }
+                    default -> log.debug("[Engine] Skipping {} node type in branch: {}", execCategory, nodeType);
                 }
-                case "SYNC_LLM" -> {
-                    Map<String, Object> mergedConfig = buildMergedConfig(node);
-                    if (node.blockId() != null) mergedConfig.put("blockId", node.blockId());
-                    SyncLlmNodeExecutor.SyncLlmResult llmResult = syncLlmExecutor.execute(doc, mergedConfig, nodeType, ingestedEvent);
-                    if (llmResult.success() && llmResult.customResult() != null) {
-                        mergeCustomResult(doc, llmResult.customResult(), node);
-                    }
-                }
-                default -> log.debug("[Engine] Skipping {} node type in branch: {}", execCategory, nodeType);
+                completeNodeRun(nodeRun, null);
+            } catch (Exception e) {
+                failNodeRun(nodeRun, e.getMessage());
+                throw e;
             }
 
             if (typeDef != null && typeDef.isRequiresDocReload()) {
@@ -404,17 +682,13 @@ public class PipelineExecutionEngine {
                 if (doc == null) return;
             }
         }
+
+        doc.setPipelineNodeId(null);
+        documentService.save(doc);
     }
 
-    // ── Phase 1: document.ingested → run until aiClassification ─────────
+    // ── Phase 1/Phase 2 (kept for backward compatibility) ─────────────
 
-    /**
-     * Execute Phase 1 of the pipeline: everything before the LLM call.
-     * Called when a document is ingested.
-     *
-     * @return Phase1Result indicating whether the LLM was skipped (accelerator short-circuit)
-     *         or the pipeline is awaiting the LLM response.
-     */
     public Phase1Result executePhase1(DocumentIngestedEvent event) {
         String docId = event.documentId();
         log.info("[Engine] Phase 1 starting for document: {} ({})", docId, event.fileName());
@@ -435,38 +709,31 @@ public class PipelineExecutionEngine {
                 return Phase1Result.awaitingLlm();
             }
 
-            // Resolve pipeline
             PipelineDefinition pipeline = resolvePipeline(doc);
             if (pipeline != null) {
                 doc.setPipelineId(pipeline.getId());
                 documentService.save(doc);
             }
 
-            // Build execution graph
             List<VisualNode> executionOrder = topologicalSort(pipeline);
             log.info("[Engine] Pipeline '{}' has {} nodes", pipeline != null ? pipeline.getName() : "default", executionOrder.size());
 
-            // Walk the graph until we hit aiClassification or run out of nodes
             for (VisualNode node : executionOrder) {
-                if (isNodeDisabled(node)) {
-                    log.debug("[Engine] Skipping disabled node: {} ({})", node.label(), node.type());
-                    continue;
-                }
+                if (isNodeDisabled(node)) continue;
 
                 String nodeType = node.type();
                 doc.setPipelineNodeId(node.id());
                 documentService.save(doc);
 
-                // Data-driven dispatch based on executionCategory from NodeTypeDefinition
                 NodeTypeDefinition typeDef = nodeTypeService.getByKey(nodeType).orElse(null);
                 String execCategory = typeDef != null ? typeDef.getExecutionCategory() : null;
 
                 if (execCategory == null) {
                     log.debug("[Engine] Unknown pre-classification node type: {} — skipping", nodeType);
                 } else {
-                    final DocumentModel currentDoc = doc; // capture for lambda
+                    final DocumentModel currentDoc = doc;
                     switch (execCategory) {
-                        case "NOOP" -> { /* trigger, errorHandler — no-op during normal flow */ }
+                        case "NOOP" -> { }
                         case "BUILT_IN" -> {
                             switch (nodeType) {
                                 case "textExtraction" -> handleTextExtraction(doc, event, node);
@@ -482,15 +749,12 @@ public class PipelineExecutionEngine {
                             AcceleratorResult accel = handlerRegistry.getAccelerator(nodeType)
                                     .map(a -> a.evaluate(currentDoc, mergedConfig))
                                     .orElse(AcceleratorResult.miss());
-                            long accelMs = System.currentTimeMillis() - System.currentTimeMillis();
                             statusNotifier.emitLog(doc.getId(),
                                     doc.getOriginalFileName() != null ? doc.getOriginalFileName() : "",
                                     "ACCELERATOR", "INFO",
                                     nodeType + (accel.matched() ? " → HIT: " + accel.categoryName() : " → MISS"), null);
                             if (accel.matched()) {
                                 DocumentClassifiedEvent classifiedEvent = applyAcceleratorResult(doc, accel);
-                                log.info("[Engine] Accelerator '{}' short-circuited LLM for doc {} → {}",
-                                        nodeType, docId, accel.categoryName());
                                 return Phase1Result.shortCircuited(classifiedEvent);
                             }
                         }
@@ -502,10 +766,7 @@ public class PipelineExecutionEngine {
                                     "GENERIC_HTTP", "INFO",
                                     nodeType + (httpResult.matched() ? " → HIT: " + httpResult.categoryName() : " → MISS"), null);
                             if (httpResult.matched()) {
-                                DocumentClassifiedEvent classifiedEvent = applyAcceleratorResult(doc, httpResult);
-                                log.info("[Engine] Generic HTTP '{}' short-circuited LLM for doc {} → {}",
-                                        nodeType, docId, httpResult.categoryName());
-                                return Phase1Result.shortCircuited(classifiedEvent);
+                                return Phase1Result.shortCircuited(applyAcceleratorResult(doc, httpResult));
                             }
                         }
                         case "ASYNC_BOUNDARY" -> {
@@ -516,7 +777,6 @@ public class PipelineExecutionEngine {
                     }
                 }
 
-                // Data-driven document reload
                 if (typeDef != null && typeDef.isRequiresDocReload()) {
                     doc = documentService.getById(docId);
                     if (doc == null) {
@@ -526,7 +786,6 @@ public class PipelineExecutionEngine {
                 }
             }
 
-            // If no aiClassification node, the pipeline ends after extraction/PII
             log.info("[Engine] Phase 1 complete — no aiClassification node found in pipeline");
             return Phase1Result.awaitingLlm();
 
@@ -537,44 +796,25 @@ public class PipelineExecutionEngine {
         }
     }
 
-    // ── Phase 2: document.classified → run remaining nodes ──────────────
-
-    /**
-     * Execute Phase 2 of the pipeline: everything after the LLM classification.
-     * Called when a classified event is received.
-     */
     public void executePhase2(DocumentClassifiedEvent event) {
         String docId = event.documentId();
         log.info("[Engine] Phase 2 starting for document: {} (category: {})", docId, event.categoryName());
 
         try {
             DocumentModel doc = documentService.getById(docId);
-            if (doc == null) {
-                log.warn("[Engine] Skipping Phase 2 for {} — not found", docId);
-                return;
-            }
+            if (doc == null) { log.warn("[Engine] Skipping Phase 2 for {} — not found", docId); return; }
             if (doc.getStatus() != DocumentStatus.CLASSIFIED
                     && doc.getStatus() != DocumentStatus.REVIEW_REQUIRED) {
-                log.info("[Engine] Skipping Phase 2 for {} — status is {} (expected CLASSIFIED or REVIEW_REQUIRED)",
-                        docId, doc.getStatus());
-                return;
+                log.info("[Engine] Skipping Phase 2 for {} — status is {}", docId, doc.getStatus()); return;
             }
 
             PipelineDefinition pipeline = null;
             if (doc.getPipelineId() != null) {
                 pipeline = pipelineRoutingService.resolve(event.categoryId(), null);
-                // Also try the saved pipeline
-                if (pipeline == null) {
-                    var repo = blockRepo; // just for context - we use pipelineRoutingService
-                }
             }
-            if (pipeline == null) {
-                pipeline = resolvePipeline(doc);
-            }
+            if (pipeline == null) pipeline = resolvePipeline(doc);
 
             List<VisualNode> executionOrder = topologicalSort(pipeline);
-
-            // Find the node AFTER the async boundary (aiClassification)
             boolean pastClassification = false;
             for (VisualNode node : executionOrder) {
                 if (!pastClassification) {
@@ -584,11 +824,7 @@ public class PipelineExecutionEngine {
                     }
                     continue;
                 }
-
-                if (isNodeDisabled(node)) {
-                    log.debug("[Engine] Skipping disabled node: {} ({})", node.label(), node.type());
-                    continue;
-                }
+                if (isNodeDisabled(node)) continue;
 
                 String nodeType = node.type();
                 doc.setPipelineNodeId(node.id());
@@ -596,18 +832,13 @@ public class PipelineExecutionEngine {
 
                 executePhase2Node(doc, event, node, nodeType, pipeline, executionOrder);
 
-                // Data-driven document reload
                 NodeTypeDefinition typeDef = nodeTypeService.getByKey(nodeType).orElse(null);
                 if (typeDef != null && typeDef.isRequiresDocReload()) {
                     doc = documentService.getById(docId);
-                    if (doc == null) {
-                        log.error("[Engine] Document {} disappeared after {} handler", docId, nodeType);
-                        return;
-                    }
+                    if (doc == null) { log.error("[Engine] Document {} disappeared", docId); return; }
                 }
             }
 
-            // Pipeline complete — clear the node tracker
             doc.setPipelineNodeId(null);
             documentService.save(doc);
             log.info("[Engine] Phase 2 complete for document: {}", docId);
@@ -616,6 +847,136 @@ public class PipelineExecutionEngine {
             log.error("[Engine] Phase 2 failed for document {}: {}", docId, e.getMessage(), e);
             handleNodeError(docId, "", "PHASE_2", e, null);
         }
+    }
+
+    // ── PipelineRun/NodeRun helpers ─────────────────────────────────────
+
+    private void completeNodeRun(NodeRun nodeRun, Map<String, Object> output) {
+        nodeRun.setStatus(NodeRunStatus.SUCCEEDED);
+        nodeRun.setCompletedAt(Instant.now());
+        nodeRun.setDurationMs(java.time.Duration.between(nodeRun.getStartedAt(), Instant.now()).toMillis());
+        if (output != null) nodeRun.setOutput(output);
+        nodeRunRepo.save(nodeRun);
+    }
+
+    private void failNodeRun(NodeRun nodeRun, String error) {
+        nodeRun.setStatus(NodeRunStatus.FAILED);
+        nodeRun.setCompletedAt(Instant.now());
+        nodeRun.setDurationMs(java.time.Duration.between(nodeRun.getStartedAt(), Instant.now()).toMillis());
+        nodeRun.setError(error);
+        nodeRunRepo.save(nodeRun);
+    }
+
+    private void completePipelineRun(PipelineRun run) {
+        run.setStatus(PipelineRunStatus.COMPLETED);
+        run.setCompletedAt(Instant.now());
+        run.setTotalDurationMs(java.time.Duration.between(run.getStartedAt(), Instant.now()).toMillis());
+        run.setUpdatedAt(Instant.now());
+        pipelineRunRepo.save(run);
+    }
+
+    private void failRun(PipelineRun run, String nodeKey, String error) {
+        run.setStatus(PipelineRunStatus.FAILED);
+        run.setErrorNodeKey(nodeKey);
+        run.setError(error);
+        run.setCompletedAt(Instant.now());
+        run.setTotalDurationMs(java.time.Duration.between(run.getStartedAt(), Instant.now()).toMillis());
+        run.setUpdatedAt(Instant.now());
+        pipelineRunRepo.save(run);
+    }
+
+    private void storeClassificationInContext(PipelineRun run, DocumentClassifiedEvent event) {
+        Map<String, Object> ctx = run.getSharedContext();
+        ctx.put("classificationResultId", event.classificationResultId());
+        ctx.put("categoryId", event.categoryId());
+        ctx.put("categoryName", event.categoryName());
+        ctx.put("sensitivityLabel", event.sensitivityLabel() != null ? event.sensitivityLabel().name() : null);
+        ctx.put("confidence", event.confidence());
+        ctx.put("requiresHumanReview", event.requiresHumanReview());
+        if (event.tags() != null) ctx.put("tags", event.tags());
+        if (event.retentionScheduleId() != null) ctx.put("retentionScheduleId", event.retentionScheduleId());
+        if (event.applicablePolicyIds() != null) ctx.put("applicablePolicyIds", event.applicablePolicyIds());
+        run.setSharedContext(ctx);
+        pipelineRunRepo.save(run);
+    }
+
+    /**
+     * Reconstruct a DocumentClassifiedEvent from PipelineRun shared context.
+     */
+    @SuppressWarnings("unchecked")
+    private DocumentClassifiedEvent buildClassificationFromContext(Map<String, Object> ctx, String docId) {
+        if (ctx == null || !ctx.containsKey("categoryId")) return null;
+        String sensLabel = ctx.get("sensitivityLabel") != null ? ctx.get("sensitivityLabel").toString() : null;
+        SensitivityLabel sensitivity = null;
+        if (sensLabel != null) {
+            try { sensitivity = SensitivityLabel.valueOf(sensLabel); } catch (Exception ignored) {}
+        }
+        return new DocumentClassifiedEvent(
+                docId,
+                ctx.get("classificationResultId") != null ? ctx.get("classificationResultId").toString() : null,
+                ctx.get("categoryId").toString(),
+                ctx.get("categoryName") != null ? ctx.get("categoryName").toString() : null,
+                sensitivity,
+                ctx.get("tags") instanceof List<?> tags ? (List<String>) tags : List.of(),
+                ctx.get("applicablePolicyIds") instanceof List<?> pols ? (List<String>) pols : List.of(),
+                ctx.get("retentionScheduleId") != null ? ctx.get("retentionScheduleId").toString() : null,
+                ctx.get("confidence") instanceof Number n ? n.doubleValue() : 0.0,
+                ctx.get("requiresHumanReview") instanceof Boolean b ? b : false,
+                Instant.now()
+        );
+    }
+
+    private DocumentClassifiedEvent buildClassifiedEvent(LlmJobCompletedEvent e, String docId) {
+        SensitivityLabel sensitivity = null;
+        if (e.sensitivityLabel() != null) {
+            try { sensitivity = SensitivityLabel.valueOf(e.sensitivityLabel()); } catch (Exception ignored) {}
+        }
+        return new DocumentClassifiedEvent(
+                docId,
+                e.classificationResultId(),
+                e.categoryId(),
+                e.categoryName(),
+                sensitivity,
+                e.tags() != null ? e.tags() : List.of(),
+                e.applicablePolicyIds() != null ? e.applicablePolicyIds() : List.of(),
+                e.retentionScheduleId(),
+                e.confidence(),
+                e.requiresHumanReview(),
+                e.completedAt() != null ? e.completedAt() : Instant.now()
+        );
+    }
+
+    private void applyClassificationToDocument(DocumentModel doc, DocumentClassifiedEvent event) {
+        doc.setCategoryId(event.categoryId());
+        doc.setCategoryName(event.categoryName());
+        doc.setSensitivityLabel(event.sensitivityLabel());
+        doc.setClassificationResultId(event.classificationResultId());
+        doc.setTags(event.tags());
+        doc.setClassifiedAt(event.classifiedAt());
+        doc.setStatus(DocumentStatus.CLASSIFIED);
+        documentService.save(doc);
+    }
+
+    /**
+     * Determine LLM mode from merged config and block content.
+     */
+    private String determineLlmMode(Map<String, Object> config, String blockId) {
+        // Check explicit mode override
+        Object modeOverride = config.get("llmMode");
+        if (modeOverride != null) return modeOverride.toString();
+
+        // Check block content for classification markers
+        if (blockId != null) {
+            var block = blockRepo.findById(blockId).orElse(null);
+            if (block != null) {
+                var content = block.getActiveContent();
+                if (content != null) {
+                    String systemPrompt = content.get("systemPrompt") != null ? content.get("systemPrompt").toString() : "";
+                    if (systemPrompt.contains("save_classification_result")) return "CLASSIFICATION";
+                }
+            }
+        }
+        return "CLASSIFICATION"; // default
     }
 
     // ── Node handlers ───────────────────────────────────────────────────
@@ -631,7 +992,6 @@ public class PipelineExecutionEngine {
                 "Starting text extraction", null);
 
         try {
-            // Load EXTRACTOR block config
             int maxTextLength = 500_000;
             boolean extractDublinCore = true;
             boolean extractMetadata = true;
@@ -644,7 +1004,6 @@ public class PipelineExecutionEngine {
                 extractMetadata = toBool(blockContent.get("extractMetadata"), true);
             }
 
-            // Download and extract
             InputStream fileStream = objectStorage.download(event.storageBucket(), event.storageKey());
             TextExtractionService.ExtractionResult result =
                     textExtractionService.extract(fileStream, event.fileName(),
@@ -670,7 +1029,6 @@ public class PipelineExecutionEngine {
         long start = System.currentTimeMillis();
 
         try {
-            // Build dismissal context
             List<PiiEntity> previousFindings = new ArrayList<>();
             if (doc.getPiiFindings() != null) {
                 previousFindings.addAll(doc.getPiiFindings());
@@ -726,25 +1084,19 @@ public class PipelineExecutionEngine {
     }
 
     private void handleAiClassification(DocumentModel doc, DocumentIngestedEvent event, VisualNode node) {
-        // Publish to the LLM queue and return — the LLM worker handles classification asynchronously
         var processedEvent = new DocumentProcessedEvent(
-                doc.getId(),
-                event.fileName(),
-                event.mimeType(),
-                event.fileSizeBytes(),
+                doc.getId(), event.fileName(), event.mimeType(), event.fileSizeBytes(),
                 doc.getExtractedText(),
                 event.storageBucket() + "/" + event.storageKey(),
-                event.uploadedBy(),
-                Instant.now()
+                event.uploadedBy(), Instant.now()
         );
 
         try {
             rabbitTemplate.convertAndSend(
                     RabbitMqConfig.EXCHANGE,
                     RabbitMqConfig.ROUTING_PROCESSED,
-                    processedEvent
-            );
-            log.info("[Engine] Published to LLM queue for document: {} — pausing pipeline at node {}",
+                    processedEvent);
+            log.info("[Engine] Published to LLM queue for document: {} — pausing at node {}",
                     doc.getId(), node.id());
         } catch (Exception e) {
             log.error("[Engine] Failed to publish to LLM queue for {}: {}", doc.getId(), e.getMessage());
@@ -755,12 +1107,9 @@ public class PipelineExecutionEngine {
 
     private String evaluateCondition(DocumentModel doc, DocumentClassifiedEvent event,
                                      VisualNode node, PipelineDefinition pipeline) {
-        // Read condition config from node data or linked block
         Map<String, Object> data = node.data() != null ? new HashMap<>(node.data()) : new HashMap<>();
         Map<String, Object> blockContent = loadBlockContent(node.blockId(), PipelineBlock.BlockType.ROUTER);
-        if (blockContent != null) {
-            data.putAll(blockContent);
-        }
+        if (blockContent != null) data.putAll(blockContent);
 
         String field = data.getOrDefault("field", "confidence").toString();
         String operator = data.getOrDefault("operator", ">=").toString();
@@ -783,7 +1132,6 @@ public class PipelineExecutionEngine {
         log.info("[Engine] Condition '{}': {} {} {} = {} → {}",
                 node.label(), field, operator, threshold, value, result ? "TRUE" : "FALSE");
 
-        // Find the target node for the chosen branch
         String handleId = result ? "true" : "false";
         if (pipeline != null && pipeline.getVisualEdges() != null) {
             for (VisualEdge edge : pipeline.getVisualEdges()) {
@@ -798,15 +1146,20 @@ public class PipelineExecutionEngine {
     }
 
     private void handleGovernance(DocumentModel doc, DocumentClassifiedEvent event, VisualNode node) {
+        // Check auto-enforce toggle
+        if (!appConfigService.getValue("pipeline.governance.auto_enforce", true)) {
+            log.info("[Engine] Auto-enforce disabled — skipping governance for doc {}", doc.getId());
+            statusNotifier.emitLog(doc.getId(), "", "ENFORCEMENT", "INFO",
+                    "Governance skipped — auto-enforce disabled", null);
+            return;
+        }
+
         long start = System.currentTimeMillis();
         statusNotifier.emitLog(doc.getId(), "", "ENFORCEMENT", "INFO",
                 "Applying governance: " + event.categoryName() + " / " + event.sensitivityLabel(), null);
 
         try {
             DocumentModel enforced = enforcementService.enforce(event);
-
-            // Engine owns the status decision — the graph's condition/humanReview nodes handle review routing.
-            // If this governance node runs, the document is on the auto-approve path.
             if (enforced != null) {
                 enforced.setStatus(DocumentStatus.INBOX);
                 documentService.save(enforced);
@@ -824,7 +1177,6 @@ public class PipelineExecutionEngine {
     }
 
     private void handleHumanReview(DocumentModel doc, DocumentClassifiedEvent event, VisualNode node) {
-        // Copy classification fields so the document is displayable in the review queue
         doc.setCategoryId(event.categoryId());
         doc.setCategoryName(event.categoryName());
         doc.setSensitivityLabel(event.sensitivityLabel());
@@ -847,31 +1199,31 @@ public class PipelineExecutionEngine {
         statusNotifier.emitLog(doc.getId(), "", "NOTIFICATION", "INFO", message, null);
     }
 
+    private void mergeCustomResult(DocumentModel doc, Map<String, Object> customResult, VisualNode node) {
+        if (customResult == null || customResult.isEmpty()) return;
+        log.info("[Engine] Storing custom LLM result for node '{}' on doc {}: {}", node.label(), doc.getId(), customResult.keySet());
+        documentService.save(doc);
+    }
+
     // ── Data-driven dispatch helpers ─────────────────────────────────────
 
-    /**
-     * Execute a single Phase 2 (post-classification) node using data-driven dispatch.
-     */
     private void executePhase2Node(DocumentModel doc, DocumentClassifiedEvent event,
                                     VisualNode node, String nodeType,
                                     PipelineDefinition pipeline, List<VisualNode> executionOrder) {
         NodeTypeDefinition typeDef = nodeTypeService.getByKey(nodeType).orElse(null);
         String execCategory = typeDef != null ? typeDef.getExecutionCategory() : null;
-
         if (execCategory == null) {
             log.debug("[Engine] Unknown post-classification node type: {} — skipping", nodeType);
             return;
         }
 
         switch (execCategory) {
-            case "NOOP" -> { /* errorHandler — only triggered on failure */ }
+            case "NOOP" -> { }
             case "BUILT_IN" -> {
                 switch (nodeType) {
                     case "condition" -> {
                         String nextNodeId = evaluateCondition(doc, event, node, pipeline);
-                        if (nextNodeId != null) {
-                            executeFromNode(doc, event, pipeline, executionOrder, nextNodeId);
-                        }
+                        if (nextNodeId != null) executeFromNode(doc, event, pipeline, executionOrder, nextNodeId);
                     }
                     case "governance" -> handleGovernance(doc, event, node);
                     case "humanReview" -> handleHumanReview(doc, event, node);
@@ -885,9 +1237,6 @@ public class PipelineExecutionEngine {
         }
     }
 
-    /**
-     * Build merged config from node data + linked block content.
-     */
     private Map<String, Object> buildMergedConfig(VisualNode node) {
         Map<String, Object> config = node.data() != null ? new HashMap<>(node.data()) : new HashMap<>();
         Map<String, Object> blockContent = loadBlockContent(node.blockId(), null);
@@ -895,12 +1244,7 @@ public class PipelineExecutionEngine {
         return config;
     }
 
-    /**
-     * Apply an accelerator's classification result to the document, creating a
-     * ClassificationResult record and a synthetic DocumentClassifiedEvent.
-     */
     private DocumentClassifiedEvent applyAcceleratorResult(DocumentModel doc, AcceleratorResult accel) {
-        // Create classification result record
         DocumentClassificationResult result = new DocumentClassificationResult();
         result.setDocumentId(doc.getId());
         result.setCategoryId(accel.categoryId());
@@ -915,7 +1259,6 @@ public class PipelineExecutionEngine {
         result.setSummary("Classified by " + accel.acceleratorType() + " accelerator");
         DocumentClassificationResult saved = classificationResultRepo.save(result);
 
-        // Update document fields
         doc.setClassificationResultId(saved.getId());
         doc.setCategoryId(accel.categoryId());
         doc.setCategoryName(accel.categoryName());
@@ -939,10 +1282,6 @@ public class PipelineExecutionEngine {
         );
     }
 
-    /**
-     * Smart truncation: reduces extracted text before the LLM node.
-     * Does NOT produce a classification — it modifies doc.extractedText in place.
-     */
     private void handleSmartTruncation(DocumentModel doc, VisualNode node) {
         Map<String, Object> nodeConfig = node.data() != null ? new HashMap<>(node.data()) : new HashMap<>();
         Map<String, Object> blockContent = loadBlockContent(node.blockId(), null);
@@ -964,9 +1303,6 @@ public class PipelineExecutionEngine {
 
     // ── Graph utilities ─────────────────────────────────────────────────
 
-    /**
-     * Resolve which pipeline should be used for this document.
-     */
     private PipelineDefinition resolvePipeline(DocumentModel doc) {
         if (doc.getPipelineId() != null) {
             PipelineDefinition p = pipelineRoutingService.resolve(doc.getCategoryId(), doc.getMimeType());
@@ -975,10 +1311,6 @@ public class PipelineExecutionEngine {
         return pipelineRoutingService.resolve(null, doc.getMimeType());
     }
 
-    /**
-     * Topologically sort the visual nodes following edges.
-     * Returns nodes in execution order: sources before targets.
-     */
     List<VisualNode> topologicalSort(PipelineDefinition pipeline) {
         if (pipeline == null || pipeline.getVisualNodes() == null || pipeline.getVisualNodes().isEmpty()) {
             return List.of();
@@ -987,7 +1319,6 @@ public class PipelineExecutionEngine {
         List<VisualNode> nodes = pipeline.getVisualNodes();
         List<VisualEdge> edges = pipeline.getVisualEdges() != null ? pipeline.getVisualEdges() : List.of();
 
-        // Build adjacency and in-degree
         Map<String, VisualNode> nodeMap = new LinkedHashMap<>();
         Map<String, List<String>> adj = new LinkedHashMap<>();
         Map<String, Integer> inDegree = new LinkedHashMap<>();
@@ -999,22 +1330,18 @@ public class PipelineExecutionEngine {
         }
 
         for (VisualEdge e : edges) {
-            // Skip error edges (connected to errorHandler nodes)
-            if ("error".equals(e.sourceHandle()) || "errorInput".equals(e.targetHandle())) {
-                continue;
-            }
+            // Include ALL edges for topological ordering (including error handles)
+            // so that error-target nodes are correctly placed after their source.
+            // Error handles are only skipped during branch *execution*, not ordering.
             if (adj.containsKey(e.source()) && nodeMap.containsKey(e.target())) {
                 adj.get(e.source()).add(e.target());
                 inDegree.merge(e.target(), 1, Integer::sum);
             }
         }
 
-        // Kahn's algorithm
         Queue<String> queue = new LinkedList<>();
         for (var entry : inDegree.entrySet()) {
-            if (entry.getValue() == 0) {
-                queue.add(entry.getKey());
-            }
+            if (entry.getValue() == 0) queue.add(entry.getKey());
         }
 
         List<VisualNode> sorted = new ArrayList<>();
@@ -1026,22 +1353,16 @@ public class PipelineExecutionEngine {
             for (String neighbor : adj.getOrDefault(current, List.of())) {
                 int newDegree = inDegree.get(neighbor) - 1;
                 inDegree.put(neighbor, newDegree);
-                if (newDegree == 0) {
-                    queue.add(neighbor);
-                }
+                if (newDegree == 0) queue.add(neighbor);
             }
         }
 
         return sorted;
     }
 
-    /**
-     * Continue execution from a specific node (used after condition branching).
-     */
     private void executeFromNode(DocumentModel doc, DocumentClassifiedEvent event,
                                  PipelineDefinition pipeline, List<VisualNode> executionOrder,
                                  String startNodeId) {
-        // Find all nodes reachable from startNodeId via BFS
         Set<String> reachable = new LinkedHashSet<>();
         Queue<String> bfs = new LinkedList<>();
         bfs.add(startNodeId);
@@ -1050,13 +1371,10 @@ public class PipelineExecutionEngine {
         while (!bfs.isEmpty()) {
             String id = bfs.poll();
             if (reachable.add(id)) {
-                for (String neighbor : adj.getOrDefault(id, List.of())) {
-                    bfs.add(neighbor);
-                }
+                for (String neighbor : adj.getOrDefault(id, List.of())) bfs.add(neighbor);
             }
         }
 
-        // Execute reachable nodes in topological order
         for (VisualNode node : executionOrder) {
             if (!reachable.contains(node.id())) continue;
             if (isNodeDisabled(node)) continue;
@@ -1067,7 +1385,6 @@ public class PipelineExecutionEngine {
             String nodeType = node.type();
             executePhase2Node(doc, event, node, nodeType, pipeline, executionOrder);
 
-            // Data-driven document reload
             NodeTypeDefinition typeDef = nodeTypeService.getByKey(nodeType).orElse(null);
             if (typeDef != null && typeDef.isRequiresDocReload()) {
                 doc = documentService.getById(doc.getId());
@@ -1078,7 +1395,6 @@ public class PipelineExecutionEngine {
             }
         }
 
-        // Branch complete
         doc.setPipelineNodeId(null);
         documentService.save(doc);
     }
@@ -1099,9 +1415,6 @@ public class PipelineExecutionEngine {
         return Boolean.TRUE.equals(disabled) || "true".equals(disabled);
     }
 
-    /**
-     * Load block content by specific block ID, or fall back to the first active block of the given type.
-     */
     private Map<String, Object> loadBlockContent(String blockId, PipelineBlock.BlockType fallbackType) {
         if (blockId != null) {
             return blockRepo.findById(blockId)
@@ -1109,15 +1422,12 @@ public class PipelineExecutionEngine {
                     .orElse(null);
         }
         List<PipelineBlock> blocks = blockRepo.findByTypeAndActiveTrueOrderByNameAsc(fallbackType);
-        if (!blocks.isEmpty()) {
-            return blocks.getFirst().getActiveContent();
-        }
+        if (!blocks.isEmpty()) return blocks.getFirst().getActiveContent();
         return null;
     }
 
     private void handleNodeError(String docId, String fileName, String stage, Exception e,
                                  VisualNode errorHandlerNode) {
-        // Extract the real stage if this is a PipelineStageException
         String resolvedStage = stage;
         Throwable cause = e;
         if (e instanceof PipelineStageException pse) {
@@ -1125,7 +1435,6 @@ public class PipelineExecutionEngine {
             cause = pse.getCause() != null ? pse.getCause() : e;
         }
 
-        // If there's an error handler node connected, use its config
         if (errorHandlerNode != null) {
             Map<String, Object> data = errorHandlerNode.data() != null ? errorHandlerNode.data() : Map.of();
             int maxRetries = toInt(data.get("maxRetries"), 3);
@@ -1143,7 +1452,6 @@ public class PipelineExecutionEngine {
             default -> DocumentStatus.PROCESSING_FAILED;
         };
 
-        // Build error message with truncated stack trace for diagnostics
         String errorMessage = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName();
         String stackSnippet = truncateStack(cause, 500);
         String fullError = errorMessage + (stackSnippet.isEmpty() ? "" : "\n--- Stack ---\n" + stackSnippet);
@@ -1152,7 +1460,6 @@ public class PipelineExecutionEngine {
             documentService.setError(docId, failedStatus, resolvedStage, fullError);
         } catch (Exception inner) {
             log.error("[Engine] Failed to set error status for {}: {}", docId, inner.getMessage());
-            // Fallback: persist as SystemError so it's visible in the admin panel
             try {
                 var sysError = co.uk.wolfnotsheep.document.models.SystemError.of(
                         "CRITICAL", "PIPELINE",
@@ -1174,7 +1481,6 @@ public class PipelineExecutionEngine {
         return full.length() <= maxLength ? full : full.substring(0, maxLength) + "...";
     }
 
-    /** Wraps a node handler exception with the pipeline stage name for better error reporting. */
     static class PipelineStageException extends RuntimeException {
         private final String stage;
         PipelineStageException(String stage, Throwable cause) { super(cause); this.stage = stage; }

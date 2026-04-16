@@ -11,7 +11,10 @@ import co.uk.wolfnotsheep.governance.models.ClassificationCorrection.CorrectionT
 import co.uk.wolfnotsheep.governance.models.DocumentClassificationResult;
 import co.uk.wolfnotsheep.governance.models.PipelineBlock;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
+import co.uk.wolfnotsheep.governance.models.ClassificationCategory;
+import co.uk.wolfnotsheep.governance.models.RetentionSchedule;
 import co.uk.wolfnotsheep.governance.repositories.BlockFeedbackRepository;
+import co.uk.wolfnotsheep.governance.repositories.ClassificationCategoryRepository;
 import co.uk.wolfnotsheep.governance.repositories.PipelineBlockRepository;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import org.springframework.data.domain.Page;
@@ -38,17 +41,20 @@ public class ReviewQueueController {
     private final AuditEventRepository auditEventRepository;
     private final BlockFeedbackRepository blockFeedbackRepo;
     private final PipelineBlockRepository blockRepo;
+    private final ClassificationCategoryRepository categoryRepo;
 
     public ReviewQueueController(DocumentService documentService,
                                  GovernanceService governanceService,
                                  AuditEventRepository auditEventRepository,
                                  BlockFeedbackRepository blockFeedbackRepo,
-                                 PipelineBlockRepository blockRepo) {
+                                 PipelineBlockRepository blockRepo,
+                                 ClassificationCategoryRepository categoryRepo) {
         this.documentService = documentService;
         this.governanceService = governanceService;
         this.auditEventRepository = auditEventRepository;
         this.blockFeedbackRepo = blockFeedbackRepo;
         this.blockRepo = blockRepo;
+        this.categoryRepo = categoryRepo;
     }
 
     @GetMapping
@@ -141,6 +147,28 @@ public class ReviewQueueController {
         override.setModelId("human");
         override.setHumanReviewed(true);
         override.setReviewedBy(user.getUsername());
+
+        // ISO 15489 denormalisation — copy fields from the chosen category
+        ClassificationCategory category = categoryRepo.findById(request.categoryId()).orElse(null);
+        if (category != null) {
+            override.setClassificationCode(category.getClassificationCode());
+            override.setClassificationPath(category.getPath());
+            override.setClassificationLevel(category.getLevel());
+            override.setJurisdiction(category.getJurisdiction());
+            override.setLegalCitation(category.getLegalCitation());
+            override.setCategoryPersonalData(category.isPersonalDataFlag());
+            override.setVitalRecord(category.isVitalRecordFlag());
+            override.setTaxonomyVersion(category.getVersion());
+            override.setRetentionTrigger(category.getRetentionTrigger());
+            override.setRetentionPeriodText(category.getRetentionPeriodText());
+            if (category.getRetentionScheduleId() != null) {
+                override.setRetentionScheduleId(category.getRetentionScheduleId());
+                RetentionSchedule sched = governanceService.getRetentionSchedule(category.getRetentionScheduleId());
+                if (sched != null) {
+                    override.setExpectedDispositionAction(sched.getDispositionAction());
+                }
+            }
+        }
         governanceService.saveClassificationResult(override);
 
         // Record the correction for LLM feedback
@@ -175,12 +203,26 @@ public class ReviewQueueController {
                     user.getUsername(), PipelineBlock.BlockType.PROMPT);
         }
 
-        // Update the document with the override
+        // Update the document with the override (including denormalised ISO 15489 fields)
         doc.setClassificationResultId(override.getId());
         doc.setCategoryId(request.categoryId());
         doc.setCategoryName(request.categoryName());
         doc.setSensitivityLabel(request.sensitivityLabel());
         doc.setTags(request.tags());
+        doc.setClassificationCode(override.getClassificationCode());
+        doc.setClassificationPath(override.getClassificationPath());
+        doc.setClassificationLevel(override.getClassificationLevel());
+        doc.setJurisdiction(override.getJurisdiction());
+        doc.setLegalCitation(override.getLegalCitation());
+        doc.setCategoryPersonalData(override.isCategoryPersonalData());
+        doc.setVitalRecord(override.isVitalRecord());
+        doc.setTaxonomyVersion(override.getTaxonomyVersion());
+        doc.setRetentionTrigger(override.getRetentionTrigger());
+        doc.setRetentionPeriodText(override.getRetentionPeriodText());
+        doc.setExpectedDispositionAction(override.getExpectedDispositionAction());
+        if (override.getRetentionScheduleId() != null) {
+            doc.setRetentionScheduleId(override.getRetentionScheduleId());
+        }
         doc.setStatus(DocumentStatus.INBOX);
         doc.setGovernanceAppliedAt(Instant.now());
         documentService.save(doc);

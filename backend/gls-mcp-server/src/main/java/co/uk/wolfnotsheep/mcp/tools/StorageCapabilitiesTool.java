@@ -4,8 +4,10 @@ import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.models.StorageTier;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
+import co.uk.wolfnotsheep.mcp.config.CacheConfig;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
@@ -25,6 +27,7 @@ public class StorageCapabilitiesTool {
         this.toolLog = toolLog;
     }
 
+    @Cacheable(value = CacheConfig.CACHE_STORAGE, key = "#sensitivityLabel != null ? #sensitivityLabel : 'all'")
     @McpTool(name = "get_storage_capabilities",
             description = "Retrieve available storage tiers with their encryption, immutability, and geographic constraints. " +
                     "Use this to recommend the appropriate storage tier for a classified document.")
