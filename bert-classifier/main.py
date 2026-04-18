@@ -317,3 +317,118 @@ async def list_models():
                     "has_label_map": has_labels,
                 })
     return {"models": available, "active_model_dir": MODEL_DIR}
+
+
+# ── Training ────────────────────────────────────────────────────────────
+
+import uuid
+import subprocess
+import multiprocessing
+from collections import Counter
+
+training_jobs: dict[str, dict] = {}
+
+
+class TrainRequest(BaseModel):
+    samples: list[dict]
+    label_map: dict[str, dict]
+    config: dict = {}
+
+
+class ActivateRequest(BaseModel):
+    model_dir: str
+
+
+@app.post("/train")
+async def train(request: TrainRequest):
+    """Start a fine-tuning job in a subprocess. Returns immediately with a job ID."""
+    logger.info("Train request received: %d samples, %d labels", len(request.samples), len(request.label_map))
+    job_id = str(uuid.uuid4())[:8]
+    training_jobs[job_id] = {"status": "TRAINING", "progress": 0, "started_at": time.time()}
+
+    # Write training data to a temp file for the subprocess
+    data_path = Path(f"/tmp/train_{job_id}.json")
+    with open(data_path, "w") as f:
+        json.dump({
+            "samples": request.samples,
+            "label_map": request.label_map,
+            "config": request.config,
+            "job_id": job_id,
+        }, f)
+
+    # Launch training as a separate process so it doesn't block uvicorn
+    proc = subprocess.Popen(
+        ["python3", "/app/train_worker.py", str(data_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+
+    # Monitor the process in a thread (lightweight — just waits for exit)
+    import threading
+    def _monitor():
+        stdout, stderr = proc.communicate()
+        result_path = Path(f"/tmp/train_{job_id}_result.json")
+        if result_path.exists():
+            with open(result_path) as f:
+                result = json.load(f)
+            training_jobs[job_id] = result
+        else:
+            training_jobs[job_id]["status"] = "FAILED"
+            training_jobs[job_id]["error"] = stderr.decode()[-500:] if stderr else "Unknown error"
+            training_jobs[job_id]["completed_at"] = time.time()
+        # Cleanup
+        data_path.unlink(missing_ok=True)
+        result_path.unlink(missing_ok=True)
+
+    threading.Thread(target=_monitor, daemon=True).start()
+
+    return {"job_id": job_id, "status": "TRAINING"}
+
+
+@app.get("/train/{job_id}/status")
+async def train_status(job_id: str):
+    """Check training job status."""
+    job = training_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@app.post("/models/activate")
+async def activate_model(request: ActivateRequest):
+    """Hot-swap the active model to a new directory."""
+    global tokenizer, onnx_session, hf_pipeline, label_map, MODEL_DIR
+
+    model_path = Path(request.model_dir)
+    if not model_path.exists():
+        raise HTTPException(status_code=404, detail=f"Model directory not found: {request.model_dir}")
+
+    lm_path = model_path / "label_map.json"
+    if not lm_path.exists():
+        raise HTTPException(status_code=400, detail="No label_map.json in model directory")
+
+    with open(lm_path) as f:
+        label_map = {int(k): v for k, v in json.load(f).items()}
+
+    onnx_session = None
+    hf_pipeline = None
+
+    from transformers import AutoTokenizer as SwapTokenizer
+    tokenizer = SwapTokenizer.from_pretrained(str(model_path))
+
+    onnx_path = model_path / "model.onnx"
+    if USE_ONNX and onnx_path.exists():
+        import onnxruntime as ort
+        onnx_session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+        MODEL_DIR = str(model_path)
+        logger.info("Hot-swapped to ONNX model at %s (%d labels)", model_path, len(label_map))
+        return {"status": "activated", "mode": "onnx", "model_dir": str(model_path), "label_count": len(label_map)}
+
+    hf_config = model_path / "config.json"
+    if hf_config.exists():
+        from transformers import pipeline as hf_pipe
+        hf_pipeline = hf_pipe("text-classification", model=str(model_path), tokenizer=tokenizer)
+        MODEL_DIR = str(model_path)
+        logger.info("Hot-swapped to HuggingFace model at %s (%d labels)", model_path, len(label_map))
+        return {"status": "activated", "mode": "transformers", "model_dir": str(model_path), "label_count": len(label_map)}
+
+    raise HTTPException(status_code=400, detail="No model.onnx or config.json found in directory")

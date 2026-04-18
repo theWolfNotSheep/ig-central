@@ -6,6 +6,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface TrainingDataSampleRepository extends MongoRepository<TrainingDataSample, String> {
 
@@ -20,6 +21,8 @@ public interface TrainingDataSampleRepository extends MongoRepository<TrainingDa
     List<TrainingDataSample> findByCategoryId(String categoryId);
 
     boolean existsBySourceDocumentId(String sourceDocumentId);
+
+    Optional<TrainingDataSample> findBySourceDocumentId(String sourceDocumentId);
 
     long countByCategoryName(String categoryName);
 

@@ -22,6 +22,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -213,6 +214,37 @@ public class PackBrowseController {
             return apiKey;
         }
         return null;
+    }
+
+    // ── Batch update check ────────────────────────────
+
+    public record InstalledPackInfo(String slug, int currentVersion) {}
+
+    public record PackUpdateInfo(String slug, String name, int latestVersion,
+                                 String changelog, Instant publishedAt,
+                                 List<String> componentTypes) {}
+
+    @PostMapping("/check-updates")
+    public ResponseEntity<List<PackUpdateInfo>> checkUpdates(
+            @RequestBody List<InstalledPackInfo> installed) {
+
+        List<PackUpdateInfo> updates = new ArrayList<>();
+        for (InstalledPackInfo info : installed) {
+            packRepository.findBySlug(info.slug()).ifPresent(pack -> {
+                if (pack.getLatestVersionNumber() > info.currentVersion()) {
+                    PackVersion latest = versionService.getVersion(
+                            pack.getId(), pack.getLatestVersionNumber());
+                    List<String> types = latest.getComponents().stream()
+                            .map(c -> c.getType().name())
+                            .toList();
+                    updates.add(new PackUpdateInfo(
+                            pack.getSlug(), pack.getName(),
+                            pack.getLatestVersionNumber(),
+                            latest.getChangelog(), latest.getPublishedAt(), types));
+                }
+            });
+        }
+        return ResponseEntity.ok(updates);
     }
 
     public record DownloadRequest(List<String> componentTypes) {}

@@ -38,6 +38,9 @@ public class PackImportService {
     private final TraitDefinitionRepository traitRepo;
     private final ClassificationCategoryRepository categoryRepo;
     private final GovernancePolicyRepository policyRepo;
+    private final InstalledPackRepository installedPackRepo;
+    private final PackUpdateAvailableRepository packUpdateRepo;
+    private final ImportItemSnapshotRepository snapshotRepo;
 
     public PackImportService(
             LegislationRepository legislationRepo,
@@ -48,7 +51,10 @@ public class PackImportService {
             PiiTypeDefinitionRepository piiTypeRepo,
             TraitDefinitionRepository traitRepo,
             ClassificationCategoryRepository categoryRepo,
-            GovernancePolicyRepository policyRepo) {
+            GovernancePolicyRepository policyRepo,
+            InstalledPackRepository installedPackRepo,
+            PackUpdateAvailableRepository packUpdateRepo,
+            ImportItemSnapshotRepository snapshotRepo) {
         this.legislationRepo = legislationRepo;
         this.sensitivityRepo = sensitivityRepo;
         this.retentionRepo = retentionRepo;
@@ -58,6 +64,9 @@ public class PackImportService {
         this.traitRepo = traitRepo;
         this.categoryRepo = categoryRepo;
         this.policyRepo = policyRepo;
+        this.installedPackRepo = installedPackRepo;
+        this.packUpdateRepo = packUpdateRepo;
+        this.snapshotRepo = snapshotRepo;
     }
 
     // ── Import modes ─────────────────────────────────
@@ -141,8 +150,98 @@ public class PackImportService {
         log.info("Import complete: {} created, {} updated, {} skipped, {} failed",
                 totalCreated, totalUpdated, totalSkipped, totalFailed);
 
+        // Save import snapshots for diff/conflict detection
+        if (mode != ImportMode.PREVIEW && !ctx.snapshots.isEmpty()) {
+            try {
+                if (mode == ImportMode.OVERWRITE) {
+                    snapshotRepo.deleteAllByPackSlug(packSlug);
+                }
+                snapshotRepo.saveAll(ctx.snapshots);
+                log.info("Saved {} import snapshots for pack {}", ctx.snapshots.size(), packSlug);
+            } catch (Exception e) {
+                log.warn("Failed to save import snapshots (non-fatal): {}", e.getMessage());
+            }
+        }
+
+        // Record the installed pack for update observer (skip for preview mode)
+        if (mode != ImportMode.PREVIEW && (totalCreated > 0 || totalUpdated > 0)) {
+            recordInstallation(packSlug, version, importedAt, results);
+        }
+
         return new ImportResult(packSlug, version.versionNumber(), mode,
                 results, totalCreated, totalUpdated, totalSkipped, totalFailed, errors);
+    }
+
+    private void recordInstallation(String packSlug, PackVersionDto version,
+                                     Instant importedAt, List<ComponentResult> results) {
+        try {
+            InstalledPack installed = installedPackRepo.findByPackSlug(packSlug)
+                    .orElseGet(InstalledPack::new);
+            installed.setPackSlug(packSlug);
+            installed.setPackName(packSlug); // best available — hub name not in the DTO
+            installed.setInstalledVersion(version.versionNumber());
+            installed.setImportedAt(importedAt);
+            installed.setComponentTypesImported(
+                    results.stream().map(ComponentResult::componentType).toList());
+            installedPackRepo.save(installed);
+
+            // Clear any stale update notification for this pack
+            packUpdateRepo.deleteByPackSlug(packSlug);
+
+            log.info("Recorded installed pack: {} v{}", packSlug, version.versionNumber());
+        } catch (Exception e) {
+            log.warn("Failed to record installed pack (non-fatal): {}", e.getMessage());
+        }
+    }
+
+    // ── Selective import (per-item accept/reject) ─────
+
+    public record SelectedItem(String componentType, String itemKey) {}
+
+    public ImportResult importSelectedItems(PackVersionDto version, String packSlug, List<SelectedItem> selections) {
+        log.info("Selective import for pack {} v{}: {} items selected", packSlug, version.versionNumber(), selections.size());
+
+        Set<String> selectionKeys = selections.stream()
+                .map(s -> s.componentType() + "::" + s.itemKey())
+                .collect(Collectors.toSet());
+
+        // Filter hub data to only selected items
+        List<HubPackDto.PackComponentDto> filteredComponents = new ArrayList<>();
+        for (PackComponentDto comp : version.components()) {
+            List<Map<String, Object>> filteredData = comp.data().stream()
+                    .filter(item -> {
+                        String key = extractItemKey(comp.type(), item);
+                        return key != null && selectionKeys.contains(comp.type() + "::" + key);
+                    })
+                    .toList();
+            if (!filteredData.isEmpty()) {
+                filteredComponents.add(new PackComponentDto(comp.type(), comp.name(),
+                        comp.description(), filteredData.size(), new ArrayList<>(filteredData)));
+            }
+        }
+
+        // Create a filtered version DTO and run through normal import in OVERWRITE mode
+        PackVersionDto filteredVersion = new PackVersionDto(
+                version.id(), version.packId(), version.versionNumber(),
+                version.changelog(), version.publishedBy(), version.publishedAt(),
+                filteredComponents, version.compatibilityVersion());
+
+        return importPack(filteredVersion, packSlug, ImportMode.OVERWRITE);
+    }
+
+    private static String extractItemKey(String componentType, Map<String, Object> item) {
+        return switch (componentType) {
+            case "LEGISLATION" -> str(item, "key");
+            case "SENSITIVITY_DEFINITIONS" -> str(item, "key");
+            case "RETENTION_SCHEDULES" -> str(item, "name");
+            case "STORAGE_TIERS" -> str(item, "name");
+            case "METADATA_SCHEMAS" -> str(item, "name");
+            case "PII_TYPE_DEFINITIONS" -> str(item, "type");
+            case "TRAIT_DEFINITIONS" -> str(item, "key");
+            case "TAXONOMY_CATEGORIES" -> str(item, "name");
+            case "GOVERNANCE_POLICIES" -> str(item, "name");
+            default -> null;
+        };
     }
 
     // ── Component dispatch ───────────────────────────
@@ -179,7 +278,10 @@ public class PackImportService {
                 if (ctx.mode == ImportMode.OVERWRITE) {
                     Legislation law = existing.get();
                     applyLegislation(law, item, ctx);
-                    if (ctx.mode != ImportMode.PREVIEW) legislationRepo.save(law);
+                    if (ctx.mode != ImportMode.PREVIEW) {
+                        legislationRepo.save(law);
+                        ctx.recordSnapshot("LEGISLATION", key, law.getId(), item);
+                    }
                     ctx.legislationKeyToId.put(key, law.getId());
                     updated++;
                     details.add("Updated: " + key);
@@ -192,6 +294,7 @@ public class PackImportService {
                 applyLegislation(law, item, ctx);
                 if (ctx.mode != ImportMode.PREVIEW) {
                     law = legislationRepo.save(law);
+                    ctx.recordSnapshot("LEGISLATION", key, law.getId(), item);
                 }
                 ctx.legislationKeyToId.put(key, law.getId());
                 created++;
@@ -230,7 +333,10 @@ public class PackImportService {
                 if (ctx.mode == ImportMode.OVERWRITE) {
                     SensitivityDefinition def = existing.get();
                     applySensitivity(def, item, ctx);
-                    if (ctx.mode != ImportMode.PREVIEW) sensitivityRepo.save(def);
+                    if (ctx.mode != ImportMode.PREVIEW) {
+                        sensitivityRepo.save(def);
+                        ctx.recordSnapshot("SENSITIVITY_DEFINITIONS", key, def.getId(), item);
+                    }
                     updated++;
                     details.add("Updated: " + key);
                 } else {
@@ -239,7 +345,10 @@ public class PackImportService {
             } else {
                 SensitivityDefinition def = new SensitivityDefinition();
                 applySensitivity(def, item, ctx);
-                if (ctx.mode != ImportMode.PREVIEW) sensitivityRepo.save(def);
+                if (ctx.mode != ImportMode.PREVIEW) {
+                    def = sensitivityRepo.save(def);
+                    ctx.recordSnapshot("SENSITIVITY_DEFINITIONS", key, def.getId(), item);
+                }
                 created++;
                 details.add("Created: " + key);
             }
@@ -283,7 +392,10 @@ public class PackImportService {
                 if (ctx.mode == ImportMode.OVERWRITE) {
                     RetentionSchedule rs = existingList.getFirst();
                     applyRetention(rs, item, ctx);
-                    if (ctx.mode != ImportMode.PREVIEW) retentionRepo.save(rs);
+                    if (ctx.mode != ImportMode.PREVIEW) {
+                        retentionRepo.save(rs);
+                        ctx.recordSnapshot("RETENTION_SCHEDULES", name, rs.getId(), item);
+                    }
                     ctx.retentionNameToId.put(name, rs.getId());
                     updated++;
                     details.add("Updated: " + name);
@@ -296,6 +408,7 @@ public class PackImportService {
                 applyRetention(rs, item, ctx);
                 if (ctx.mode != ImportMode.PREVIEW) {
                     rs = retentionRepo.save(rs);
+                    ctx.recordSnapshot("RETENTION_SCHEDULES", name, rs.getId(), item);
                 }
                 ctx.retentionNameToId.put(name, rs.getId());
                 created++;
@@ -346,7 +459,10 @@ public class PackImportService {
                 if (ctx.mode == ImportMode.OVERWRITE) {
                     StorageTier tier = existingList.getFirst();
                     applyStorageTier(tier, item, ctx);
-                    if (ctx.mode != ImportMode.PREVIEW) storageTierRepo.save(tier);
+                    if (ctx.mode != ImportMode.PREVIEW) {
+                        storageTierRepo.save(tier);
+                        ctx.recordSnapshot("STORAGE_TIERS", name, tier.getId(), item);
+                    }
                     updated++;
                     details.add("Updated: " + name);
                 } else {
@@ -355,7 +471,10 @@ public class PackImportService {
             } else {
                 StorageTier tier = new StorageTier();
                 applyStorageTier(tier, item, ctx);
-                if (ctx.mode != ImportMode.PREVIEW) storageTierRepo.save(tier);
+                if (ctx.mode != ImportMode.PREVIEW) {
+                    tier = storageTierRepo.save(tier);
+                    ctx.recordSnapshot("STORAGE_TIERS", name, tier.getId(), item);
+                }
                 created++;
                 details.add("Created: " + name);
             }
@@ -390,7 +509,10 @@ public class PackImportService {
                 if (ctx.mode == ImportMode.OVERWRITE) {
                     MetadataSchema schema = existing.get();
                     applyMetadataSchema(schema, item, ctx);
-                    if (ctx.mode != ImportMode.PREVIEW) metadataSchemaRepo.save(schema);
+                    if (ctx.mode != ImportMode.PREVIEW) {
+                        metadataSchemaRepo.save(schema);
+                        ctx.recordSnapshot("METADATA_SCHEMAS", name, schema.getId(), item);
+                    }
                     ctx.schemaNameToId.put(name, schema.getId());
                     updated++;
                     details.add("Updated: " + name);
@@ -403,6 +525,7 @@ public class PackImportService {
                 applyMetadataSchema(schema, item, ctx);
                 if (ctx.mode != ImportMode.PREVIEW) {
                     schema = metadataSchemaRepo.save(schema);
+                    ctx.recordSnapshot("METADATA_SCHEMAS", name, schema.getId(), item);
                 }
                 ctx.schemaNameToId.put(name, schema.getId());
                 created++;
@@ -460,7 +583,10 @@ public class PackImportService {
                 if (ctx.mode == ImportMode.OVERWRITE) {
                     PiiTypeDefinition def = existing.get();
                     applyPiiType(def, item, ctx);
-                    if (ctx.mode != ImportMode.PREVIEW) piiTypeRepo.save(def);
+                    if (ctx.mode != ImportMode.PREVIEW) {
+                        piiTypeRepo.save(def);
+                        ctx.recordSnapshot("PII_TYPE_DEFINITIONS", type, def.getId(), item);
+                    }
                     updated++;
                     details.add("Updated: " + type);
                 } else {
@@ -469,7 +595,10 @@ public class PackImportService {
             } else {
                 PiiTypeDefinition def = new PiiTypeDefinition();
                 applyPiiType(def, item, ctx);
-                if (ctx.mode != ImportMode.PREVIEW) piiTypeRepo.save(def);
+                if (ctx.mode != ImportMode.PREVIEW) {
+                    def = piiTypeRepo.save(def);
+                    ctx.recordSnapshot("PII_TYPE_DEFINITIONS", type, def.getId(), item);
+                }
                 created++;
                 details.add("Created: " + type);
             }
@@ -503,7 +632,10 @@ public class PackImportService {
                 if (ctx.mode == ImportMode.OVERWRITE) {
                     TraitDefinition def = existing.get();
                     applyTrait(def, item, ctx);
-                    if (ctx.mode != ImportMode.PREVIEW) traitRepo.save(def);
+                    if (ctx.mode != ImportMode.PREVIEW) {
+                        traitRepo.save(def);
+                        ctx.recordSnapshot("TRAIT_DEFINITIONS", key, def.getId(), item);
+                    }
                     updated++;
                     details.add("Updated: " + key);
                 } else {
@@ -512,7 +644,10 @@ public class PackImportService {
             } else {
                 TraitDefinition def = new TraitDefinition();
                 applyTrait(def, item, ctx);
-                if (ctx.mode != ImportMode.PREVIEW) traitRepo.save(def);
+                if (ctx.mode != ImportMode.PREVIEW) {
+                    def = traitRepo.save(def);
+                    ctx.recordSnapshot("TRAIT_DEFINITIONS", key, def.getId(), item);
+                }
                 created++;
                 details.add("Created: " + key);
             }
@@ -633,7 +768,10 @@ public class PackImportService {
             if (ctx.mode == ImportMode.OVERWRITE) {
                 ClassificationCategory cat = existing.get();
                 applyCategory(cat, item, parentId, ctx);
-                if (ctx.mode != ImportMode.PREVIEW) categoryRepo.save(cat);
+                if (ctx.mode != ImportMode.PREVIEW) {
+                    categoryRepo.save(cat);
+                    ctx.recordSnapshot("TAXONOMY_CATEGORIES", name, cat.getId(), item);
+                }
                 ctx.categoryNameToId.put(name, cat.getId());
                 details.add("Updated: " + name);
                 return new int[]{0, 1, 0};
@@ -646,6 +784,7 @@ public class PackImportService {
             applyCategory(cat, item, parentId, ctx);
             if (ctx.mode != ImportMode.PREVIEW) {
                 cat = categoryRepo.save(cat);
+                ctx.recordSnapshot("TAXONOMY_CATEGORIES", name, cat.getId(), item);
             }
             ctx.categoryNameToId.put(name, cat.getId());
             details.add("Created: " + name);
@@ -773,7 +912,10 @@ public class PackImportService {
                 if (ctx.mode == ImportMode.OVERWRITE) {
                     GovernancePolicy policy = existingList.getFirst();
                     applyPolicy(policy, item, ctx);
-                    if (ctx.mode != ImportMode.PREVIEW) policyRepo.save(policy);
+                    if (ctx.mode != ImportMode.PREVIEW) {
+                        policyRepo.save(policy);
+                        ctx.recordSnapshot("GOVERNANCE_POLICIES", name, policy.getId(), item);
+                    }
                     updated++;
                     details.add("Updated: " + name);
                 } else {
@@ -782,7 +924,10 @@ public class PackImportService {
             } else {
                 GovernancePolicy policy = new GovernancePolicy();
                 applyPolicy(policy, item, ctx);
-                if (ctx.mode != ImportMode.PREVIEW) policyRepo.save(policy);
+                if (ctx.mode != ImportMode.PREVIEW) {
+                    policy = policyRepo.save(policy);
+                    ctx.recordSnapshot("GOVERNANCE_POLICIES", name, policy.getId(), item);
+                }
                 created++;
                 details.add("Created: " + name);
             }
@@ -837,7 +982,16 @@ public class PackImportService {
 
     // ── Import context ───────────────────────────────
 
-    private static class ImportContext {
+    public static final Set<String> SNAPSHOT_EXCLUDED_FIELDS = Set.of(
+            "sourcePackSlug", "sourcePackVersion", "importedAt", "id", "createdAt", "createdBy");
+
+    public static Map<String, Object> stripProvenanceFields(Map<String, Object> data) {
+        Map<String, Object> clean = new LinkedHashMap<>(data);
+        SNAPSHOT_EXCLUDED_FIELDS.forEach(clean::remove);
+        return clean;
+    }
+
+    static class ImportContext {
         final String packSlug;
         final int packVersion;
         final Instant importedAt;
@@ -849,11 +1003,26 @@ public class PackImportService {
         final Map<String, String> schemaNameToId = new HashMap<>();
         final Map<String, String> categoryNameToId = new HashMap<>();
 
+        // Snapshots to save after import
+        final List<ImportItemSnapshot> snapshots = new ArrayList<>();
+
         ImportContext(String packSlug, int packVersion, Instant importedAt, ImportMode mode) {
             this.packSlug = packSlug;
             this.packVersion = packVersion;
             this.importedAt = importedAt;
             this.mode = mode;
+        }
+
+        void recordSnapshot(String componentType, String itemKey, String entityId, Map<String, Object> hubData) {
+            ImportItemSnapshot snap = new ImportItemSnapshot();
+            snap.setPackSlug(packSlug);
+            snap.setPackVersion(packVersion);
+            snap.setComponentType(componentType);
+            snap.setItemKey(itemKey);
+            snap.setEntityId(entityId);
+            snap.setSnapshotFields(stripProvenanceFields(hubData));
+            snap.setImportedAt(importedAt);
+            snapshots.add(snap);
         }
     }
 

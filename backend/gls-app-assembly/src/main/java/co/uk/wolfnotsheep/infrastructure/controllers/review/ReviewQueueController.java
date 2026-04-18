@@ -17,6 +17,7 @@ import co.uk.wolfnotsheep.governance.repositories.BlockFeedbackRepository;
 import co.uk.wolfnotsheep.governance.repositories.ClassificationCategoryRepository;
 import co.uk.wolfnotsheep.governance.repositories.PipelineBlockRepository;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
+import co.uk.wolfnotsheep.infrastructure.services.BertTrainingDataCollector;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
@@ -42,19 +43,22 @@ public class ReviewQueueController {
     private final BlockFeedbackRepository blockFeedbackRepo;
     private final PipelineBlockRepository blockRepo;
     private final ClassificationCategoryRepository categoryRepo;
+    private final BertTrainingDataCollector bertCollector;
 
     public ReviewQueueController(DocumentService documentService,
                                  GovernanceService governanceService,
                                  AuditEventRepository auditEventRepository,
                                  BlockFeedbackRepository blockFeedbackRepo,
                                  PipelineBlockRepository blockRepo,
-                                 ClassificationCategoryRepository categoryRepo) {
+                                 ClassificationCategoryRepository categoryRepo,
+                                 BertTrainingDataCollector bertCollector) {
         this.documentService = documentService;
         this.governanceService = governanceService;
         this.auditEventRepository = auditEventRepository;
         this.blockFeedbackRepo = blockFeedbackRepo;
         this.blockRepo = blockRepo;
         this.categoryRepo = categoryRepo;
+        this.bertCollector = bertCollector;
     }
 
     @GetMapping
@@ -103,6 +107,7 @@ public class ReviewQueueController {
             correction.setMimeType(doc.getMimeType());
             correction.setCorrectedBy(user.getUsername());
             governanceService.saveCorrection(correction);
+            bertCollector.collectCorrection(correction);
         }
 
         // Advance status — document goes to inbox for filing
@@ -193,6 +198,7 @@ public class ReviewQueueController {
             correction.setKeywords(request.tags());
             correction.setCorrectedBy(user.getUsername());
             governanceService.saveCorrection(correction);
+            bertCollector.collectCorrection(correction);
 
             // Wire feedback to the Classification Prompt block
             createBlockFeedback(documentId, BlockFeedback.FeedbackType.CORRECTION,

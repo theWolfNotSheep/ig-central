@@ -2,6 +2,8 @@ package co.uk.wolfnotsheep.infrastructure.services;
 
 import co.uk.wolfnotsheep.document.models.DocumentModel;
 import co.uk.wolfnotsheep.document.services.DocumentService;
+import co.uk.wolfnotsheep.governance.models.ClassificationCorrection;
+import co.uk.wolfnotsheep.governance.models.ClassificationCorrection.CorrectionType;
 import co.uk.wolfnotsheep.governance.models.DocumentClassificationResult;
 import co.uk.wolfnotsheep.governance.models.TrainingDataSample;
 import co.uk.wolfnotsheep.governance.repositories.TrainingDataSampleRepository;
@@ -12,6 +14,8 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Automatically collects training data from classified documents.
@@ -101,5 +105,67 @@ public class BertTrainingDataCollector {
         sampleRepo.save(sample);
         log.info("Auto-collected training sample for doc {} — category: {}, confidence: {}",
                 classification.getDocumentId(), classification.getCategoryName(), classification.getConfidence());
+    }
+
+    /**
+     * Collect a human correction as a verified BERT training sample.
+     * Only processes category/sensitivity corrections — PII corrections are skipped.
+     */
+    private static final Set<CorrectionType> TRAINABLE_CORRECTIONS = Set.of(
+            CorrectionType.CATEGORY_CHANGED, CorrectionType.SENSITIVITY_CHANGED,
+            CorrectionType.BOTH_CHANGED, CorrectionType.APPROVED_CORRECT);
+
+    public void collectCorrection(ClassificationCorrection correction) {
+        if (correction == null || correction.getCorrectionType() == null) return;
+        if (!TRAINABLE_CORRECTIONS.contains(correction.getCorrectionType())) return;
+
+        String docId = correction.getDocumentId();
+        if (docId == null) return;
+
+        try {
+            DocumentModel doc = documentService.getById(docId);
+            if (doc == null || doc.getExtractedText() == null || doc.getExtractedText().isBlank()) return;
+
+            // Use corrected values (or original if approved as correct)
+            String categoryId = correction.getCorrectedCategoryId() != null
+                    ? correction.getCorrectedCategoryId() : correction.getOriginalCategoryId();
+            String categoryName = correction.getCorrectedCategoryName() != null
+                    ? correction.getCorrectedCategoryName() : correction.getOriginalCategoryName();
+            String sensitivity = correction.getCorrectedSensitivity() != null
+                    ? correction.getCorrectedSensitivity().name()
+                    : (correction.getOriginalSensitivity() != null
+                            ? correction.getOriginalSensitivity().name() : "INTERNAL");
+
+            int maxLen = configService.getValue("bert.training.max_text_length", 2000);
+            String text = doc.getExtractedText();
+            if (text.length() > maxLen) text = text.substring(0, maxLen);
+
+            // Upsert: update existing sample or create new
+            Optional<TrainingDataSample> existing = sampleRepo.findBySourceDocumentId(docId);
+            TrainingDataSample sample;
+            if (existing.isPresent()) {
+                sample = existing.get();
+            } else {
+                sample = new TrainingDataSample();
+                sample.setSourceDocumentId(docId);
+                sample.setText(text);
+                sample.setFileName(doc.getOriginalFileName());
+                sample.setCreatedAt(Instant.now());
+            }
+
+            sample.setCategoryId(categoryId);
+            sample.setCategoryName(categoryName);
+            sample.setSensitivityLabel(sensitivity);
+            sample.setSource("CORRECTION");
+            sample.setConfidence(1.0);
+            sample.setVerified(true);
+            sample.setUpdatedAt(Instant.now());
+
+            sampleRepo.save(sample);
+            log.info("Collected correction as training sample for doc {} — category: {}",
+                    docId, categoryName);
+        } catch (Exception e) {
+            log.warn("Failed to collect correction as training sample: {}", e.getMessage());
+        }
     }
 }

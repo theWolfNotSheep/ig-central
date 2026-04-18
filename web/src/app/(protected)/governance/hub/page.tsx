@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
     Search, Download, Star, Globe, Building, BookOpen,
     Loader2, AlertTriangle, Package, ChevronRight, Filter,
+    CheckCircle, ArrowUpCircle, RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
@@ -20,6 +21,17 @@ type Pack = {
 
 type PageResult = { content: Pack[]; totalElements: number; totalPages: number; number: number };
 
+type InstalledPackStatus = {
+    packSlug: string;
+    packName: string;
+    installedVersion: number;
+    importedAt: string;
+    componentTypes: string[];
+    updateAvailable: boolean;
+    latestVersion: number | null;
+    changelog: string | null;
+};
+
 export default function GovernanceHubPage() {
     const [configured, setConfigured] = useState<boolean | null>(null);
     const [results, setResults] = useState<PageResult | null>(null);
@@ -27,10 +39,20 @@ export default function GovernanceHubPage() {
     const [query, setQuery] = useState("");
     const [jurisdiction, setJurisdiction] = useState("");
     const [page, setPage] = useState(0);
+    const [installed, setInstalled] = useState<Map<string, InstalledPackStatus>>(new Map());
+    const [checking, setChecking] = useState(false);
+
+    const loadInstalled = useCallback(async () => {
+        try {
+            const { data } = await api.get("/admin/governance/updates/installed");
+            setInstalled(new Map((data as InstalledPackStatus[]).map(p => [p.packSlug, p])));
+        } catch { /* hub not configured or no packs */ }
+    }, []);
 
     useEffect(() => {
         api.get("/admin/governance-hub/status").then(({ data }) => setConfigured(data.configured)).catch(() => setConfigured(false));
-    }, []);
+        loadInstalled();
+    }, [loadInstalled]);
 
     const search = useCallback(async () => {
         setLoading(true);
@@ -72,6 +94,21 @@ export default function GovernanceHubPage() {
                         Browse and import governance frameworks from the shared marketplace
                     </p>
                 </div>
+                {installed.size > 0 && (
+                    <button onClick={async () => {
+                        setChecking(true);
+                        try {
+                            await api.post("/admin/governance/updates/check-now");
+                            await loadInstalled();
+                            toast.success("Hub check complete");
+                        } catch { toast.error("Hub check failed"); }
+                        finally { setChecking(false); }
+                    }} disabled={checking}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                        <RefreshCw className={`size-3.5 ${checking ? "animate-spin" : ""}`} />
+                        {checking ? "Checking..." : "Check for updates"}
+                    </button>
+                )}
             </div>
 
             {/* Search bar */}
@@ -116,9 +153,13 @@ export default function GovernanceHubPage() {
                 </div>
             ) : (
                 <div className="space-y-4">
-                    {results?.content.map(pack => (
+                    {results?.content.map(pack => {
+                        const status = installed.get(pack.slug);
+                        return (
                         <Link key={pack.id} href={`/governance/hub/${pack.slug}`}
-                            className="block bg-white rounded-lg shadow-sm border border-gray-200 p-5 hover:border-blue-200 hover:shadow-md transition-all group">
+                            className={`block bg-white rounded-lg shadow-sm border p-5 hover:shadow-md transition-all group ${
+                                status?.updateAvailable ? "border-amber-200 hover:border-amber-300" : "border-gray-200 hover:border-blue-200"
+                            }`}>
                             <div className="flex items-start justify-between gap-4">
                                 <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2 mb-1">
@@ -129,8 +170,22 @@ export default function GovernanceHubPage() {
                                             <span className="px-2 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 rounded-full">Featured</span>
                                         )}
                                         <span className="text-xs text-gray-400">v{pack.latestVersionNumber}</span>
+                                        {status && !status.updateAvailable && (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-green-100 text-green-700 rounded-full">
+                                                <CheckCircle className="size-3" /> Installed v{status.installedVersion}
+                                            </span>
+                                        )}
+                                        {status?.updateAvailable && (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-700 rounded-full">
+                                                <ArrowUpCircle className="size-3" /> v{status.installedVersion} installed — v{status.latestVersion} available
+                                            </span>
+                                        )}
                                     </div>
                                     <p className="text-sm text-gray-600 line-clamp-2 mb-3">{pack.description}</p>
+
+                                    {status?.updateAvailable && status.changelog && (
+                                        <p className="text-xs text-amber-600 mb-2">{status.changelog}</p>
+                                    )}
 
                                     <div className="flex items-center gap-4 flex-wrap">
                                         <span className="inline-flex items-center gap-1 text-xs text-gray-500">
@@ -156,6 +211,11 @@ export default function GovernanceHubPage() {
                                         {pack.tags.slice(0, 3).map(t => (
                                             <span key={t} className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-500 rounded">{t}</span>
                                         ))}
+                                        {status && status.componentTypes.map(ct => (
+                                            <span key={ct} className="px-1.5 py-0.5 text-[10px] bg-indigo-50 text-indigo-600 rounded">
+                                                {ct.replace(/_/g, " ").toLowerCase()}
+                                            </span>
+                                        ))}
                                     </div>
                                 </div>
 
@@ -164,7 +224,8 @@ export default function GovernanceHubPage() {
                                 </div>
                             </div>
                         </Link>
-                    ))}
+                        );
+                    })}
                 </div>
             )}
 

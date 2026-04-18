@@ -24,17 +24,28 @@ type PackVersion = {
     components: { type: string; name: string; description: string; itemCount: number }[];
 };
 
-type ComponentResult = {
-    componentType: string; componentName: string;
-    created: number; updated: number; skipped: number; failed: number;
-    details: string[];
-};
-
 type ImportResult = {
     packSlug: string; packVersion: number; mode: string;
-    components: ComponentResult[];
+    components: { componentType: string; componentName: string; created: number; updated: number; skipped: number; failed: number; details: string[] }[];
     totalCreated: number; totalUpdated: number; totalSkipped: number; totalFailed: number;
     errors: string[];
+};
+
+// Diff types
+type FieldDiff = { field: string; currentValue: any; hubValue: any };
+type ItemDiff = {
+    componentType: string; itemKey: string; displayName: string;
+    status: "NEW" | "CHANGED" | "UNCHANGED" | "CONFLICT";
+    hubChanges: FieldDiff[]; localChanges: FieldDiff[];
+};
+type ComponentDiff = {
+    componentType: string; componentName: string; items: ItemDiff[];
+    newCount: number; changedCount: number; conflictCount: number; unchangedCount: number;
+};
+type PackDiffResult = {
+    packSlug: string; currentVersion: number; newVersion: number;
+    components: ComponentDiff[];
+    totalNew: number; totalChanged: number; totalConflicts: number; totalUnchanged: number;
 };
 
 const COMPONENT_ICONS: Record<string, { icon: typeof FileText; color: string }> = {
@@ -50,6 +61,13 @@ const COMPONENT_ICONS: Record<string, { icon: typeof FileText; color: string }> 
     LEGISLATION: { icon: Scale, color: "text-orange-500" },
 };
 
+const STATUS_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+    NEW: { bg: "bg-green-100", text: "text-green-700", label: "New" },
+    CHANGED: { bg: "bg-blue-100", text: "text-blue-700", label: "Changed" },
+    CONFLICT: { bg: "bg-amber-100", text: "text-amber-700", label: "Conflict" },
+    UNCHANGED: { bg: "bg-gray-100", text: "text-gray-500", label: "Unchanged" },
+};
+
 export default function PackDetailPage() {
     const { slug } = useParams<{ slug: string }>();
     const router = useRouter();
@@ -58,14 +76,18 @@ export default function PackDetailPage() {
     const [selectedVersion, setSelectedVersion] = useState<PackVersion | null>(null);
     const [loading, setLoading] = useState(true);
     const [importing, setImporting] = useState(false);
-    const [previewing, setPreviewing] = useState(false);
+    const [diffing, setDiffing] = useState(false);
     const [selectedComponents, setSelectedComponents] = useState<Set<string>>(new Set());
-    const [importMode, setImportMode] = useState<"MERGE" | "OVERWRITE">("MERGE");
 
-    // Preview / result state
-    const [previewResult, setPreviewResult] = useState<ImportResult | null>(null);
+    // Diff state
+    const [diffResult, setDiffResult] = useState<PackDiffResult | null>(null);
+    const [showDiff, setShowDiff] = useState(false);
+    const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+    const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+    const [showUnchanged, setShowUnchanged] = useState(false);
+
+    // Result state
     const [importResult, setImportResult] = useState<ImportResult | null>(null);
-    const [showPreview, setShowPreview] = useState(false);
     const [showResult, setShowResult] = useState(false);
 
     useEffect(() => {
@@ -92,44 +114,75 @@ export default function PackDetailPage() {
         });
     };
 
-    const handlePreview = async () => {
+    const handleDiff = async () => {
         if (!selectedVersion || selectedComponents.size === 0) return;
-        setPreviewing(true);
+        setDiffing(true);
         try {
-            const { data } = await api.post("/admin/governance/import/preview", {
+            const { data } = await api.post("/admin/governance/import/diff", {
                 packSlug: slug,
                 versionNumber: selectedVersion.versionNumber,
                 componentTypes: [...selectedComponents],
-                mode: importMode,
             });
-            setPreviewResult(data);
-            setShowPreview(true);
+            setDiffResult(data);
+            // Auto-select NEW and CHANGED, leave CONFLICT unchecked
+            const autoSelected = new Set<string>();
+            for (const comp of data.components) {
+                for (const item of comp.items) {
+                    const key = `${item.componentType}::${item.itemKey}`;
+                    if (item.status === "NEW" || item.status === "CHANGED") {
+                        autoSelected.add(key);
+                    }
+                }
+            }
+            setSelectedItems(autoSelected);
+            setExpandedItems(new Set());
+            setShowDiff(true);
         } catch {
-            toast.error("Preview failed");
+            toast.error("Diff failed");
         } finally {
-            setPreviewing(false);
+            setDiffing(false);
         }
     };
 
-    const handleImport = async () => {
-        if (!selectedVersion || selectedComponents.size === 0) return;
+    const handleSelectiveImport = async () => {
+        if (!selectedVersion || selectedItems.size === 0) return;
         setImporting(true);
-        setShowPreview(false);
         try {
-            const { data } = await api.post("/admin/governance/import", {
+            const items = [...selectedItems].map(key => {
+                const [componentType, itemKey] = key.split("::");
+                return { componentType, itemKey };
+            });
+            const { data } = await api.post("/admin/governance/import/selective", {
                 packSlug: slug,
                 versionNumber: selectedVersion.versionNumber,
                 componentTypes: [...selectedComponents],
-                mode: importMode,
+                selectedItems: items,
             });
             setImportResult(data);
+            setShowDiff(false);
             setShowResult(true);
-            toast.success(`Imported ${data.totalCreated} new items, updated ${data.totalUpdated}`);
+            toast.success(`Applied ${data.totalCreated + data.totalUpdated} changes`);
         } catch {
             toast.error("Import failed");
         } finally {
             setImporting(false);
         }
+    };
+
+    const toggleItem = (key: string) => {
+        setSelectedItems(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return next;
+        });
+    };
+
+    const toggleExpanded = (key: string) => {
+        setExpandedItems(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return next;
+        });
     };
 
     if (loading) return <div className="text-center py-12"><Loader2 className="size-8 animate-spin text-gray-300 mx-auto" /></div>;
@@ -154,7 +207,6 @@ export default function PackDetailPage() {
                             {pack.author.verified && <span className="flex items-center gap-1 text-green-600"><Star className="size-3.5" /> Verified</span>}
                         </div>
                         <p className="text-sm text-gray-600 leading-relaxed">{pack.description}</p>
-
                         <div className="flex flex-wrap gap-1 mt-3">
                             {pack.regulations.map(r => (
                                 <span key={r} className="px-2 py-0.5 text-xs bg-blue-50 text-blue-600 rounded">{r}</span>
@@ -199,22 +251,10 @@ export default function PackDetailPage() {
                         </div>
                     )}
 
-                    {/* Import mode selector */}
-                    <div className="mt-4 flex items-center gap-3">
-                        <label className="text-xs font-medium text-gray-600">Import mode:</label>
-                        <select value={importMode} onChange={e => setImportMode(e.target.value as any)}
-                            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white">
-                            <option value="MERGE">Merge (skip existing)</option>
-                            <option value="OVERWRITE">Overwrite (replace existing)</option>
-                        </select>
-                    </div>
-
-                    {/* Import button */}
-                    <button onClick={handlePreview} disabled={previewing || importing || selectedComponents.size === 0}
+                    <button onClick={handleDiff} disabled={diffing || importing || selectedComponents.size === 0}
                         className="mt-3 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors">
-                        {previewing ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-                        {previewing ? "Previewing..." : importing ? "Importing..." :
-                            `Preview Import of ${selectedComponents.size} Component${selectedComponents.size !== 1 ? "s" : ""}`}
+                        {diffing ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                        {diffing ? "Computing diff..." : `Review Changes for ${selectedComponents.size} Component${selectedComponents.size !== 1 ? "s" : ""}`}
                     </button>
                 </div>
 
@@ -244,81 +284,152 @@ export default function PackDetailPage() {
                 </div>
             </div>
 
-            {/* Preview dialog */}
-            {showPreview && previewResult && (
+            {/* ── Diff dialog ─────────────────────────── */}
+            {showDiff && diffResult && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[80vh] overflow-hidden flex flex-col">
+                    <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col">
                         <div className="p-5 border-b border-gray-200">
-                            <h2 className="text-lg font-semibold text-gray-900">Import Preview</h2>
+                            <h2 className="text-lg font-semibold text-gray-900">Review Changes</h2>
                             <p className="text-sm text-gray-500 mt-1">
-                                {pack.name} v{previewResult.packVersion} — {importMode.toLowerCase()} mode
+                                {pack.name} — v{diffResult.currentVersion} → v{diffResult.newVersion}
                             </p>
+
+                            {/* Summary bar */}
+                            <div className="flex gap-3 mt-3">
+                                {diffResult.totalNew > 0 && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-green-100 text-green-700 rounded-full">
+                                        <CheckCircle2 className="size-3" /> {diffResult.totalNew} new
+                                    </span>
+                                )}
+                                {diffResult.totalChanged > 0 && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+                                        {diffResult.totalChanged} changed
+                                    </span>
+                                )}
+                                {diffResult.totalConflicts > 0 && (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-amber-100 text-amber-700 rounded-full">
+                                        <AlertTriangle className="size-3" /> {diffResult.totalConflicts} conflict{diffResult.totalConflicts !== 1 ? "s" : ""}
+                                    </span>
+                                )}
+                                {diffResult.totalUnchanged > 0 && (
+                                    <button onClick={() => setShowUnchanged(!showUnchanged)}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-gray-100 text-gray-500 rounded-full hover:bg-gray-200">
+                                        {diffResult.totalUnchanged} unchanged {showUnchanged ? "(hide)" : "(show)"}
+                                    </button>
+                                )}
+                            </div>
                         </div>
 
-                        <div className="p-5 overflow-y-auto flex-1">
-                            {/* Summary */}
-                            <div className="grid grid-cols-4 gap-3 mb-5">
-                                <SummaryBox icon={CheckCircle2} color="text-green-600 bg-green-50"
-                                    label="New" count={previewResult.totalCreated} />
-                                <SummaryBox icon={ArrowLeft} color="text-blue-600 bg-blue-50"
-                                    label="Updated" count={previewResult.totalUpdated} />
-                                <SummaryBox icon={SkipForward} color="text-gray-500 bg-gray-50"
-                                    label="Skipped" count={previewResult.totalSkipped} />
-                                <SummaryBox icon={XCircle} color="text-red-600 bg-red-50"
-                                    label="Failed" count={previewResult.totalFailed} />
-                            </div>
+                        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                            {diffResult.components.map(comp => {
+                                const ci = COMPONENT_ICONS[comp.componentType] ?? { icon: Package, color: "text-gray-500" };
+                                const Icon = ci.icon;
+                                const visibleItems = showUnchanged ? comp.items : comp.items.filter(i => i.status !== "UNCHANGED");
+                                if (visibleItems.length === 0) return null;
 
-                            {/* Component breakdown */}
-                            <div className="space-y-3">
-                                {previewResult.components.map(comp => (
-                                    <div key={comp.componentType} className="border border-gray-200 rounded-lg p-3">
-                                        <div className="flex items-center justify-between mb-1">
-                                            <span className="text-sm font-medium text-gray-900">{comp.componentName}</span>
-                                            <span className="text-xs text-gray-400">{comp.componentType}</span>
+                                return (
+                                    <div key={comp.componentType}>
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <Icon className={`size-4 ${ci.color}`} />
+                                            <span className="text-sm font-semibold text-gray-900">{comp.componentName}</span>
+                                            <span className="text-xs text-gray-400">{visibleItems.length} item{visibleItems.length !== 1 ? "s" : ""}</span>
                                         </div>
-                                        <div className="flex gap-3 text-xs text-gray-500">
-                                            {comp.created > 0 && <span className="text-green-600">{comp.created} new</span>}
-                                            {comp.updated > 0 && <span className="text-blue-600">{comp.updated} updated</span>}
-                                            {comp.skipped > 0 && <span className="text-gray-400">{comp.skipped} skipped</span>}
-                                            {comp.failed > 0 && <span className="text-red-600">{comp.failed} failed</span>}
-                                        </div>
-                                        {comp.details.length > 0 && (
-                                            <div className="mt-2 text-xs text-gray-400 space-y-0.5 max-h-24 overflow-y-auto">
-                                                {comp.details.map((d, i) => <div key={i}>{d}</div>)}
-                                            </div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
 
-                            {previewResult.errors.length > 0 && (
-                                <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-                                    <div className="text-sm font-medium text-red-700 mb-1 flex items-center gap-1">
-                                        <AlertTriangle className="size-4" /> Errors
+                                        <div className="space-y-1">
+                                            {visibleItems.map(item => {
+                                                const key = `${item.componentType}::${item.itemKey}`;
+                                                const checked = selectedItems.has(key);
+                                                const expanded = expandedItems.has(key);
+                                                const style = STATUS_STYLES[item.status];
+                                                const hasDetails = item.hubChanges.length > 0 || item.localChanges.length > 0;
+
+                                                return (
+                                                    <div key={key} className={`rounded-lg border ${
+                                                        item.status === "CONFLICT" ? "border-amber-200" : "border-gray-200"
+                                                    }`}>
+                                                        <div className="flex items-center gap-2 px-3 py-2">
+                                                            {item.status !== "UNCHANGED" && (
+                                                                <input type="checkbox" checked={checked}
+                                                                    onChange={() => toggleItem(key)}
+                                                                    className="rounded border-gray-300 text-blue-600 shrink-0" />
+                                                            )}
+                                                            {hasDetails && (
+                                                                <button onClick={() => toggleExpanded(key)} className="shrink-0">
+                                                                    {expanded ? <ChevronDown className="size-3.5 text-gray-400" /> : <ChevronRight className="size-3.5 text-gray-400" />}
+                                                                </button>
+                                                            )}
+                                                            <span className="text-sm text-gray-900 flex-1">{item.displayName}</span>
+                                                            <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${style.bg} ${style.text}`}>
+                                                                {style.label}
+                                                            </span>
+                                                        </div>
+
+                                                        {/* Field-level diff */}
+                                                        {expanded && hasDetails && (
+                                                            <div className="px-3 pb-3 pt-1 border-t border-gray-100">
+                                                                {item.status === "CONFLICT" && item.localChanges.length > 0 && (
+                                                                    <div className="mb-2 px-2 py-1.5 bg-amber-50 rounded text-xs text-amber-700">
+                                                                        <strong>Local changes:</strong> {item.localChanges.map(c => c.field).join(", ")}
+                                                                    </div>
+                                                                )}
+                                                                <table className="w-full text-xs">
+                                                                    <thead>
+                                                                        <tr className="text-gray-500">
+                                                                            <th className="text-left py-1 pr-2 font-medium w-1/4">Field</th>
+                                                                            <th className="text-left py-1 pr-2 font-medium w-[37.5%]">Current</th>
+                                                                            <th className="text-left py-1 font-medium w-[37.5%]">Hub</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody className="divide-y divide-gray-50">
+                                                                        {item.hubChanges.map(diff => {
+                                                                            const isConflictField = item.localChanges.some(lc => lc.field === diff.field);
+                                                                            return (
+                                                                                <tr key={diff.field} className={isConflictField ? "bg-amber-50/50" : ""}>
+                                                                                    <td className="py-1.5 pr-2 font-medium text-gray-700">
+                                                                                        {diff.field}
+                                                                                        {isConflictField && <span className="ml-1 text-amber-600">!</span>}
+                                                                                    </td>
+                                                                                    <td className="py-1.5 pr-2 text-gray-500 break-all">
+                                                                                        {formatValue(diff.currentValue)}
+                                                                                    </td>
+                                                                                    <td className="py-1.5 text-gray-900 break-all">
+                                                                                        {formatValue(diff.hubValue)}
+                                                                                    </td>
+                                                                                </tr>
+                                                                            );
+                                                                        })}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
-                                    {previewResult.errors.map((e, i) => (
-                                        <div key={i} className="text-xs text-red-600">{e}</div>
-                                    ))}
-                                </div>
-                            )}
+                                );
+                            })}
                         </div>
 
-                        <div className="p-4 border-t border-gray-200 flex gap-3 justify-end">
-                            <button onClick={() => setShowPreview(false)}
-                                className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
-                                Cancel
-                            </button>
-                            <button onClick={handleImport} disabled={importing}
-                                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 inline-flex items-center gap-2">
-                                {importing && <Loader2 className="size-4 animate-spin" />}
-                                Confirm Import
-                            </button>
+                        <div className="p-4 border-t border-gray-200 flex items-center justify-between">
+                            <span className="text-xs text-gray-500">{selectedItems.size} item{selectedItems.size !== 1 ? "s" : ""} selected</span>
+                            <div className="flex gap-3">
+                                <button onClick={() => setShowDiff(false)}
+                                    className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+                                    Cancel
+                                </button>
+                                <button onClick={handleSelectiveImport} disabled={importing || selectedItems.size === 0}
+                                    className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 inline-flex items-center gap-2">
+                                    {importing && <Loader2 className="size-4 animate-spin" />}
+                                    Apply {selectedItems.size} Selected
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Result dialog */}
+            {/* ── Result dialog ────────────────────────── */}
             {showResult && importResult && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[80vh] overflow-hidden flex flex-col">
@@ -327,19 +438,13 @@ export default function PackDetailPage() {
                                 <CheckCircle2 className="size-5 text-green-600" /> Import Complete
                             </h2>
                         </div>
-
                         <div className="p-5 overflow-y-auto flex-1">
                             <div className="grid grid-cols-4 gap-3 mb-5">
-                                <SummaryBox icon={CheckCircle2} color="text-green-600 bg-green-50"
-                                    label="Created" count={importResult.totalCreated} />
-                                <SummaryBox icon={ArrowLeft} color="text-blue-600 bg-blue-50"
-                                    label="Updated" count={importResult.totalUpdated} />
-                                <SummaryBox icon={SkipForward} color="text-gray-500 bg-gray-50"
-                                    label="Skipped" count={importResult.totalSkipped} />
-                                <SummaryBox icon={XCircle} color="text-red-600 bg-red-50"
-                                    label="Failed" count={importResult.totalFailed} />
+                                <SummaryBox icon={CheckCircle2} color="text-green-600 bg-green-50" label="Created" count={importResult.totalCreated} />
+                                <SummaryBox icon={ArrowLeft} color="text-blue-600 bg-blue-50" label="Updated" count={importResult.totalUpdated} />
+                                <SummaryBox icon={SkipForward} color="text-gray-500 bg-gray-50" label="Skipped" count={importResult.totalSkipped} />
+                                <SummaryBox icon={XCircle} color="text-red-600 bg-red-50" label="Failed" count={importResult.totalFailed} />
                             </div>
-
                             <div className="space-y-3">
                                 {importResult.components.map(comp => (
                                     <div key={comp.componentType} className="border border-gray-200 rounded-lg p-3">
@@ -353,7 +458,6 @@ export default function PackDetailPage() {
                                 ))}
                             </div>
                         </div>
-
                         <div className="p-4 border-t border-gray-200 flex gap-3 justify-end">
                             <button onClick={() => router.push("/governance")}
                                 className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
@@ -381,4 +485,12 @@ function SummaryBox({ icon: Icon, color, label, count }: {
             <div className="text-[10px] text-gray-500">{label}</div>
         </div>
     );
+}
+
+function formatValue(val: any): string {
+    if (val === null || val === undefined) return "—";
+    if (Array.isArray(val)) return val.length === 0 ? "[]" : val.join(", ");
+    if (typeof val === "object") return JSON.stringify(val);
+    if (typeof val === "boolean") return val ? "Yes" : "No";
+    return String(val);
 }

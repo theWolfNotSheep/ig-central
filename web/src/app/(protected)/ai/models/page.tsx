@@ -322,6 +322,22 @@ export default function ModelsPage() {
 /*  Training Data Management Section                                   */
 /* ------------------------------------------------------------------ */
 
+type TrainingJob = {
+    id: string;
+    status: "PENDING" | "TRAINING" | "COMPLETED" | "FAILED" | "PROMOTED";
+    modelVersion: string;
+    baseModel: string;
+    sampleCount: number;
+    categoryCount: number;
+    metrics?: { accuracy?: number; f1?: number; loss?: number; train_samples?: number; val_samples?: number };
+    modelPath?: string;
+    promoted: boolean;
+    startedBy: string;
+    startedAt: string;
+    completedAt?: string;
+    error?: string;
+};
+
 type TrainingSample = {
     id: string; text: string; categoryId: string; categoryName: string;
     sensitivityLabel: string; source: string; sourceDocumentId?: string;
@@ -364,7 +380,17 @@ function TrainingDataSection() {
     const [manualCategory, setManualCategory] = useState("");
     const [manualCategoryName, setManualCategoryName] = useState("");
 
+    // Training jobs
+    const [jobs, setJobs] = useState<TrainingJob[]>([]);
+    const [trainingInProgress, setTrainingInProgress] = useState(false);
+    const [promoting, setPromoting] = useState<string | null>(null);
+
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const loadJobs = useCallback(async () => {
+        try { const { data } = await api.get("/admin/bert/training-jobs"); setJobs(data); }
+        catch {}
+    }, []);
 
     const loadSamples = useCallback(async (p = 0) => {
         setLoading(true);
@@ -399,7 +425,14 @@ function TrainingDataSection() {
         } catch {}
     }, []);
 
-    useEffect(() => { loadSamples(); loadStats(); loadConfig(); loadCategories(); }, [loadSamples, loadStats, loadConfig, loadCategories]);
+    useEffect(() => { loadSamples(); loadStats(); loadConfig(); loadCategories(); loadJobs(); }, [loadSamples, loadStats, loadConfig, loadCategories, loadJobs]);
+
+    // Poll while training in progress
+    useEffect(() => {
+        if (!jobs.some(j => j.status === "TRAINING")) return;
+        const interval = setInterval(loadJobs, 5000);
+        return () => clearInterval(interval);
+    }, [jobs, loadJobs]);
 
     const saveConfig = async () => {
         if (!config) return;
@@ -493,6 +526,41 @@ function TrainingDataSection() {
 
             toast.success(`Exported ${data.totalSamples} samples + label map`);
         } catch { toast.error("Export failed"); }
+    };
+
+    const handleTrainSelected = async () => {
+        setTrainingInProgress(true);
+        try {
+            const { data } = await api.post("/admin/bert/training-jobs",
+                selected.size > 0 ? { selectedSampleIds: [...selected] } : {});
+            toast.success(`Training started: ${data.modelVersion} (${data.sampleCount} samples, ${data.categoryCount} categories)`);
+            loadJobs();
+        } catch (e: any) {
+            toast.error(e.response?.data?.error ?? "Failed to start training");
+        }
+        finally { setTrainingInProgress(false); }
+    };
+
+    const handlePromote = async (id: string) => {
+        setPromoting(id);
+        try {
+            const { data } = await api.post(`/admin/bert/training-jobs/${id}/promote`);
+            toast.success(`Model ${data.modelVersion} promoted — BERT classifier now using trained model`);
+            loadJobs();
+        } catch (e: any) {
+            toast.error(e.response?.data?.error ?? "Failed to promote model");
+        }
+        finally { setPromoting(null); }
+    };
+
+    const statusStyle = (s: string) => {
+        switch (s) {
+            case "TRAINING": return "bg-blue-100 text-blue-700";
+            case "COMPLETED": return "bg-green-100 text-green-700";
+            case "PROMOTED": return "bg-violet-100 text-violet-700";
+            case "FAILED": return "bg-red-100 text-red-700";
+            default: return "bg-gray-100 text-gray-700";
+        }
     };
 
     const selectCategory = (catId: string) => {
@@ -637,6 +705,12 @@ function TrainingDataSection() {
                         <span className="text-xs text-gray-400">{totalElements} total</span>
                     </div>
                     <div className="flex items-center gap-2">
+                        <button onClick={handleTrainSelected}
+                            disabled={trainingInProgress || totalElements < 10 || jobs.some(j => j.status === "TRAINING")}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-violet-600 text-white rounded-md hover:bg-violet-700 disabled:opacity-50 transition-colors">
+                            {trainingInProgress ? <Loader2 className="size-3.5 animate-spin" /> : <Cpu className="size-3.5" />}
+                            {selected.size > 0 ? `Train BERT (${selected.size} selected)` : "Train BERT (all)"}
+                        </button>
                         {selected.size > 0 && (
                             <button onClick={handleBulkDelete}
                                 className="inline-flex items-center gap-1 px-2.5 py-1 text-xs text-red-600 border border-red-200 rounded-md hover:bg-red-50">
@@ -661,6 +735,31 @@ function TrainingDataSection() {
                         <span className="text-gray-500">Auto: <strong>{sampleStats.autoCollected}</strong></span>
                         <span className="text-gray-500">Verified: <strong className="text-green-600">{sampleStats.verified}</strong></span>
                         <span className="text-gray-500">Categories: <strong>{sampleStats.categoryCount}</strong></span>
+                    </div>
+                )}
+
+                {/* Select all / deselect all */}
+                {samples.length > 0 && (
+                    <div className="px-6 py-2 border-b border-gray-100 flex items-center gap-3">
+                        <input type="checkbox"
+                            checked={samples.length > 0 && samples.every(s => selected.has(s.id))}
+                            onChange={() => {
+                                const allOnPage = samples.map(s => s.id);
+                                const allSelected = allOnPage.every(id => selected.has(id));
+                                setSelected(prev => {
+                                    const next = new Set(prev);
+                                    if (allSelected) { allOnPage.forEach(id => next.delete(id)); }
+                                    else { allOnPage.forEach(id => next.add(id)); }
+                                    return next;
+                                });
+                            }}
+                            className="rounded border-gray-300" />
+                        <span className="text-xs text-gray-500">
+                            {samples.every(s => selected.has(s.id)) ? "Deselect all" : "Select all"} on this page
+                        </span>
+                        {selected.size > 0 && (
+                            <span className="text-xs text-blue-600">{selected.size} selected</span>
+                        )}
                     </div>
                 )}
 
@@ -746,6 +845,56 @@ function TrainingDataSection() {
                                         </div>
                                     </div>
                                 ))}
+                        </div>
+                    </div>
+                )}
+
+                {/* Training Jobs */}
+                {jobs.length > 0 && (
+                    <div className="px-6 py-4 border-t border-gray-200">
+                        <h4 className="text-[10px] font-semibold text-gray-500 uppercase mb-3">Training History</h4>
+                        <div className="space-y-2">
+                            {jobs.map(job => (
+                                <div key={job.id} className={`rounded-lg border px-4 py-3 ${
+                                    job.promoted ? "border-violet-200 bg-violet-50/30" : "border-gray-200"
+                                }`}>
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-semibold text-gray-900">{job.modelVersion}</span>
+                                            <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${statusStyle(job.status)}`}>
+                                                {job.status}
+                                                {job.status === "TRAINING" && <Loader2 className="inline size-3 ml-1 animate-spin" />}
+                                            </span>
+                                            <span className="text-[10px] text-gray-400">{job.sampleCount} samples, {job.categoryCount} categories</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {job.status === "COMPLETED" && !job.promoted && (
+                                                <button onClick={() => handlePromote(job.id)} disabled={promoting === job.id}
+                                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-violet-700 border border-violet-200 rounded-md hover:bg-violet-50">
+                                                    {promoting === job.id ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle className="size-3" />}
+                                                    Promote
+                                                </button>
+                                            )}
+                                            {job.promoted && (
+                                                <span className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-violet-700 bg-violet-100 rounded-md">
+                                                    <CheckCircle className="size-3" /> Active
+                                                </span>
+                                            )}
+                                            <span className="text-[10px] text-gray-400">
+                                                {new Date(job.startedAt).toLocaleDateString()}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    {job.metrics && (
+                                        <div className="mt-1.5 flex gap-4 text-xs">
+                                            {job.metrics.accuracy != null && <span className="text-gray-600">Accuracy: <strong className="text-green-700">{(job.metrics.accuracy * 100).toFixed(1)}%</strong></span>}
+                                            {job.metrics.f1 != null && <span className="text-gray-600">F1: <strong className="text-blue-700">{(job.metrics.f1 * 100).toFixed(1)}%</strong></span>}
+                                            {job.metrics.loss != null && <span className="text-gray-600">Loss: <strong>{job.metrics.loss.toFixed(4)}</strong></span>}
+                                        </div>
+                                    )}
+                                    {job.error && <div className="mt-1.5 text-xs text-red-600 bg-red-50 rounded px-2 py-1">{job.error}</div>}
+                                </div>
+                            ))}
                         </div>
                     </div>
                 )}

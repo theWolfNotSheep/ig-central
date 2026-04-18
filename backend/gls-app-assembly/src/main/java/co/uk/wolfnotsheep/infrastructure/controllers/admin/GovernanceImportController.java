@@ -2,9 +2,12 @@ package co.uk.wolfnotsheep.infrastructure.controllers.admin;
 
 import co.uk.wolfnotsheep.infrastructure.services.GovernanceHubClient;
 import co.uk.wolfnotsheep.infrastructure.services.HubPackDto.PackVersionDto;
+import co.uk.wolfnotsheep.infrastructure.services.PackDiffService;
+import co.uk.wolfnotsheep.infrastructure.services.PackDiffService.PackDiffResult;
 import co.uk.wolfnotsheep.infrastructure.services.PackImportService;
 import co.uk.wolfnotsheep.infrastructure.services.PackImportService.ImportMode;
 import co.uk.wolfnotsheep.infrastructure.services.PackImportService.ImportResult;
+import co.uk.wolfnotsheep.infrastructure.services.PackImportService.SelectedItem;
 import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,13 +28,16 @@ public class GovernanceImportController {
 
     private final GovernanceHubClient hubClient;
     private final PackImportService importService;
+    private final PackDiffService diffService;
     private final ObjectMapper objectMapper;
 
     public GovernanceImportController(GovernanceHubClient hubClient,
                                       PackImportService importService,
+                                      PackDiffService diffService,
                                       ObjectMapper objectMapper) {
         this.hubClient = hubClient;
         this.importService = importService;
+        this.diffService = diffService;
         this.objectMapper = objectMapper;
     }
 
@@ -76,6 +82,49 @@ public class GovernanceImportController {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }
+
+    /**
+     * Compute a field-level diff between local data and a new hub version.
+     */
+    @PostMapping("/diff")
+    public ResponseEntity<?> diff(@RequestBody ImportRequest request) {
+        try {
+            PackVersionDto version = downloadAndFilter(request);
+            PackDiffResult result = diffService.computeDiff(version, request.packSlug());
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Diff failed: {}", e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Import only selected items from a hub version (per-item accept/reject).
+     */
+    @PostMapping("/selective")
+    public ResponseEntity<?> selectiveImport(@RequestBody SelectiveImportRequest request) {
+        try {
+            PackVersionDto version = downloadAndFilter(
+                    new ImportRequest(request.packSlug(), request.versionNumber(), request.componentTypes(), null));
+            List<SelectedItem> selections = request.selectedItems().stream()
+                    .map(s -> new SelectedItem(s.componentType(), s.itemKey()))
+                    .toList();
+            ImportResult result = importService.importSelectedItems(version, request.packSlug(), selections);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Selective import failed: {}", e.getMessage(), e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    public record SelectiveImportRequest(
+            String packSlug,
+            int versionNumber,
+            List<String> componentTypes,
+            List<SelectiveItem> selectedItems
+    ) {}
+
+    public record SelectiveItem(String componentType, String itemKey) {}
 
     private PackVersionDto downloadAndFilter(ImportRequest request) throws Exception {
         if (!hubClient.isConfigured()) {

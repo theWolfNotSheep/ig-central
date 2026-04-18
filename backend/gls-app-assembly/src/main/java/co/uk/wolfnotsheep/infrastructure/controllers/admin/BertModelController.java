@@ -4,7 +4,9 @@ import co.uk.wolfnotsheep.document.models.DocumentModel;
 import co.uk.wolfnotsheep.document.models.DocumentStatus;
 import co.uk.wolfnotsheep.document.services.DocumentService;
 import co.uk.wolfnotsheep.governance.models.DocumentClassificationResult;
+import co.uk.wolfnotsheep.governance.models.TrainingDataSample;
 import co.uk.wolfnotsheep.governance.repositories.DocumentClassificationResultRepository;
+import co.uk.wolfnotsheep.governance.repositories.TrainingDataSampleRepository;
 import co.uk.wolfnotsheep.platform.config.services.AppConfigService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,6 +39,7 @@ public class BertModelController {
 
     private final DocumentService documentService;
     private final DocumentClassificationResultRepository classificationRepo;
+    private final TrainingDataSampleRepository trainingDataSampleRepo;
     private final AppConfigService configService;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -44,10 +47,12 @@ public class BertModelController {
 
     public BertModelController(DocumentService documentService,
                                 DocumentClassificationResultRepository classificationRepo,
+                                TrainingDataSampleRepository trainingDataSampleRepo,
                                 AppConfigService configService,
                                 @Value("${pipeline.bert.service-url:http://bert-classifier:8000}") String defaultServiceUrl) {
         this.documentService = documentService;
         this.classificationRepo = classificationRepo;
+        this.trainingDataSampleRepo = trainingDataSampleRepo;
         this.configService = configService;
         this.objectMapper = new ObjectMapper();
         this.defaultServiceUrl = defaultServiceUrl;
@@ -221,6 +226,53 @@ public class BertModelController {
         result.put("llmClassified", llmClassified);
         result.put("bertHitRate", total > 0 ? String.format("%.1f%%", (bertHits * 100.0 / total)) : "0%");
         result.put("avgBertConfidence", Math.round(avgBertConfidence * 100) / 100.0);
+
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Training readiness: how much data exists, category distribution, recommendation.
+     */
+    @GetMapping("/training-readiness")
+    public ResponseEntity<Map<String, Object>> trainingReadiness() {
+        var samples = trainingDataSampleRepo.findAll();
+
+        long total = samples.size();
+        long verified = samples.stream().filter(TrainingDataSample::isVerified).count();
+        long corrections = samples.stream().filter(s -> "CORRECTION".equals(s.getSource())).count();
+        long autoCollected = samples.stream().filter(s -> "AUTO_COLLECTED".equals(s.getSource())).count();
+
+        var categoryDist = new LinkedHashMap<String, Long>();
+        samples.stream()
+                .filter(s -> s.getCategoryName() != null)
+                .collect(Collectors.groupingBy(TrainingDataSample::getCategoryName, Collectors.counting()))
+                .entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .forEach(e -> categoryDist.put(e.getKey(), e.getValue()));
+
+        var ready = new ArrayList<String>();
+        var insufficient = new ArrayList<String>();
+        categoryDist.forEach((cat, count) -> {
+            if (count >= 10) ready.add(cat + " (" + count + ")");
+            else insufficient.add(cat + " (" + count + ")");
+        });
+
+        String recommendation;
+        if (total < 20) recommendation = "NOT_ENOUGH_DATA";
+        else if (ready.isEmpty()) recommendation = "INSUFFICIENT_PER_CATEGORY";
+        else if (!insufficient.isEmpty()) recommendation = "PARTIAL_READY";
+        else recommendation = "READY";
+
+        var result = new LinkedHashMap<String, Object>();
+        result.put("totalSamples", total);
+        result.put("verified", verified);
+        result.put("corrections", corrections);
+        result.put("autoCollected", autoCollected);
+        result.put("categoryCount", categoryDist.size());
+        result.put("categoryDistribution", categoryDist);
+        result.put("readyCategories", ready);
+        result.put("insufficientCategories", insufficient);
+        result.put("recommendation", recommendation);
 
         return ResponseEntity.ok(result);
     }
