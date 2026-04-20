@@ -38,6 +38,7 @@ import api from "@/lib/axios/axios.client";
 import { usePiiTypes } from "@/hooks/use-pii-types";
 import ScopeActionModal, { type ActionScope } from "@/components/scope-action-modal";
 import SchemaTestModal from "@/components/schema-tester-modal";
+import { PipelinePicker } from "@/components/pipeline-picker";
 
 type Doc = {
     id: string;
@@ -48,6 +49,9 @@ type Doc = {
     status: string;
     categoryName?: string;
     categoryId?: string;
+    classificationCode?: string;
+    classificationPath?: string[];
+    classificationLevel?: string;
     sensitivityLabel?: string;
     tags?: string[];
     summary?: string;
@@ -169,6 +173,7 @@ export default function ClassificationPanel({ doc, onClose, onDownload, onReproc
 }) {
     const [classification, setClassification] = useState<ClassificationResult | null>(null);
     const [reprocessing, setReprocessing] = useState(false);
+    const [rerunPipelineId, setRerunPipelineId] = useState("");
     const [policyNames, setPolicyNames] = useState<Map<string, string>>(new Map());
     const [retentionName, setRetentionName] = useState<string | null>(null);
     const [viewPolicyId, setViewPolicyId] = useState<string | null>(null);
@@ -405,6 +410,17 @@ export default function ClassificationPanel({ doc, onClose, onDownload, onReproc
                                 <FolderOpen className="size-3 text-blue-500 shrink-0" />
                                 {categoryPath}
                             </span>
+                        </div>
+                    )}
+                    {doc.classificationCode && (
+                        <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs text-gray-500 shrink-0">Record code</span>
+                            <span className="text-xs font-mono font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                                {doc.classificationCode}
+                            </span>
+                            {doc.classificationLevel && (
+                                <span className="text-[10px] text-gray-400">{doc.classificationLevel}</span>
+                            )}
                         </div>
                     )}
                     <Row label="Status" value={doc.status.replace(/_/g, " ")} />
@@ -720,7 +736,22 @@ export default function ClassificationPanel({ doc, onClose, onDownload, onReproc
                             try { await api.post(`/documents/${doc.id}/rerun/enforce`); toast.success("Governance re-enforcement queued"); if (onDocUpdated) { const { data } = await api.get(`/documents/${doc.id}`); onDocUpdated(data); } }
                             catch { toast.error("Failed"); }
                         }} disabled={isProcessing || !doc.categoryId} />
-                        <StageButton label="Full" onClick={() => { handleReprocess(); }} disabled={isProcessing || reprocessing} highlight />
+                        <StageButton label="Full" onClick={async () => {
+                            if (rerunPipelineId) {
+                                setReprocessing(true);
+                                try {
+                                    const { data } = await api.post(`/documents/${doc.id}/reclassify`, { pipelineId: rerunPipelineId });
+                                    toast.success("Reclassification queued with selected pipeline");
+                                    if (onDocUpdated) onDocUpdated(data);
+                                } catch { toast.error("Failed"); }
+                                finally { setReprocessing(false); }
+                            } else {
+                                handleReprocess();
+                            }
+                        }} disabled={isProcessing || reprocessing} highlight />
+                    </div>
+                    <div className="mt-2">
+                        <PipelinePicker value={rerunPipelineId} onChange={setRerunPipelineId} />
                     </div>
                 </div>
             </div>
@@ -1119,11 +1150,20 @@ function Row({ label, value }: { label: string; value?: string }) {
 
 /* ── Modals ─────────────────────────────────────────── */
 
+type TaxNode = {
+    id: string; name: string; classificationCode: string;
+    level: string; documentCount: number; ownDocumentCount: number;
+    children: TaxNode[];
+};
+
 function ReclassifyModal({ doc, onClose, onSaved }: {
     doc: Doc; onClose: () => void; onSaved: (doc: Doc) => void;
 }) {
-    const [categories, setCategories] = useState<{ id: string; name: string; parentId?: string; defaultSensitivity: string }[]>([]);
+    const [tree, setTree] = useState<TaxNode[]>([]);
     const [sensitivities, setSensitivities] = useState<{ key: string; displayName: string }[]>([]);
+    const [selectedFunction, setSelectedFunction] = useState<TaxNode | null>(null);
+    const [selectedActivity, setSelectedActivity] = useState<TaxNode | null>(null);
+    const [selectedTransaction, setSelectedTransaction] = useState<TaxNode | null>(null);
     const [categoryId, setCategoryId] = useState(doc.categoryId ?? "");
     const [categoryName, setCategoryName] = useState(doc.categoryName ?? "");
     const [sensitivity, setSensitivity] = useState(doc.sensitivityLabel ?? "");
@@ -1131,17 +1171,37 @@ function ReclassifyModal({ doc, onClose, onSaved }: {
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
-        api.get("/admin/governance/taxonomy").then(({ data }) => setCategories(data)).catch(() => {});
+        api.get("/search/taxonomy-tree").then(({ data }) => setTree(data)).catch(() => {});
         api.get("/admin/governance/sensitivities").then(({ data }) => setSensitivities(data)).catch(() => {});
     }, []);
 
-    const handleCategoryChange = (id: string) => {
-        setCategoryId(id);
-        const cat = categories.find((c) => c.id === id);
-        if (cat) {
-            setCategoryName(cat.name);
-            setSensitivity(cat.defaultSensitivity);
-        }
+    const selectCategory = (node: TaxNode) => {
+        setCategoryId(node.id);
+        setCategoryName(node.name);
+    };
+
+    const handleFunctionChange = (fnId: string) => {
+        const fn = tree.find(f => f.id === fnId) ?? null;
+        setSelectedFunction(fn);
+        setSelectedActivity(null);
+        setSelectedTransaction(null);
+        if (fn) selectCategory(fn);
+        else { setCategoryId(""); setCategoryName(""); }
+    };
+
+    const handleActivityChange = (acId: string) => {
+        const ac = selectedFunction?.children.find(a => a.id === acId) ?? null;
+        setSelectedActivity(ac);
+        setSelectedTransaction(null);
+        if (ac) selectCategory(ac);
+        else if (selectedFunction) selectCategory(selectedFunction);
+    };
+
+    const handleTransactionChange = (txId: string) => {
+        const tx = selectedActivity?.children.find(t => t.id === txId) ?? null;
+        setSelectedTransaction(tx);
+        if (tx) selectCategory(tx);
+        else if (selectedActivity) selectCategory(selectedActivity);
     };
 
     const handleSave = async () => {
@@ -1167,9 +1227,10 @@ function ReclassifyModal({ doc, onClose, onSaved }: {
         }
     };
 
-    // Build tree for grouped select
-    const roots = categories.filter((c) => !c.parentId);
-    const childrenOf = (pid: string) => categories.filter((c) => c.parentId === pid);
+    const activities = selectedFunction?.children ?? [];
+    const transactions = selectedActivity?.children ?? [];
+    const selectedPath = [selectedFunction?.name, selectedActivity?.name, selectedTransaction?.name].filter(Boolean).join(" > ");
+    const selectedCode = selectedTransaction?.classificationCode ?? selectedActivity?.classificationCode ?? selectedFunction?.classificationCode ?? "";
 
     return (
         <Overlay onClose={onClose}>
@@ -1194,20 +1255,51 @@ function ReclassifyModal({ doc, onClose, onSaved }: {
                     </div>
                 )}
 
-                <div>
-                    <label className="text-xs font-medium text-gray-700 block mb-1">New Category</label>
-                    <select value={categoryId} onChange={(e) => handleCategoryChange(e.target.value)}
-                        className="w-full text-sm border border-gray-300 rounded-md px-3 py-2">
-                        <option value="">Select a category...</option>
-                        {roots.map((root) => (
-                            <optgroup key={root.id} label={root.name}>
-                                <option value={root.id}>{root.name}</option>
-                                {childrenOf(root.id).map((child) => (
-                                    <option key={child.id} value={child.id}>&nbsp;&nbsp;{child.name}</option>
+                {/* Three-tier taxonomy selector */}
+                <div className="space-y-3">
+                    <div>
+                        <label className="text-xs font-medium text-gray-700 block mb-1">Function</label>
+                        <select value={selectedFunction?.id ?? ""} onChange={e => handleFunctionChange(e.target.value)}
+                            className="w-full text-sm border border-gray-300 rounded-md px-3 py-2">
+                            <option value="">Select function...</option>
+                            {tree.map(fn => (
+                                <option key={fn.id} value={fn.id}>{fn.name} ({fn.classificationCode})</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {activities.length > 0 && (
+                        <div>
+                            <label className="text-xs font-medium text-gray-700 block mb-1">Activity</label>
+                            <select value={selectedActivity?.id ?? ""} onChange={e => handleActivityChange(e.target.value)}
+                                className="w-full text-sm border border-gray-300 rounded-md px-3 py-2">
+                                <option value="">Select activity...</option>
+                                {activities.map(ac => (
+                                    <option key={ac.id} value={ac.id}>{ac.name} ({ac.classificationCode})</option>
                                 ))}
-                            </optgroup>
-                        ))}
-                    </select>
+                            </select>
+                        </div>
+                    )}
+
+                    {transactions.length > 0 && (
+                        <div>
+                            <label className="text-xs font-medium text-gray-700 block mb-1">Transaction</label>
+                            <select value={selectedTransaction?.id ?? ""} onChange={e => handleTransactionChange(e.target.value)}
+                                className="w-full text-sm border border-gray-300 rounded-md px-3 py-2">
+                                <option value="">Select transaction...</option>
+                                {transactions.map(tx => (
+                                    <option key={tx.id} value={tx.id}>{tx.name} ({tx.classificationCode})</option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
+
+                    {selectedPath && (
+                        <div className="bg-blue-50 rounded-lg px-3 py-2 flex items-center justify-between">
+                            <span className="text-xs text-blue-700">{selectedPath}</span>
+                            <span className="text-xs font-mono text-blue-500">{selectedCode}</span>
+                        </div>
+                    )}
                 </div>
 
                 <div>

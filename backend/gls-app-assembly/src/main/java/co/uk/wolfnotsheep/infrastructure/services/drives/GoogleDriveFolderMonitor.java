@@ -12,6 +12,7 @@ import co.uk.wolfnotsheep.document.services.DocumentService;
 import co.uk.wolfnotsheep.document.services.ObjectStorageService;
 import co.uk.wolfnotsheep.document.util.SlugGenerator;
 import co.uk.wolfnotsheep.infrastructure.services.drives.GoogleDriveService.DriveFileInfo;
+import co.uk.wolfnotsheep.platform.config.services.AppConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -45,6 +46,7 @@ public class GoogleDriveFolderMonitor {
     private final RabbitTemplate rabbitTemplate;
     private final MongoTemplate mongoTemplate;
     private final SystemErrorRepository systemErrorRepo;
+    private final AppConfigService appConfigService;
 
     public GoogleDriveFolderMonitor(ConnectedDriveRepository driveRepo,
                                      DocumentRepository documentRepo,
@@ -53,7 +55,8 @@ public class GoogleDriveFolderMonitor {
                                      ObjectStorageService objectStorage,
                                      RabbitTemplate rabbitTemplate,
                                      MongoTemplate mongoTemplate,
-                                     SystemErrorRepository systemErrorRepo) {
+                                     SystemErrorRepository systemErrorRepo,
+                                     AppConfigService appConfigService) {
         this.driveRepo = driveRepo;
         this.documentRepo = documentRepo;
         this.documentService = documentService;
@@ -62,6 +65,7 @@ public class GoogleDriveFolderMonitor {
         this.objectStorage = objectStorage;
         this.rabbitTemplate = rabbitTemplate;
         this.systemErrorRepo = systemErrorRepo;
+        this.appConfigService = appConfigService;
     }
 
     /**
@@ -155,21 +159,28 @@ public class GoogleDriveFolderMonitor {
         doc.setSlug(SlugGenerator.generate(info.name(), doc.getId()));
         doc = documentService.save(doc);
 
-        // Download and cache in MinIO
-        InputStream content = googleDriveService.downloadContent(drive, info.id(), info.mimeType());
-        String storageKey = doc.getId() + "-" + sanitizeStorageKey(info.name());
-        doc.setStorageBucket("gls-documents");
-        doc.setStorageKey(storageKey);
-        documentService.save(doc);
+        // Storage mode: "cache" downloads to MinIO, "stream" processes directly from Drive
+        String storageMode = appConfigService.getValue("drives.storage_mode", "cache");
 
-        byte[] bytes = content.readAllBytes();
-        objectStorage.upload(storageKey, new java.io.ByteArrayInputStream(bytes), bytes.length, doc.getMimeType());
+        if ("cache".equals(storageMode)) {
+            InputStream content = googleDriveService.downloadContent(drive, info.id(), info.mimeType());
+            String storageKey = doc.getId() + "-" + sanitizeStorageKey(info.name());
+            doc.setStorageBucket("gls-documents");
+            doc.setStorageKey(storageKey);
+            documentService.save(doc);
 
-        // Queue for processing
+            byte[] bytes = content.readAllBytes();
+            objectStorage.upload(storageKey, new java.io.ByteArrayInputStream(bytes), bytes.length, doc.getMimeType());
+        } else {
+            log.info("Stream mode — skipping MinIO cache for monitored Drive file: {}", info.name());
+        }
+
+        // Queue for processing (storageBucket/storageKey may be null in stream mode)
         try {
             rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_INGESTED, new DocumentIngestedEvent(
                     doc.getId(), info.name(), doc.getMimeType(), info.size(),
-                    "gls-documents", storageKey, drive.getUserId(), Instant.now()
+                    doc.getStorageBucket(), doc.getStorageKey(), drive.getUserId(), Instant.now(),
+                    null
             ));
         } catch (Exception e) {
             log.error("Failed to queue Drive file {} for processing: {}", info.name(), e.getMessage());

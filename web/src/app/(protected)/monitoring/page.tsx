@@ -31,6 +31,7 @@ type PipelineData = {
     avgClassificationTimeMs: number;
     staleDocuments: number;
     queueDepths: Record<string, number>;
+    circuitBreaker?: { state: string; consecutiveFailures: number; threshold?: number; cooldownSeconds?: number; openedAt?: string };
 };
 
 type InfraData = {
@@ -434,7 +435,36 @@ export default function MonitoringPage() {
                             onAction={fetchAll}
                         />
 
-                        {/* Queue depths */}
+                        {/* Circuit breaker + Queue depths */}
+                        {pipeline.circuitBreaker && pipeline.circuitBreaker.state !== "UNKNOWN" && (
+                            <div className={`rounded-lg shadow-sm border p-4 mb-4 flex items-center justify-between ${
+                                pipeline.circuitBreaker.state === "OPEN"
+                                    ? "bg-red-50 border-red-300"
+                                    : "bg-green-50 border-green-200"
+                            }`}>
+                                <div className="flex items-center gap-3">
+                                    <div className={`size-3 rounded-full ${
+                                        pipeline.circuitBreaker.state === "OPEN" ? "bg-red-500 animate-pulse" : "bg-green-500"
+                                    }`} />
+                                    <div>
+                                        <span className="text-sm font-medium text-gray-900">
+                                            LLM Circuit Breaker: {pipeline.circuitBreaker.state}
+                                        </span>
+                                        {pipeline.circuitBreaker.state === "OPEN" && (
+                                            <p className="text-xs text-red-600 mt-0.5">
+                                                Classification paused — {pipeline.circuitBreaker.consecutiveFailures} consecutive failures.
+                                                Auto-retries in {pipeline.circuitBreaker.cooldownSeconds}s.
+                                            </p>
+                                        )}
+                                        {pipeline.circuitBreaker.state === "CLOSED" && pipeline.circuitBreaker.consecutiveFailures > 0 && (
+                                            <p className="text-xs text-amber-600 mt-0.5">
+                                                {pipeline.circuitBreaker.consecutiveFailures}/{pipeline.circuitBreaker.threshold} failures before circuit opens
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                             <h4 className="text-sm font-medium text-gray-700 mb-3">RabbitMQ Queue Depths</h4>
                             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

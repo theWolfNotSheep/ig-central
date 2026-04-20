@@ -26,7 +26,7 @@ public class RetentionScheduleTool {
         this.toolLog = toolLog;
     }
 
-    @Cacheable(value = CacheConfig.CACHE_RETENTION, key = "#scheduleId != null ? #scheduleId : 'all'")
+    @Cacheable(value = CacheConfig.CACHE_RETENTION, key = "#p0 != null ? #p0 : 'all'")
     @McpTool(name = "get_retention_schedules",
             description = "Retrieve retention schedules that define how long documents must be kept and what happens at expiry. " +
                     "Use this after classification to determine the correct retention period.")

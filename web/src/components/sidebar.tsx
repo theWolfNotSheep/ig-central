@@ -22,6 +22,8 @@ import {
     Brain,
     History,
     Inbox,
+    Mail,
+    BarChart3,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -29,6 +31,7 @@ const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/inbox", label: "Inbox", icon: Inbox, badge: true },
     { href: "/drives", label: "Drives", icon: Database },
+    { href: "/mailboxes", label: "Mailboxes", icon: Mail },
     { href: "/documents", label: "Documents", icon: Search },
     { href: "/search", label: "Advanced Search", icon: FileSearch },
     { href: "/pii", label: "PII & SARs", icon: Shield },
@@ -89,6 +92,7 @@ export default function Sidebar() {
                 <div className="px-2 pb-2 border-t border-gray-200 pt-2 space-y-1">
                     <NavLink item={{ href: "/admin/users", label: "Users", icon: Users }} pathname={pathname} collapsed={collapsed} />
                     <NavLink item={{ href: "/ai", label: "AI", icon: Brain }} pathname={pathname} collapsed={collapsed} />
+                    <NavLink item={{ href: "/reports", label: "Reports", icon: BarChart3 }} pathname={pathname} collapsed={collapsed} />
                     <NavLink item={{ href: "/monitoring", label: "Monitoring", icon: Activity }} pathname={pathname} collapsed={collapsed} />
                     <NavLink item={{ href: "/admin/audit", label: "Audit Log", icon: ScrollText }} pathname={pathname} collapsed={collapsed} />
                     <NavLink item={{ href: "/admin/directory", label: "Directory", icon: Users }} pathname={pathname} collapsed={collapsed} />

@@ -1,0 +1,42 @@
+<svg width="1200" height="400" viewBox="0 0 1200 400" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Gradient Definition -->
+  <defs>
+    <linearGradient id="igGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6A00F4"/>
+      <stop offset="50%" stop-color="#C2185B"/>
+      <stop offset="100%" stop-color="#2196F3"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Hexagon Icon -->
+  <polygon points="150,50 300,125 300,275 150,350 0,275 0,125"
+           fill="url(#igGradient)"/>
+
+  <!-- IG Lettermark -->
+  <text x="60" y="235"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="140"
+        font-weight="700"
+        fill="white">
+    IG
+  </text>
+
+  <!-- Brand Name -->
+  <text x="350" y="200"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="120"
+        font-weight="700"
+        fill="url(#igGradient)">
+    IG Central
+  </text>
+
+  <!-- Subtext -->
+  <text x="350" y="280"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="50"
+        fill="#555">
+    dev.igcentral.com
+  </text>
+
+</svg>

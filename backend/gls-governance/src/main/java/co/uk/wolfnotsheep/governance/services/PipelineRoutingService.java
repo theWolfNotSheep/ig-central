@@ -177,5 +177,12 @@ public class PipelineRoutingService {
         return descendants;
     }
 
+    /**
+     * Look up a pipeline by ID (for manual selection).
+     */
+    public Optional<PipelineDefinition> findById(String pipelineId) {
+        return pipelineRepo.findById(pipelineId);
+    }
+
     public record PipelineOverlap(String pipelineId, String pipelineName, boolean directMatch) {}
 }

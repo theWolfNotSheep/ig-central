@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import {
     Rocket, BookOpen, FileSearch, Settings, HelpCircle, Database, Brain,
-    ShieldAlert, Shield, Users, Workflow, Activity, Search,
+    ShieldAlert, Shield, Users, Workflow, Activity, Search, Cloud, Mail,
     ChevronLeft, ChevronRight, AlertTriangle, Lightbulb, Info, ChevronDown,
     ThumbsUp, ThumbsDown,
 } from "lucide-react";
@@ -13,7 +13,7 @@ import { helpSections, helpCategories, type HelpBlock } from "../help-content";
 
 const ICONS: Record<string, React.ElementType> = {
     Rocket, BookOpen, FileSearch, Settings, Search, Database, Brain, ShieldAlert,
-    Shield, Users, Workflow, Activity, HelpCircle, Blocks: Database,
+    Shield, Users, Workflow, Activity, HelpCircle, Cloud, Mail, Blocks: Database,
 };
 
 export default function HelpArticlePage() {

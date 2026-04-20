@@ -116,4 +116,9 @@ public class ClassificationController {
                 request.documentId(), request.extractedText(), systemPrompt, userPromptTemplate);
         return ResponseEntity.ok(response);
     }
+
+    @GetMapping("/circuit-breaker")
+    public ResponseEntity<java.util.Map<String, Object>> getCircuitBreakerStatus() {
+        return ResponseEntity.ok(classificationPipeline.getCircuitBreakerStatus());
+    }
 }

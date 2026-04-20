@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
     HardDrive, FolderOpen, FolderClosed, FileText, ChevronRight, ChevronDown,
     Plus, Check, Loader2, X, RefreshCw, CheckSquare, Square,
-    FileImage, FileSpreadsheet, Users, AlertTriangle, Settings,
+    FileImage, FileSpreadsheet, Users, AlertTriangle, Settings, Tag,
     CheckCircle, Upload, Cloud, Database, Server, Wifi, ExternalLink, Eye,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -12,13 +12,15 @@ import api from "@/lib/axios/axios.client";
 import EmptyState from "@/components/empty-state";
 import { SkeletonTable } from "@/components/skeleton";
 import ResizableTh from "@/components/resizable-th";
+import { PipelinePicker } from "@/components/pipeline-picker";
 
 type ConnectedDrive = {
     id: string; provider: string; providerType: string; displayName: string;
     providerAccountEmail?: string; providerAccountName?: string;
     active: boolean; systemDrive: boolean;
-    hasWriteAccess?: boolean; needsReconnect?: boolean;
+    hasWriteAccess?: boolean; needsReconnect?: boolean; needsLabelScope?: boolean;
     monitoredFolderIds?: string[];
+    defaultLabelId?: string; defaultLabelName?: string;
 };
 
 type DriveFile = {
@@ -75,6 +77,7 @@ export default function DrivesPage() {
     const [folderTree, setFolderTree] = useState<FolderNode[]>([]);
     const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(["root"]));
     const [dragOver, setDragOver] = useState(false);
+    const [selectedPipeline, setSelectedPipeline] = useState("");
 
     // Load drives
     const loadDrives = useCallback(async () => {
@@ -148,6 +151,7 @@ export default function DrivesPage() {
         for (const file of fileList) {
             try {
                 const form = new FormData(); form.append("file", file);
+                if (selectedPipeline) form.append("pipelineId", selectedPipeline);
                 await api.post("/documents", form, { headers: { "Content-Type": "multipart/form-data" } });
                 uploaded++;
             } catch { toast.error(`Failed to upload ${file.name}`); }
@@ -167,11 +171,24 @@ export default function DrivesPage() {
         if (!selected.size || !activeDrive) return;
         setRegistering(true);
         try {
-            const { data } = await api.post(`/drives/${activeDrive.id}/register`, { fileIds: [...selected] });
-            toast.success(`${data.registered} file(s) queued for classification`);
-            setSelected(new Set());
-            setTimeout(loadFiles, 3000);
-        } catch { toast.error("Failed"); }
+            const { data } = await api.post(`/drives/${activeDrive.id}/register`, {
+                fileIds: [...selected],
+                ...(selectedPipeline ? { pipelineId: selectedPipeline } : {}),
+            });
+            if (data.error) {
+                toast.error(data.error);
+            } else {
+                toast.success(`${data.registered} file(s) queued for classification`);
+                setSelected(new Set());
+                setTimeout(loadFiles, 3000);
+            }
+        } catch (e: any) {
+            if (e?.response?.status === 429) {
+                toast.error(e.response.data?.error || "Pipeline at capacity — wait for current documents to finish");
+            } else {
+                toast.error("Failed");
+            }
+        }
         finally { setRegistering(false); }
     };
 
@@ -209,7 +226,19 @@ export default function DrivesPage() {
     };
 
     const toggleSelect = (id: string) => setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-    const nonFolders = files.filter(f => !f.folder);
+    const [classFilter, setClassFilter] = useState<"all" | "classified" | "unclassified" | "in-progress">("all");
+    const CLASSIFIED_STATUSES = ["CLASSIFIED", "GOVERNANCE_APPLIED", "INBOX", "FILED"];
+    const IN_PROGRESS_STATUSES = ["UPLOADED", "PROCESSING", "PROCESSED", "CLASSIFYING"];
+    const nonFolders = files.filter(f => {
+        if (f.folder) return false;
+        if (classFilter === "all") return true;
+        const isTracked = f.tracked || !!f.metadata?.status;
+        const st = f.trackedStatus ?? f.metadata?.status;
+        if (classFilter === "classified") return isTracked && CLASSIFIED_STATUSES.includes(st ?? "");
+        if (classFilter === "in-progress") return isTracked && IN_PROGRESS_STATUSES.includes(st ?? "");
+        // "unclassified" = not tracked at all, OR tracked but not yet classified/in-progress
+        return !isTracked || (!CLASSIFIED_STATUSES.includes(st ?? "") && !IN_PROGRESS_STATUSES.includes(st ?? ""));
+    });
     const allSelected = nonFolders.length > 0 && selected.size === nonFolders.length;
     const selectAll = () => setSelected(allSelected ? new Set() : new Set(nonFolders.map(f => f.id)));
     const isLocal = activeDrive?.providerType === "LOCAL";
@@ -254,7 +283,9 @@ export default function DrivesPage() {
                                         <div className="text-[10px] text-gray-400 truncate">{d.providerAccountEmail}</div>
                                     )}
                                 </div>
+                                {d.defaultLabelId && <span className="size-2 rounded-full bg-green-400 shrink-0" title={`Label: ${d.defaultLabelName || "Configured"}`} />}
                                 {d.needsReconnect && <span className="size-2 rounded-full bg-amber-400 shrink-0" title="Read-only" />}
+                                {d.needsLabelScope && <span className="size-2 rounded-full bg-orange-400 shrink-0" title="Reconnect needed for labels" />}
                             </button>
                         );
                     })}
@@ -299,8 +330,21 @@ export default function DrivesPage() {
             {/* File browser */}
             <div className="flex-1 bg-white flex flex-col overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 bg-gray-50 shrink-0">
-                    <span className="text-sm font-medium text-gray-700">{currentFolder.name}</span>
+                    <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium text-gray-700">{currentFolder.name}</span>
+                        <div className="flex items-center bg-white rounded-md border border-gray-200 overflow-hidden">
+                            {(["all", "classified", "unclassified", "in-progress"] as const).map(f => (
+                                <button key={f} onClick={() => setClassFilter(f)}
+                                    className={`px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
+                                        classFilter === f ? "bg-blue-600 text-white" : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                                    }`}>
+                                    {f === "in-progress" ? "In Progress" : f}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                     <div className="flex items-center gap-2">
+                        <PipelinePicker value={selectedPipeline} onChange={setSelectedPipeline} />
                         {/* Classify button (external drives) */}
                         {selected.size > 0 && !isLocal && (
                             <button onClick={handleClassify} disabled={registering}
@@ -339,6 +383,29 @@ export default function DrivesPage() {
                     <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
                         <AlertTriangle className="size-3.5 text-amber-500 shrink-0" />
                         <span className="text-xs text-amber-700">This drive has read-only access. Disconnect and reconnect to enable write-back.</span>
+                    </div>
+                )}
+
+                {/* Drive Labels status bar */}
+                {activeDrive?.providerType === "GOOGLE_DRIVE" && (
+                    <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <Tag className="size-3.5 text-gray-400" />
+                            {activeDrive.defaultLabelId ? (
+                                <span className="text-xs text-gray-600">
+                                    Label: <span className="font-medium text-green-700">{activeDrive.defaultLabelName || activeDrive.defaultLabelId}</span>
+                                </span>
+                            ) : (
+                                <span className="text-xs text-gray-500">No Drive Label configured — using file properties only</span>
+                            )}
+                            {activeDrive.needsLabelScope && (
+                                <span className="text-xs text-orange-600 ml-2">Reconnect needed for label scope</span>
+                            )}
+                        </div>
+                        <a href={`/drives/${activeDrive.id}/labels`}
+                            className="text-xs text-blue-600 hover:text-blue-700 font-medium">
+                            Configure Labels
+                        </a>
                     </div>
                 )}
 

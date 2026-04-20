@@ -1,0 +1,14 @@
+{
+  "policies": [
+    {
+      "vhost": "/",
+      "name": "processed-queue-ttl",
+      "pattern": "gls\\.documents\\.processed",
+      "apply-to": "queues",
+      "definition": {
+        "message-ttl": 3600000
+      },
+      "priority": 0
+    }
+  ]
+}

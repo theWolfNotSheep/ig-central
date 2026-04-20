@@ -68,11 +68,58 @@ def _demo_label_map() -> dict[int, dict]:
     }
 
 
+def find_best_model_dir() -> Path:
+    """Find the best available model directory.
+    Priority: configured MODEL_DIR > model with most labels (multi-category) > fallback to demo.
+    Single-category models are deprioritised — they classify everything as one category."""
+    configured = Path(MODEL_DIR)
+    if configured.exists() and (configured / "label_map.json").exists():
+        return configured
+
+    # Check for a promoted model marker file (written by the promote endpoint)
+    promoted_marker = Path("/app/models/.promoted")
+    if promoted_marker.exists():
+        promoted_dir = Path(promoted_marker.read_text().strip())
+        if promoted_dir.exists() and (promoted_dir / "label_map.json").exists():
+            logger.info("Loading promoted model from marker: %s", promoted_dir)
+            return promoted_dir
+
+    # Scan /app/models for versioned models and pick the best one
+    models_root = Path("/app/models")
+    if models_root.exists():
+        candidates = []
+        for d in models_root.iterdir():
+            if not d.is_dir():
+                continue
+            label_map_path = d / "label_map.json"
+            has_model = (d / "model.onnx").exists() or (d / "config.json").exists()
+            if label_map_path.exists() and has_model:
+                try:
+                    with open(label_map_path) as f:
+                        label_count = len(json.load(f))
+                except Exception:
+                    label_count = 0
+                candidates.append((d, label_count))
+
+        if candidates:
+            # Prefer models with more categories (multi-category > single-category)
+            candidates.sort(key=lambda x: (-x[1], x[0].name))
+            best, labels = candidates[0]
+            if labels < 2:
+                logger.warning("Only single-category models found — loading %s but it will classify everything the same", best)
+            else:
+                logger.info("Auto-loading best trained model: %s (%d labels)", best, labels)
+            return best
+
+    return configured  # Fall through to demo mode
+
+
 def load_model():
     """Load the BERT model — ONNX or HuggingFace transformers."""
-    global tokenizer, onnx_session, hf_pipeline
+    global tokenizer, onnx_session, hf_pipeline, MODEL_DIR
 
-    model_path = Path(MODEL_DIR)
+    model_path = find_best_model_dir()
+    MODEL_DIR = str(model_path)
 
     # Always load the tokenizer
     from transformers import AutoTokenizer
@@ -111,12 +158,17 @@ def load_model():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load model on startup."""
-    global label_map
-    label_map = load_label_map()
+    global label_map, LABEL_MAP_PATH
+    # Load model first (may update MODEL_DIR via auto-discovery)
     load_model()
-    logger.info("BERT classifier ready — %d labels, onnx=%s, hf=%s, demo=%s",
+    # Load label map from the active model directory
+    discovered_label_map = Path(MODEL_DIR) / "label_map.json"
+    if discovered_label_map.exists():
+        LABEL_MAP_PATH = str(discovered_label_map)
+    label_map = load_label_map()
+    logger.info("BERT classifier ready — %d labels, onnx=%s, hf=%s, demo=%s, model_dir=%s",
                 len(label_map), onnx_session is not None, hf_pipeline is not None,
-                onnx_session is None and hf_pipeline is None)
+                onnx_session is None and hf_pipeline is None, MODEL_DIR)
     yield
 
 
@@ -359,22 +411,42 @@ async def train(request: TrainRequest):
     # Launch training as a separate process so it doesn't block uvicorn
     proc = subprocess.Popen(
         ["python3", "/app/train_worker.py", str(data_path)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdout=None, stderr=None,  # let output go to container logs
     )
 
-    # Monitor the process in a thread (lightweight — just waits for exit)
+    # Monitor the process in a thread — polls result file for progress, then reads final result
     import threading
     def _monitor():
-        stdout, stderr = proc.communicate()
         result_path = Path(f"/tmp/train_{job_id}_result.json")
+
+        # Poll for progress while process is running
+        while proc.poll() is None:
+            if result_path.exists():
+                try:
+                    with open(result_path) as f:
+                        progress = json.load(f)
+                    if progress.get("status") == "TRAINING":
+                        training_jobs[job_id].update(progress)
+                except (json.JSONDecodeError, IOError):
+                    pass
+            time.sleep(3)
+
+        # Process exited — read final result
         if result_path.exists():
-            with open(result_path) as f:
-                result = json.load(f)
-            training_jobs[job_id] = result
+            try:
+                with open(result_path) as f:
+                    result = json.load(f)
+                training_jobs[job_id] = result
+                logger.info("Training job %s finished: %s", job_id, result.get("status"))
+            except (json.JSONDecodeError, IOError) as e:
+                training_jobs[job_id]["status"] = "FAILED"
+                training_jobs[job_id]["error"] = f"Failed to read result file: {e}"
+                training_jobs[job_id]["completed_at"] = time.time()
         else:
             training_jobs[job_id]["status"] = "FAILED"
-            training_jobs[job_id]["error"] = stderr.decode()[-500:] if stderr else "Unknown error"
+            training_jobs[job_id]["error"] = f"Training process exited with code {proc.returncode} but no result file"
             training_jobs[job_id]["completed_at"] = time.time()
+            logger.error("Training job %s failed: no result file, exit code %d", job_id, proc.returncode)
         # Cleanup
         data_path.unlink(missing_ok=True)
         result_path.unlink(missing_ok=True)
@@ -408,6 +480,10 @@ async def activate_model(request: ActivateRequest):
 
     with open(lm_path) as f:
         label_map = {int(k): v for k, v in json.load(f).items()}
+
+    # Persist promoted model so it survives container restarts
+    promoted_marker = Path("/app/models/.promoted")
+    promoted_marker.write_text(str(model_path))
 
     onnx_session = None
     hf_pipeline = None

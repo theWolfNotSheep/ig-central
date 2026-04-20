@@ -3,13 +3,13 @@
 import Link from "next/link";
 import {
     Rocket, BookOpen, FileSearch, Settings, HelpCircle, Database, Brain,
-    ShieldAlert, Shield, Users, Workflow, Activity, Search,
+    ShieldAlert, Shield, Users, Workflow, Activity, Search, Cloud, Mail,
 } from "lucide-react";
 import { helpSections, helpCategories } from "./help-content";
 
 const ICONS: Record<string, React.ElementType> = {
     Rocket, BookOpen, FileSearch, Settings, Search, Database, Brain, ShieldAlert,
-    Shield, Users, Workflow, Activity, HelpCircle, Blocks: Database,
+    Shield, Users, Workflow, Activity, HelpCircle, Cloud, Mail, Blocks: Database,
 };
 
 const CAT_COLORS: Record<string, { bg: string; border: string; text: string; iconBg: string }> = {

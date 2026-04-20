@@ -39,6 +39,12 @@ public class ConnectedDrive {
     private Instant tokenExpiresAt;
     private String grantedScopes;
 
+    // ── Drive Labels config (Google Workspace) ─────────────
+    private String defaultLabelId;             // Google Workspace label ID to apply
+    private String defaultLabelName;           // Display name for UI
+    private Map<String, String> fieldMappings; // GLS key → label field ID mapping
+    // Keys: "category", "sensitivity", "retention_until", "vital_record", "legal_hold"
+
     // ── Drive settings ────────────────────────────────────
     private List<String> monitoredFolderIds;
     private boolean systemDrive;  // true for auto-created Local Storage drive
@@ -61,6 +67,12 @@ public class ConnectedDrive {
     /** Check if this drive needs reconnection (has scopes but they're insufficient). */
     public boolean needsReconnect() {
         return grantedScopes != null && !hasWriteAccess();
+    }
+
+    /** Check if Drive Labels scope is needed but not granted. */
+    public boolean needsLabelScope() {
+        return defaultLabelId != null && !defaultLabelId.isBlank()
+                && (grantedScopes == null || !grantedScopes.contains("drive.labels"));
     }
 
     // ── Getters & setters ─────────────────────────────────
@@ -115,4 +127,13 @@ public class ConnectedDrive {
 
     public Instant getLastSyncAt() { return lastSyncAt; }
     public void setLastSyncAt(Instant lastSyncAt) { this.lastSyncAt = lastSyncAt; }
+
+    public String getDefaultLabelId() { return defaultLabelId; }
+    public void setDefaultLabelId(String defaultLabelId) { this.defaultLabelId = defaultLabelId; }
+
+    public String getDefaultLabelName() { return defaultLabelName; }
+    public void setDefaultLabelName(String defaultLabelName) { this.defaultLabelName = defaultLabelName; }
+
+    public Map<String, String> getFieldMappings() { return fieldMappings; }
+    public void setFieldMappings(Map<String, String> fieldMappings) { this.fieldMappings = fieldMappings; }
 }

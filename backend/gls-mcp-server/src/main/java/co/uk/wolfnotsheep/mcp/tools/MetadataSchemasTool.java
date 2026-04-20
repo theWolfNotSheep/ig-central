@@ -4,6 +4,8 @@ import co.uk.wolfnotsheep.governance.repositories.ClassificationCategoryReposito
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.mcp.ToolCallLogger;
 import co.uk.wolfnotsheep.mcp.config.CacheConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.cache.annotation.Cacheable;
@@ -17,6 +19,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class MetadataSchemasTool {
 
+    private static final Logger log = LoggerFactory.getLogger(MetadataSchemasTool.class);
+
     private final GovernanceService governanceService;
     private final ClassificationCategoryRepository categoryRepo;
     private final ToolCallLogger toolLog;
@@ -29,7 +33,7 @@ public class MetadataSchemasTool {
         this.toolLog = toolLog;
     }
 
-    @Cacheable(value = CacheConfig.CACHE_SCHEMAS, key = "#categoryId")
+    @Cacheable(value = CacheConfig.CACHE_SCHEMAS, key = "#p0 != null ? #p0 : 'null'")
     @McpTool(name = "get_metadata_schemas",
             description = "Retrieve the metadata extraction schema for a document's category. " +
                     "The schema defines EXACTLY which structured fields to extract — extract ONLY those fields, nothing else. " +
@@ -38,9 +42,11 @@ public class MetadataSchemasTool {
     public String getMetadataSchemas(
             @McpToolParam(description = "The category ID or category name to get the schema for")
             String categoryId) {
+        log.info("[get_metadata_schemas] invoked with categoryId={}", categoryId);
         toolLog.logToolCall("", "get_metadata_schemas", "Loading schema for category=" + categoryId);
 
         if (categoryId == null || categoryId.isBlank()) {
+            log.warn("[get_metadata_schemas] null/blank categoryId passed — returning 'no category provided'");
             return "No category provided. Cannot look up metadata schema.";
         }
 
@@ -48,13 +54,27 @@ public class MetadataSchemasTool {
         String resolvedCategoryId = categoryId;
         String schema = governanceService.getMetadataSchemaForCategory(categoryId);
 
+        // If not found, try resolving by classification code (e.g. "FIN-AP-PAY")
+        if (schema == null) {
+            var byCode = categoryRepo.findByClassificationCode(categoryId);
+            if (byCode.isPresent()) {
+                resolvedCategoryId = byCode.get().getId();
+                schema = governanceService.getMetadataSchemaForCategory(resolvedCategoryId);
+                if (schema != null) {
+                    log.info("[get_metadata_schemas] Resolved code '{}' to ID {}", categoryId, resolvedCategoryId);
+                }
+            }
+        }
+
         // If not found, try resolving by name
         if (schema == null) {
             var byName = categoryRepo.findByNameIgnoreCase(categoryId);
             if (byName.isPresent()) {
                 resolvedCategoryId = byName.get().getId();
                 schema = governanceService.getMetadataSchemaForCategory(resolvedCategoryId);
-                toolLog.logToolCall("", "get_metadata_schemas", "Resolved name '" + categoryId + "' to ID " + resolvedCategoryId);
+                if (schema != null) {
+                    log.info("[get_metadata_schemas] Resolved name '{}' to ID {}", categoryId, resolvedCategoryId);
+                }
             }
         }
 
@@ -71,6 +91,7 @@ public class MetadataSchemasTool {
         }
 
         if (schema != null) {
+            log.info("[get_metadata_schemas] returning schema for categoryId={} ({} chars)", resolvedCategoryId, schema.length());
             return "## Metadata Extraction Instructions\n\n" +
                     "Extract ONLY the fields listed below into the `extractedMetadata` JSON parameter " +
                     "when calling save_classification_result. Do not add extra fields. " +
@@ -78,6 +99,7 @@ public class MetadataSchemasTool {
                     schema;
         }
 
+        log.warn("[get_metadata_schemas] no schema found for categoryId={} (resolved={})", categoryId, resolvedCategoryId);
         return "No metadata extraction schema configured for this category. " +
                 "Do NOT include extractedMetadata when calling save_classification_result.";
     }

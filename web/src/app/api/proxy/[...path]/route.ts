@@ -27,15 +27,24 @@ async function forward(req: NextRequest, ctx: Ctx, method: Verb): Promise<Respon
     const hasBody = method === "POST" || method === "PUT";
     const body = hasBody ? await req.arrayBuffer() : undefined;
 
-    const upstream = await fetch(upstreamUrl, {
-        method,
-        headers,
-        body: body?.byteLength ? body : undefined,
-        redirect: "manual",
-        cache: "no-store",
-    });
+    try {
+        const upstream = await fetch(upstreamUrl, {
+            method,
+            headers,
+            body: body?.byteLength ? body : undefined,
+            redirect: "manual",
+            cache: "no-store",
+        });
 
-    return buildDownstreamResponse(upstream);
+        return buildDownstreamResponse(upstream);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        console.error(`[proxy] ${method} ${upstreamUrl} failed: ${message}`);
+        return Response.json(
+            { error: "Backend unavailable", detail: message },
+            { status: 502 },
+        );
+    }
 }
 
 async function buildUpstreamUrl(req: NextRequest, ctx: Ctx): Promise<string> {

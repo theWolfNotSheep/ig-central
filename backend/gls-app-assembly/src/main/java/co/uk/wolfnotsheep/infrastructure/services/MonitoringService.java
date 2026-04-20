@@ -38,6 +38,7 @@ public class MonitoringService {
     private final String rabbitmqManagementUrl;
     private final String rabbitmqUser;
     private final String rabbitmqPassword;
+    private final String llmWorkerBaseUrl;
 
     public record ServiceDef(String name, String url) {}
 
@@ -49,7 +50,8 @@ public class MonitoringService {
             @Value("${monitoring.rabbitmq-management-url:http://localhost:15672/api}") String rabbitmqManagementUrl,
             @Value("${spring.rabbitmq.username:guest}") String rabbitmqUser,
             @Value("${spring.rabbitmq.password:guest}") String rabbitmqPassword,
-            @Value("${monitoring.health-check-timeout-ms:3000}") int timeoutMs) {
+            @Value("${monitoring.health-check-timeout-ms:3000}") int timeoutMs,
+            @Value("${llm.service-url:http://localhost:8082}") String llmWorkerBaseUrl) {
         this.documentRepo = documentRepo;
         this.mongoTemplate = mongoTemplate;
         this.objectStorage = objectStorage;
@@ -57,6 +59,7 @@ public class MonitoringService {
         this.rabbitmqManagementUrl = rabbitmqManagementUrl;
         this.rabbitmqUser = rabbitmqUser;
         this.rabbitmqPassword = rabbitmqPassword;
+        this.llmWorkerBaseUrl = llmWorkerBaseUrl;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(timeoutMs))
                 .build();
@@ -188,13 +191,17 @@ public class MonitoringService {
         // Queue depths
         Map<String, Object> queues = getQueueDepths();
 
+        // Circuit breaker status from LLM worker
+        Map<String, Object> circuitBreaker = getLlmCircuitBreakerStatus();
+
         return Map.of(
                 "statusCounts", statusCounts,
                 "totalDocuments", totalDocs,
                 "throughput", Map.of("last24h", last24h, "last7d", last7d),
                 "avgClassificationTimeMs", avgClassifyMs,
                 "staleDocuments", stale,
-                "queueDepths", queues
+                "queueDepths", queues,
+                "circuitBreaker", circuitBreaker
         );
     }
 
@@ -236,6 +243,44 @@ public class MonitoringService {
         Map<String, Object> rabbitmq = getRabbitOverview();
 
         return Map.of("mongodb", mongoStats, "storage", storage, "rabbitmq", rabbitmq);
+    }
+
+    // ── LLM Circuit Breaker ────────────────────────────────
+
+    private Map<String, Object> getLlmCircuitBreakerStatus() {
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(llmWorkerBaseUrl + "/api/internal/circuit-breaker"))
+                    .timeout(Duration.ofSeconds(3))
+                    .GET().build();
+            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                // Parse the JSON response into a map
+                String body = resp.body();
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("state", extractJsonString(body, "state"));
+                result.put("consecutiveFailures", extractJsonInt(body, "consecutiveFailures"));
+                result.put("threshold", extractJsonInt(body, "threshold"));
+                result.put("cooldownSeconds", extractJsonInt(body, "cooldownSeconds"));
+                result.put("openedAt", extractJsonString(body, "openedAt"));
+                return result;
+            }
+        } catch (Exception e) {
+            log.debug("Failed to fetch circuit breaker status: {}", e.getMessage());
+        }
+        return Map.of("state", "UNKNOWN", "consecutiveFailures", 0);
+    }
+
+    private String extractJsonString(String json, String key) {
+        try {
+            int idx = json.indexOf("\"" + key + "\"");
+            if (idx < 0) return "";
+            int colon = json.indexOf(":", idx);
+            int start = json.indexOf("\"", colon + 1);
+            if (start < 0) return "";
+            int end = json.indexOf("\"", start + 1);
+            return json.substring(start + 1, end);
+        } catch (Exception e) { return ""; }
     }
 
     // ── RabbitMQ Helpers ──────────────────────────────────

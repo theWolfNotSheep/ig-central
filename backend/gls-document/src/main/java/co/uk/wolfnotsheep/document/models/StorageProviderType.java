@@ -6,6 +6,7 @@ package co.uk.wolfnotsheep.document.models;
 public enum StorageProviderType {
     LOCAL,          // MinIO/local object storage (system default)
     GOOGLE_DRIVE,   // Google Drive via OAuth2
+    GMAIL,          // Gmail via OAuth2 (email + attachment ingest)
     S3,             // AWS S3 or S3-compatible (e.g. MinIO external)
     SHAREPOINT,     // Microsoft 365 SharePoint / OneDrive
     BOX,            // Box.com

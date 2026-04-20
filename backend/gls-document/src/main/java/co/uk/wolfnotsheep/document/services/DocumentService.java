@@ -254,8 +254,8 @@ public class DocumentService {
     }
 
     public Page<DocumentModel> search(String uploadedBy, String q, String status,
-                                       String sensitivity, String category, String mimeType,
-                                       Pageable pageable) {
+                                       String sensitivity, String category, String classificationCode,
+                                       String mimeType, Pageable pageable) {
         List<Criteria> filters = new ArrayList<>();
         filters.add(Criteria.where("uploadedBy").is(uploadedBy));
 
@@ -264,6 +264,7 @@ public class DocumentService {
             filters.add(new Criteria().orOperator(
                     Criteria.where("originalFileName").regex(pattern, "i"),
                     Criteria.where("categoryName").regex(pattern, "i"),
+                    Criteria.where("classificationCode").regex(pattern, "i"),
                     Criteria.where("tags").regex(pattern, "i")
             ));
         }
@@ -275,6 +276,11 @@ public class DocumentService {
         }
         if (category != null && !category.isBlank()) {
             filters.add(Criteria.where("categoryName").is(category));
+        }
+        if (classificationCode != null && !classificationCode.isBlank()) {
+            // Prefix match: "FIN-AP" matches "FIN-AP-PAY", "FIN-AP-BIL", etc.
+            filters.add(Criteria.where("classificationCode").regex(
+                    "^" + java.util.regex.Pattern.quote(classificationCode), "i"));
         }
         if (mimeType != null && !mimeType.isBlank()) {
             filters.add(Criteria.where("mimeType").regex(".*" + java.util.regex.Pattern.quote(mimeType) + ".*", "i"));

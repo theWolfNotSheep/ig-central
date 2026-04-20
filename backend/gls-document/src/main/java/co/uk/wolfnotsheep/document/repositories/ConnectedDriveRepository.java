@@ -25,4 +25,10 @@ public interface ConnectedDriveRepository extends MongoRepository<ConnectedDrive
     List<ConnectedDrive> findByProviderTypeAndActiveTrue(StorageProviderType type);
 
     List<ConnectedDrive> findByMonitoredFolderIdsNotNullAndActiveTrue();
+
+    Optional<ConnectedDrive> findByUserIdAndProviderAndProviderAccountEmail(String userId, String provider, String email);
+
+    /** Find all Gmail/Drive accounts accessible to a user by provider type. */
+    @Query("{ '$or': [ { 'userId': ?0, 'active': true, 'provider': ?1 }, { 'systemDrive': true, 'active': true, 'provider': ?1 } ] }")
+    List<ConnectedDrive> findAccessibleByProvider(String userId, String provider);
 }

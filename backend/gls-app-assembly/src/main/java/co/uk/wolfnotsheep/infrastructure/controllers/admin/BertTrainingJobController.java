@@ -1,9 +1,12 @@
 package co.uk.wolfnotsheep.infrastructure.controllers.admin;
 
+import co.uk.wolfnotsheep.document.services.DocumentService;
 import co.uk.wolfnotsheep.governance.models.BertTrainingJob;
 import co.uk.wolfnotsheep.governance.models.BertTrainingJob.JobStatus;
+import co.uk.wolfnotsheep.governance.models.DocumentClassificationResult;
 import co.uk.wolfnotsheep.governance.models.TrainingDataSample;
 import co.uk.wolfnotsheep.governance.repositories.BertTrainingJobRepository;
+import co.uk.wolfnotsheep.governance.repositories.DocumentClassificationResultRepository;
 import co.uk.wolfnotsheep.governance.repositories.TrainingDataSampleRepository;
 import co.uk.wolfnotsheep.platform.config.services.AppConfigService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,8 +32,13 @@ public class BertTrainingJobController {
 
     private static final Logger log = LoggerFactory.getLogger(BertTrainingJobController.class);
 
+    private static final String OTHER_CATEGORY_ID = "_OTHER";
+    private static final String OTHER_CATEGORY_NAME = "_Other";
+
     private final BertTrainingJobRepository jobRepo;
     private final TrainingDataSampleRepository sampleRepo;
+    private final DocumentClassificationResultRepository classificationRepo;
+    private final DocumentService documentService;
     private final AppConfigService configService;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -38,11 +46,15 @@ public class BertTrainingJobController {
 
     public BertTrainingJobController(BertTrainingJobRepository jobRepo,
                                       TrainingDataSampleRepository sampleRepo,
+                                      DocumentClassificationResultRepository classificationRepo,
+                                      DocumentService documentService,
                                       AppConfigService configService,
                                       @Value("${pipeline.bert.service-url:http://bert-classifier:8000}")
                                       String defaultServiceUrl) {
         this.jobRepo = jobRepo;
         this.sampleRepo = sampleRepo;
+        this.classificationRepo = classificationRepo;
+        this.documentService = documentService;
         this.configService = configService;
         this.objectMapper = new ObjectMapper();
         this.defaultServiceUrl = defaultServiceUrl;
@@ -88,8 +100,33 @@ public class BertTrainingJobController {
                         Map.of("error", "Not enough training data. Need at least 10 samples, have " + usable.size()));
             }
 
-            // Build label map from unique categories
+            // Graduation threshold: categories need this many samples to become a real BERT class.
+            // Below this, their samples become _OTHER training data instead.
+            int minSamplesPerCategory = (int) getOrDefault(config, "min_samples_per_category", 5);
+
+            // Count samples per category
+            var categorySampleCounts = usable.stream()
+                    .collect(Collectors.groupingBy(TrainingDataSample::getCategoryId, Collectors.counting()));
+
+            // Split into graduated (enough samples) and demoted (become _OTHER)
+            var graduatedCategoryIds = new HashSet<String>();
+            var demotedSamples = new ArrayList<TrainingDataSample>();
+            for (var s : usable) {
+                long count = categorySampleCounts.getOrDefault(s.getCategoryId(), 0L);
+                if (count >= minSamplesPerCategory) {
+                    graduatedCategoryIds.add(s.getCategoryId());
+                } else {
+                    demotedSamples.add(s);
+                }
+            }
+
+            log.info("Category graduation (min {} samples): {} categories graduated, {} demoted to _OTHER ({} samples)",
+                    minSamplesPerCategory, graduatedCategoryIds.size(),
+                    categorySampleCounts.size() - graduatedCategoryIds.size(), demotedSamples.size());
+
+            // Build label map from graduated categories only
             var categories = usable.stream()
+                    .filter(s -> graduatedCategoryIds.contains(s.getCategoryId()))
                     .collect(Collectors.toMap(
                             TrainingDataSample::getCategoryId,
                             s -> Map.<String, Object>of(
@@ -107,27 +144,68 @@ public class BertTrainingJobController {
                 idx++;
             }
 
-            // Build sample list with label indices — oversample corrections 3x
+            // Add _OTHER category — teaches BERT to say "I don't know, send to LLM"
+            int otherIdx = idx;
+            labelMap.put(String.valueOf(otherIdx), Map.<String, Object>of(
+                    "category_id", OTHER_CATEGORY_ID,
+                    "category_name", OTHER_CATEGORY_NAME,
+                    "sensitivity_label", "INTERNAL"));
+
+            // Build sample list — only graduated categories get real labels
             var trainingList = new ArrayList<Map<String, Object>>();
             for (var s : usable) {
                 Integer labelIdx = catIdToIdx.get(s.getCategoryId());
-                if (labelIdx == null) continue;
-                var entry = Map.<String, Object>of("text", s.getText(), "label", labelIdx);
-                trainingList.add(entry);
-                if ("CORRECTION".equals(s.getSource())) {
+                if (labelIdx != null) {
+                    // Graduated category — real label
+                    var entry = Map.<String, Object>of("text", s.getText(), "label", labelIdx);
                     trainingList.add(entry);
-                    trainingList.add(entry);
+                    if ("CORRECTION".equals(s.getSource())) {
+                        trainingList.add(entry);
+                        trainingList.add(entry);
+                    }
+                } else {
+                    // Demoted category — becomes _OTHER training data
+                    trainingList.add(Map.<String, Object>of("text", s.getText(), "label", otherIdx));
                 }
             }
 
+            // Also gather _OTHER samples from classified documents not in training data at all
+            var allTrainingCategoryIds = categorySampleCounts.keySet();
+            int externalOtherNeeded = Math.max(trainingList.size() / 4, 5);
+            int otherAdded = 0;
+            for (var cr : classificationRepo.findAll()) {
+                if (otherAdded >= externalOtherNeeded) break;
+                if (cr.getCategoryId() == null) continue;
+                if (allTrainingCategoryIds.contains(cr.getCategoryId())) continue;
+                var doc = documentService.getById(cr.getDocumentId());
+                if (doc == null || doc.getExtractedText() == null || doc.getExtractedText().isBlank()) continue;
+                String otherText = doc.getExtractedText();
+                if (otherText.length() > 2000) otherText = otherText.substring(0, 2000);
+                trainingList.add(Map.<String, Object>of("text", otherText, "label", otherIdx));
+                otherAdded++;
+            }
+
+            long otherTotal = demotedSamples.size() + otherAdded;
+            log.info("Training set: {} graduated classes + _OTHER ({} demoted + {} external = {} total _OTHER samples)",
+                    categories.size(), demotedSamples.size(), otherAdded, otherTotal);
+
             String modelVersion = "v" + (jobRepo.count() + 1);
 
+            // Default to fine-tuning from promoted model if one exists (incremental learning)
+            String defaultBaseModel = "distilbert-base-uncased";
+            var promoted = jobRepo.findByPromotedTrue();
+            if (promoted.isPresent() && promoted.get().getModelPath() != null) {
+                defaultBaseModel = promoted.get().getModelPath();
+                log.info("Incremental training: using promoted model {} as base", defaultBaseModel);
+            }
+
             var trainingConfig = new LinkedHashMap<String, Object>();
-            trainingConfig.put("base_model", getOrDefault(config, "base_model", "answerdotai/ModernBERT-base"));
+            trainingConfig.put("base_model", getOrDefault(config, "base_model", defaultBaseModel));
             trainingConfig.put("epochs", getOrDefault(config, "epochs", 3));
-            trainingConfig.put("batch_size", getOrDefault(config, "batch_size", 16));
+            trainingConfig.put("batch_size", getOrDefault(config, "batch_size", 4));
+            trainingConfig.put("gradient_accumulation_steps", getOrDefault(config, "gradient_accumulation_steps", 4));
             trainingConfig.put("learning_rate", getOrDefault(config, "learning_rate", 2e-5));
-            trainingConfig.put("max_length", getOrDefault(config, "max_length", 512));
+            trainingConfig.put("max_length", getOrDefault(config, "max_length", 256));
             trainingConfig.put("val_split", getOrDefault(config, "val_split", 0.2));
             trainingConfig.put("model_version", modelVersion);
 
@@ -256,6 +334,20 @@ public class BertTrainingJobController {
         if (job == null) return ResponseEntity.notFound().build();
         if (job.getStatus() != JobStatus.COMPLETED) {
             return ResponseEntity.badRequest().body(Map.of("error", "Can only promote COMPLETED jobs"));
+        }
+
+        // Gate: reject models below minimum accuracy threshold
+        double minAccuracy = 0.50;
+        if (job.getMetrics() != null) {
+            Object accObj = job.getMetrics().get("accuracy");
+            double accuracy = accObj instanceof Number ? ((Number) accObj).doubleValue() : 0;
+            if (accuracy < minAccuracy) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", String.format("Model accuracy %.1f%% is below the minimum %.0f%% required for promotion. Add more training data and retrain.",
+                                accuracy * 100, minAccuracy * 100),
+                        "accuracy", accuracy,
+                        "minRequired", minAccuracy));
+            }
         }
 
         try {

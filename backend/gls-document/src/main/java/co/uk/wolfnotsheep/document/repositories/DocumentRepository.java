@@ -50,6 +50,8 @@ public interface DocumentRepository extends MongoRepository<DocumentModel, Strin
 
     long countByConnectedDriveId(String connectedDriveId);
 
+    long countByConnectedDriveIdAndStatusIn(String connectedDriveId, List<DocumentStatus> statuses);
+
     List<DocumentModel> findByStatusAndMimeType(DocumentStatus status, String mimeType);
 
     List<DocumentModel> findByStatusInAndMimeType(List<DocumentStatus> statuses, String mimeType);
@@ -59,5 +61,7 @@ public interface DocumentRepository extends MongoRepository<DocumentModel, Strin
     long countByStatusAndUploadedBy(DocumentStatus status, String uploadedBy);
 
     long countByStatusAndUpdatedAtBefore(DocumentStatus status, Instant before);
+
+    List<DocumentModel> findByParentDocumentId(String parentDocumentId);
 
 }

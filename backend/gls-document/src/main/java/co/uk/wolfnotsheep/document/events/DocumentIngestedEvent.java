@@ -14,5 +14,6 @@ public record DocumentIngestedEvent(
         String storageBucket,
         String storageKey,
         String uploadedBy,
-        Instant ingestedAt
+        Instant ingestedAt,
+        String pipelineId
 ) {}

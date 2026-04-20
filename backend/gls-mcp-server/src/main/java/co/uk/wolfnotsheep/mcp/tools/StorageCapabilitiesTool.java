@@ -27,7 +27,7 @@ public class StorageCapabilitiesTool {
         this.toolLog = toolLog;
     }
 
-    @Cacheable(value = CacheConfig.CACHE_STORAGE, key = "#sensitivityLabel != null ? #sensitivityLabel : 'all'")
+    @Cacheable(value = CacheConfig.CACHE_STORAGE, key = "#p0 != null ? #p0 : 'all'")
     @McpTool(name = "get_storage_capabilities",
             description = "Retrieve available storage tiers with their encryption, immutability, and geographic constraints. " +
                     "Use this to recommend the appropriate storage tier for a classified document.")

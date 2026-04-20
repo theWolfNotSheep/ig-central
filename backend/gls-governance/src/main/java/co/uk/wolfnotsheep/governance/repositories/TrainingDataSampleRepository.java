@@ -29,4 +29,6 @@ public interface TrainingDataSampleRepository extends MongoRepository<TrainingDa
     long countByVerifiedTrue();
 
     long countBySource(String source);
+
+    boolean existsByText(String text);
 }

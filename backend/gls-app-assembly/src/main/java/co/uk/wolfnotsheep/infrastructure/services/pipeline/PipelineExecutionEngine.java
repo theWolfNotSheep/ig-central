@@ -28,6 +28,8 @@ import co.uk.wolfnotsheep.infrastructure.config.RabbitMqConfig;
 import co.uk.wolfnotsheep.governance.models.NodeTypeDefinition;
 import co.uk.wolfnotsheep.governance.services.NodeTypeDefinitionService;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
+import co.uk.wolfnotsheep.document.repositories.ConnectedDriveRepository;
+import co.uk.wolfnotsheep.infrastructure.services.drives.GoogleDriveService;
 import co.uk.wolfnotsheep.infrastructure.services.pipeline.accelerators.AcceleratorHandler;
 import co.uk.wolfnotsheep.infrastructure.services.pipeline.accelerators.AcceleratorResult;
 import co.uk.wolfnotsheep.infrastructure.services.pipeline.accelerators.SmartTruncationService;
@@ -86,6 +88,8 @@ public class PipelineExecutionEngine {
     private final SmartTruncationService smartTruncationService;
     private final co.uk.wolfnotsheep.platform.config.services.AppConfigService appConfigService;
     private final co.uk.wolfnotsheep.infrastructure.services.BertTrainingDataCollector bertTrainingDataCollector;
+    private final GoogleDriveService googleDriveService;
+    private final ConnectedDriveRepository connectedDriveRepo;
 
     // Pipeline run tracking
     private final PipelineRunRepository pipelineRunRepo;
@@ -110,6 +114,8 @@ public class PipelineExecutionEngine {
                                    co.uk.wolfnotsheep.document.repositories.SystemErrorRepository systemErrorRepo,
                                    co.uk.wolfnotsheep.platform.config.services.AppConfigService appConfigService,
                                    co.uk.wolfnotsheep.infrastructure.services.BertTrainingDataCollector bertTrainingDataCollector,
+                                   GoogleDriveService googleDriveService,
+                                   ConnectedDriveRepository connectedDriveRepo,
                                    PipelineRunRepository pipelineRunRepo,
                                    NodeRunRepository nodeRunRepo) {
         this.textExtractionService = textExtractionService;
@@ -131,6 +137,8 @@ public class PipelineExecutionEngine {
         this.systemErrorRepo = systemErrorRepo;
         this.appConfigService = appConfigService;
         this.bertTrainingDataCollector = bertTrainingDataCollector;
+        this.googleDriveService = googleDriveService;
+        this.connectedDriveRepo = connectedDriveRepo;
         this.pipelineRunRepo = pipelineRunRepo;
         this.nodeRunRepo = nodeRunRepo;
     }
@@ -154,6 +162,14 @@ public class PipelineExecutionEngine {
             }
             if (doc.getStatus() != DocumentStatus.UPLOADED) {
                 log.info("[Engine] Document {} status is {} (expected UPLOADED) — skipping", docId, doc.getStatus()); return;
+            }
+
+            // If the event carries a manual pipeline selection, set it on the doc
+            if (event.pipelineId() != null) {
+                doc.setPipelineId(event.pipelineId());
+                doc.setPipelineSelectionMethod("MANUAL");
+            } else if (doc.getPipelineSelectionMethod() == null) {
+                doc.setPipelineSelectionMethod("AUTO");
             }
 
             PipelineDefinition pipeline = resolvePipeline(doc);
@@ -338,7 +354,7 @@ public class PipelineExecutionEngine {
         DocumentIngestedEvent ingestedEvent = new DocumentIngestedEvent(
                 doc.getId(), doc.getFileName(), doc.getMimeType(),
                 doc.getFileSizeBytes(), doc.getStorageBucket(), doc.getStorageKey(),
-                doc.getUploadedBy(), doc.getCreatedAt());
+                doc.getUploadedBy(), doc.getCreatedAt(), null);
 
         try {
             walkNodes(run, doc, ingestedEvent, pipeline, executionOrder, nextIndex);
@@ -1004,7 +1020,21 @@ public class PipelineExecutionEngine {
                 extractMetadata = toBool(blockContent.get("extractMetadata"), true);
             }
 
-            InputStream fileStream = objectStorage.download(event.storageBucket(), event.storageKey());
+            // Resolve content stream: MinIO (cache mode) or Google Drive API (stream mode)
+            InputStream fileStream;
+            if (event.storageKey() != null && !event.storageKey().isBlank()) {
+                fileStream = objectStorage.download(event.storageBucket(), event.storageKey());
+            } else if ("GOOGLE_DRIVE".equals(doc.getStorageProvider()) && doc.getExternalStorageRef() != null) {
+                String fileId = doc.getExternalStorageRef().get("fileId");
+                String driveId = doc.getConnectedDriveId();
+                var drive = connectedDriveRepo.findById(driveId)
+                        .orElseThrow(() -> new RuntimeException("Connected drive not found: " + driveId));
+                fileStream = googleDriveService.downloadContent(drive, fileId, doc.getMimeType());
+                log.info("[Engine] Stream mode — downloading directly from Google Drive for doc {}", doc.getId());
+            } else {
+                throw new RuntimeException("No storage source available for document " + doc.getId());
+            }
+
             TextExtractionService.ExtractionResult result =
                     textExtractionService.extract(fileStream, event.fileName(),
                             maxTextLength, extractDublinCore, extractMetadata);
@@ -1304,11 +1334,17 @@ public class PipelineExecutionEngine {
     // ── Graph utilities ─────────────────────────────────────────────────
 
     private PipelineDefinition resolvePipeline(DocumentModel doc) {
+        // If a specific pipeline is set (manual selection or run-pipeline), use it
         if (doc.getPipelineId() != null) {
-            PipelineDefinition p = pipelineRoutingService.resolve(doc.getCategoryId(), doc.getMimeType());
-            if (p != null) return p;
+            var byId = pipelineRoutingService.findById(doc.getPipelineId());
+            if (byId.isPresent() && byId.get().isActive()) {
+                log.info("[Engine] Using explicitly set pipeline '{}' for doc {}", byId.get().getName(), doc.getId());
+                return byId.get();
+            }
+            log.warn("[Engine] Pipeline {} not found or inactive — falling back to auto-routing", doc.getPipelineId());
         }
-        return pipelineRoutingService.resolve(null, doc.getMimeType());
+        // Auto-route based on category + mime type
+        return pipelineRoutingService.resolve(doc.getCategoryId(), doc.getMimeType());
     }
 
     List<VisualNode> topologicalSort(PipelineDefinition pipeline) {

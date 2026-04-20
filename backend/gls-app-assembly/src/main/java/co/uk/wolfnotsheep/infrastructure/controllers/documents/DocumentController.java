@@ -67,6 +67,7 @@ public class DocumentController {
     private final PiiRedactionService piiRedactionService;
     private final MetadataSchemaRepository metadataSchemaRepo;
     private final co.uk.wolfnotsheep.document.repositories.AuditEventRepository auditEventRepository;
+    private final co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService;
 
     public DocumentController(DocumentService documentService,
                               GovernanceService governanceService,
@@ -79,7 +80,8 @@ public class DocumentController {
                               PiiPatternScanner piiScanner,
                               PiiRedactionService piiRedactionService,
                               MetadataSchemaRepository metadataSchemaRepo,
-                              co.uk.wolfnotsheep.document.repositories.AuditEventRepository auditEventRepository) {
+                              co.uk.wolfnotsheep.document.repositories.AuditEventRepository auditEventRepository,
+                              co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService) {
         this.documentService = documentService;
         this.governanceService = governanceService;
         this.rabbitTemplate = rabbitTemplate;
@@ -92,13 +94,21 @@ public class DocumentController {
         this.piiRedactionService = piiRedactionService;
         this.metadataSchemaRepo = metadataSchemaRepo;
         this.auditEventRepository = auditEventRepository;
+        this.throttleService = throttleService;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<DocumentModel> upload(
             @RequestParam("file") MultipartFile file,
             @RequestParam(required = false) String folderId,
+            @RequestParam(required = false) String pipelineId,
             @AuthenticationPrincipal UserDetails user) {
+
+        // Throttle check
+        String throttleError = throttleService.checkThrottle(1);
+        if (throttleError != null) {
+            return ResponseEntity.status(429).body(null);
+        }
 
         DocumentModel doc = documentService.ingest(file, user.getUsername(), null);
         if (folderId != null && !folderId.isBlank()) {
@@ -116,7 +126,8 @@ public class DocumentController {
                     doc.getStorageBucket(),
                     doc.getStorageKey(),
                     user.getUsername(),
-                    Instant.now()
+                    Instant.now(),
+                    pipelineId
             ));
         } catch (Exception e) {
             // Document saved but pipeline won't start — set to failed so it's not orphaned
@@ -246,12 +257,13 @@ public class DocumentController {
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String sensitivity,
             @RequestParam(required = false) String category,
+            @RequestParam(required = false) String classificationCode,
             @RequestParam(required = false) String mimeType,
             @AuthenticationPrincipal UserDetails user,
             Pageable pageable) {
 
         return ResponseEntity.ok(
-                documentService.search(user.getUsername(), q, status, sensitivity, category, mimeType, pageable));
+                documentService.search(user.getUsername(), q, status, sensitivity, category, classificationCode, mimeType, pageable));
     }
 
     /**
@@ -308,6 +320,7 @@ public class DocumentController {
         if (doc == null) return ResponseEntity.notFound().build();
 
         doc.setPipelineId(pipelineId);
+        doc.setPipelineSelectionMethod("MANUAL");
         documentService.save(doc);
 
         doc = documentService.clearErrorForReprocess(id);
@@ -315,7 +328,8 @@ public class DocumentController {
         try {
             rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_INGESTED, new DocumentIngestedEvent(
                     doc.getId(), doc.getOriginalFileName(), doc.getMimeType(), doc.getFileSizeBytes(),
-                    doc.getStorageBucket(), doc.getStorageKey(), user.getUsername(), Instant.now()
+                    doc.getStorageBucket(), doc.getStorageKey(), user.getUsername(), Instant.now(),
+                    pipelineId
             ));
         } catch (Exception e) {
             documentService.setError(doc.getId(), DocumentStatus.PROCESSING_FAILED, "QUEUE", e.getMessage());
@@ -346,7 +360,8 @@ public class DocumentController {
                     doc.getStorageBucket(),
                     doc.getStorageKey(),
                     user.getUsername(),
-                    Instant.now()
+                    Instant.now(),
+                    null
             ));
         } catch (Exception e) {
             documentService.setError(doc.getId(), DocumentStatus.PROCESSING_FAILED, "QUEUE", e.getMessage());
@@ -373,6 +388,46 @@ public class DocumentController {
         return ResponseEntity.ok(doc);
     }
 
+    /**
+     * Reclassify a document with an optional pipeline override.
+     * Clears error state and re-queues for full pipeline processing.
+     */
+    @PostMapping("/{id}/reclassify")
+    public ResponseEntity<DocumentModel> reclassify(
+            @PathVariable String id,
+            @RequestBody(required = false) ReclassifyRequest request,
+            @AuthenticationPrincipal UserDetails user) {
+        DocumentModel doc = documentService.getById(id);
+        if (doc == null) return ResponseEntity.notFound().build();
+
+        String pipelineOverride = request != null ? request.pipelineId() : null;
+        if (pipelineOverride != null) {
+            doc.setPipelineId(pipelineOverride);
+            doc.setPipelineSelectionMethod("MANUAL");
+        } else {
+            doc.setPipelineId(null);
+            doc.setPipelineSelectionMethod("AUTO");
+        }
+        documentService.save(doc);
+
+        doc = documentService.clearErrorForReprocess(id);
+
+        try {
+            rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_INGESTED, new DocumentIngestedEvent(
+                    doc.getId(), doc.getOriginalFileName(), doc.getMimeType(), doc.getFileSizeBytes(),
+                    doc.getStorageBucket(), doc.getStorageKey(), user.getUsername(), Instant.now(),
+                    pipelineOverride
+            ));
+        } catch (Exception e) {
+            documentService.setError(doc.getId(), DocumentStatus.PROCESSING_FAILED, "QUEUE", e.getMessage());
+            return ResponseEntity.internalServerError().body(doc);
+        }
+
+        return ResponseEntity.ok(doc);
+    }
+
+    record ReclassifyRequest(String pipelineId) {}
+
     // ── Stage-Specific Re-run Endpoints ────────────────
 
     /**
@@ -394,7 +449,8 @@ public class DocumentController {
         try {
             rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_INGESTED, new DocumentIngestedEvent(
                     doc.getId(), doc.getOriginalFileName(), doc.getMimeType(), doc.getFileSizeBytes(),
-                    doc.getStorageBucket(), doc.getStorageKey(), user.getUsername(), Instant.now()
+                    doc.getStorageBucket(), doc.getStorageKey(), user.getUsername(), Instant.now(),
+                    null
             ));
         } catch (Exception e) {
             documentService.setError(doc.getId(), DocumentStatus.PROCESSING_FAILED, "QUEUE", e.getMessage());

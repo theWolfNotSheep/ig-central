@@ -69,9 +69,16 @@ public class BertTrainingDataCollector {
             }
         }
 
-        // Check dedupe
+        // Check dedupe by document ID
         if (sampleRepo.existsBySourceDocumentId(classification.getDocumentId())) {
             log.debug("Skipping auto-collect for doc {} — already collected", classification.getDocumentId());
+            return;
+        }
+
+        // Check corrected-only filter
+        boolean correctedOnly = configService.getValue("bert.training.auto_collect_corrected_only", false);
+        if (correctedOnly) {
+            log.debug("Skipping auto-collect for doc {} — corrected-only mode", classification.getDocumentId());
             return;
         }
 
@@ -86,6 +93,18 @@ public class BertTrainingDataCollector {
         int maxLen = configService.getValue("bert.training.max_text_length", 2000);
         String text = doc.getExtractedText();
         if (text.length() > maxLen) text = text.substring(0, maxLen);
+
+        // Skip very short texts that won't help training
+        if (text.length() < 50) {
+            log.debug("Skipping auto-collect for doc {} — text too short ({} chars)", classification.getDocumentId(), text.length());
+            return;
+        }
+
+        // Check for duplicate text content
+        if (sampleRepo.existsByText(text)) {
+            log.debug("Skipping auto-collect for doc {} — duplicate text already in training data", classification.getDocumentId());
+            return;
+        }
 
         // Create sample
         var sample = new TrainingDataSample();

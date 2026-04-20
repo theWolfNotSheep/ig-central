@@ -46,7 +46,9 @@ public class BertClassifierService implements AcceleratorHandler {
             @Value("${pipeline.bert.service-url:http://bert-classifier:8000}") String defaultServiceUrl) {
         this.objectMapper = new ObjectMapper();
         this.defaultServiceUrl = defaultServiceUrl;
+        // Force HTTP/1.1 — Uvicorn doesn't support HTTP/2 upgrade
         this.httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
     }
@@ -118,6 +120,13 @@ public class BertClassifierService implements AcceleratorHandler {
                 for (JsonNode tag : json.get("tags")) {
                     tags.add(tag.asText());
                 }
+            }
+
+            // _OTHER prediction means BERT doesn't recognise this document type — pass to LLM
+            if ("_OTHER".equals(categoryId) || "_Other".equals(categoryName)) {
+                log.info("[BERT] Predicted _OTHER for doc {} (confidence: {}) — passing to LLM",
+                        doc.getId(), String.format("%.3f", confidence));
+                return AcceleratorResult.miss();
             }
 
             if (categoryId == null || confidence < threshold) {

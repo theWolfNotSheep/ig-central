@@ -6,8 +6,9 @@ import { usePipelineSSE } from "@/hooks/use-pipeline-sse";
 import {
     FileText, Database, AlertTriangle, XCircle, CheckCircle, Clock,
     Upload, Shield, Search, Eye, ArrowRight, Loader2, Activity,
-    TrendingUp, Inbox, BarChart3, Zap,
+    TrendingUp, Inbox, BarChart3, Zap, HardDrive, Cloud,
 } from "lucide-react";
+import DonutChart from "@/components/donut-chart";
 import Link from "next/link";
 import api from "@/lib/axios/axios.client";
 
@@ -23,6 +24,11 @@ type PipelineMetrics = {
     avgClassificationTimeMs: number;
     staleDocuments: number;
 };
+type DriveStats = {
+    driveId: string; displayName: string; provider: string;
+    systemDrive: boolean; total: number; classified: number;
+    inProgress: number; failed: number; unclassified: number;
+};
 
 const SENSITIVITY_COLORS: Record<string, string> = {
     PUBLIC: "bg-green-100 text-green-700",
@@ -36,6 +42,7 @@ export default function DashboardPage() {
     const [stats, setStats] = useState<Stats>({});
     const [recent, setRecent] = useState<RecentDoc[]>([]);
     const [metrics, setMetrics] = useState<PipelineMetrics | null>(null);
+    const [driveStats, setDriveStats] = useState<DriveStats[]>([]);
     const [loading, setLoading] = useState(true);
 
     const [statusFilter, setStatusFilter] = useState<string | null>(null);
@@ -67,6 +74,7 @@ export default function DashboardPage() {
             }).catch(() => {}),
             loadRecent(),
             api.get("/admin/monitoring/pipeline").then(r => setMetrics(r.data)).catch(() => {}),
+            api.get("/drives/stats").then(r => setDriveStats(r.data)).catch(() => {}),
         ]).finally(() => setLoading(false));
     }, [loadRecent]);
 
@@ -150,6 +158,100 @@ export default function DashboardPage() {
                     </div>
                 </div>
             </div>
+
+            {/* Drive Coverage */}
+            {driveStats.length > 0 && (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                    {/* Overall coverage donut */}
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                        <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                            <HardDrive className="size-4 text-blue-500" /> Storage Coverage
+                        </h3>
+                        {(() => {
+                            const totals = driveStats.reduce((acc, d) => ({
+                                total: acc.total + d.total, classified: acc.classified + d.classified,
+                                inProgress: acc.inProgress + d.inProgress, failed: acc.failed + d.failed,
+                                unclassified: acc.unclassified + d.unclassified,
+                            }), { total: 0, classified: 0, inProgress: 0, failed: 0, unclassified: 0 });
+                            const pct = totals.total > 0 ? Math.round((totals.classified / totals.total) * 100) : 0;
+                            return (
+                                <div className="flex items-center gap-5">
+                                    <DonutChart segments={[
+                                        { value: totals.classified, color: "#22c55e", label: "Classified" },
+                                        { value: totals.inProgress, color: "#3b82f6", label: "In Progress" },
+                                        { value: totals.failed, color: "#ef4444", label: "Failed" },
+                                        { value: totals.unclassified, color: "#e5e7eb", label: "Unclassified" },
+                                    ]} size={110} strokeWidth={14}>
+                                        <div className="text-center">
+                                            <div className="text-lg font-bold text-gray-900">{pct}%</div>
+                                            <div className="text-[10px] text-gray-400">classified</div>
+                                        </div>
+                                    </DonutChart>
+                                    <div className="flex-1 space-y-1.5 text-xs">
+                                        <div className="flex items-center gap-2">
+                                            <span className="size-2.5 rounded-full bg-green-500" />
+                                            <span className="text-gray-600 flex-1">Classified</span>
+                                            <span className="font-medium text-gray-900">{totals.classified}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="size-2.5 rounded-full bg-blue-500" />
+                                            <span className="text-gray-600 flex-1">In Progress</span>
+                                            <span className="font-medium text-gray-900">{totals.inProgress}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="size-2.5 rounded-full bg-red-500" />
+                                            <span className="text-gray-600 flex-1">Failed</span>
+                                            <span className="font-medium text-gray-900">{totals.failed}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="size-2.5 rounded-full bg-gray-200" />
+                                            <span className="text-gray-600 flex-1">Unclassified</span>
+                                            <span className="font-medium text-gray-900">{totals.unclassified}</span>
+                                        </div>
+                                        <div className="pt-1 border-t border-gray-100 flex items-center gap-2">
+                                            <HardDrive className="size-3 text-gray-400" />
+                                            <span className="text-gray-500">{driveStats.length} drive{driveStats.length !== 1 ? "s" : ""} connected</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })()}
+                    </div>
+
+                    {/* Per-drive breakdown */}
+                    <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+                        <h3 className="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                            <Cloud className="size-4 text-blue-500" /> Per-Drive Classification
+                        </h3>
+                        <div className="space-y-3">
+                            {driveStats.filter(d => d.total > 0).map(d => {
+                                const pct = d.total > 0 ? Math.round((d.classified / d.total) * 100) : 0;
+                                return (
+                                    <Link key={d.driveId} href="/drives" className="flex items-center gap-3 group">
+                                        <div className="shrink-0 w-36 truncate">
+                                            <span className="text-xs font-medium text-gray-700 group-hover:text-blue-700 transition-colors">
+                                                {d.displayName}
+                                            </span>
+                                            <span className="text-[10px] text-gray-400 ml-1">{d.provider === "LOCAL" ? "" : d.provider.replace("_", " ")}</span>
+                                        </div>
+                                        <div className="flex-1 bg-gray-100 rounded-full h-4 overflow-hidden flex">
+                                            {d.classified > 0 && <div className="bg-green-500 h-full transition-all duration-500" style={{ width: `${(d.classified / d.total) * 100}%` }} />}
+                                            {d.inProgress > 0 && <div className="bg-blue-400 h-full transition-all duration-500" style={{ width: `${(d.inProgress / d.total) * 100}%` }} />}
+                                            {d.failed > 0 && <div className="bg-red-400 h-full transition-all duration-500" style={{ width: `${(d.failed / d.total) * 100}%` }} />}
+                                        </div>
+                                        <span className="text-xs text-gray-500 w-20 text-right shrink-0">
+                                            {d.classified}/{d.total} <span className="text-gray-400">({pct}%)</span>
+                                        </span>
+                                    </Link>
+                                );
+                            })}
+                            {driveStats.every(d => d.total === 0) && (
+                                <p className="text-xs text-gray-400 text-center py-4">No documents in any drive yet</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Recent Activity */}

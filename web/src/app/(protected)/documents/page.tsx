@@ -12,11 +12,13 @@ import {
 import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
 import EmptyState from "@/components/empty-state";
+import TaxonomyFilter from "@/components/taxonomy-filter";
 import { SkeletonTable } from "@/components/skeleton";
 import DocumentViewer from "@/components/document-viewer";
 import ResizableTh from "@/components/resizable-th";
 import ClassificationPanel from "@/components/classification-panel";
 import DocumentAuditTrail from "@/components/document-audit-trail";
+import EmailView from "@/components/email-view";
 import { usePiiTypes } from "@/hooks/use-pii-types";
 
 type Doc = {
@@ -30,6 +32,7 @@ type Doc = {
     classificationResultId?: string; lastError?: string; lastErrorStage?: string;
     failedAt?: string; retryCount?: number; storageProvider?: string;
     externalStorageRef?: Record<string, string>;
+    parentDocumentId?: string; childDocumentIds?: string[];
     createdAt: string; classifiedAt?: string; governanceAppliedAt?: string;
 };
 
@@ -79,6 +82,7 @@ export default function DocumentsPage() {
     const [viewingDoc, setViewingDoc] = useState<Doc | null>(null);
     const [loading, setLoading] = useState(false);
     const [currentCategory, setCurrentCategory] = useState<{ id: string; name: string } | null>(null);
+    const [codeFilter, setCodeFilter] = useState<string | null>(null);
     const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [piiSelectedText, setPiiSelectedText] = useState<string | null>(null);
@@ -102,23 +106,22 @@ export default function DocumentsPage() {
         if (!silent) { setLoading(true); setSelected(new Set()); }
         try {
             let fetched: Doc[];
-            if (searchQuery.trim()) {
-                const { data } = await api.get("/documents", {
-                    params: { q: searchQuery.trim(), size: 100, sort: "createdAt,desc",
-                        ...(currentCategory ? { category: currentCategory.name } : {}) }
-                });
-                fetched = data.content ?? data;
-            } else if (currentCategory) {
+            const params: Record<string, string> = { size: "100", sort: "createdAt,desc" };
+            if (searchQuery.trim()) params.q = searchQuery.trim();
+            if (codeFilter) params.classificationCode = codeFilter;
+            else if (currentCategory) params.category = currentCategory.name;
+
+            if (currentCategory && !codeFilter && !searchQuery.trim()) {
                 const { data } = await api.get(`/documents/by-category/${currentCategory.id}?name=${encodeURIComponent(currentCategory.name)}`);
                 fetched = data;
             } else {
-                const { data } = await api.get("/documents?size=100&sort=createdAt,desc");
+                const { data } = await api.get("/documents", { params });
                 fetched = data.content ?? data;
             }
             setDocs(fetched);
         } catch { if (!silent) toast.error("Failed to load documents"); }
         finally { if (!silent) setLoading(false); }
-    }, [currentCategory, searchQuery]);
+    }, [currentCategory, codeFilter, searchQuery]);
 
     useEffect(() => { loadDocs(); }, [loadDocs]);
 
@@ -295,7 +298,11 @@ export default function DocumentsPage() {
                             </button>
                         </div>
                     </div>
-                    <div className="flex-1 overflow-hidden">
+                    <div className="flex-1 overflow-hidden flex flex-col">
+                        {(viewingDoc.mimeType === "message/rfc822" || viewingDoc.parentDocumentId) && (
+                            <EmailView document={viewingDoc} />
+                        )}
+                        <div className="flex-1 overflow-hidden">
                         {viewerTab === "viewer" ? (
                             <DocumentViewer
                                 documentId={viewingDoc.id} mimeType={viewingDoc.mimeType}
@@ -308,6 +315,7 @@ export default function DocumentsPage() {
                         ) : (
                             <DocumentAuditTrail documentId={viewingDoc.id} />
                         )}
+                        </div>
                     </div>
                 </div>
                 <ClassificationPanel
@@ -325,23 +333,15 @@ export default function DocumentsPage() {
 
     return (
         <div className="flex h-[calc(100vh-120px)] -m-6">
-            {/* Category tree sidebar */}
-            <div className="w-56 shrink-0 bg-white border-r border-gray-200 flex flex-col">
-                <div className="px-3 py-2 border-b border-gray-100 shrink-0">
-                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Categories</span>
-                </div>
-                <div className="flex-1 overflow-y-auto py-1">
-                    <button onClick={() => setCurrentCategory(null)}
-                        className={`w-full text-left text-sm font-medium px-4 py-1.5 ${!currentCategory ? "bg-blue-50 text-blue-700" : "text-gray-700 hover:bg-gray-50"}`}>
-                        <div className="flex items-center gap-2"><Inbox className="size-3.5" /> All Documents</div>
-                    </button>
-                    {roots.map(cat => (
-                        <CatNode key={cat.id} cat={cat} depth={0} childrenOf={childrenOf}
-                            currentId={currentCategory?.id} expanded={expandedCats}
-                            onSelect={(c) => setCurrentCategory({ id: c.id, name: c.name })}
-                            onToggle={(id) => setExpandedCats(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; })} />
-                    ))}
-                </div>
+            {/* Taxonomy filter sidebar */}
+            <div className="w-64 shrink-0 bg-white border-r border-gray-200 flex flex-col">
+                <TaxonomyFilter
+                    selected={codeFilter}
+                    onSelect={(code, _level, name) => {
+                        setCodeFilter(code);
+                        setCurrentCategory(name ? { id: code ?? "", name } : null);
+                    }}
+                />
             </div>
 
             {/* Document table */}

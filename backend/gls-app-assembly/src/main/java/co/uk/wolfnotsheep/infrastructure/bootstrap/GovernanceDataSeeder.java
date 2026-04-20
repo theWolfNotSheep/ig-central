@@ -104,8 +104,11 @@ public class GovernanceDataSeeder implements ApplicationRunner {
         seedDefaultPipeline(blockIds);
         seedPipelineConfig();
         seedBertTrainingConfig();
+        seedDriveStorageConfig();
         seedPiiTypeDefinitions();
         seedTraitDefinitions();
+        seedEmailTraits();
+        seedPipelineThrottleConfig();
 
         log.info("Governance data seeder complete.");
     }
@@ -851,6 +854,17 @@ public class GovernanceDataSeeder implements ApplicationRunner {
         log.info("Seeded pipeline configuration.");
     }
 
+    private void seedPipelineThrottleConfig() {
+        if (configService.getValue("pipeline.throttle.max_in_flight", null) != null) return;
+
+        configService.save("pipeline.throttle.max_in_flight", "pipeline",
+                50, "Maximum documents in-flight (PROCESSING + CLASSIFYING + PROCESSED) before new submissions are rejected. Set based on LLM capacity.");
+        configService.save("pipeline.throttle.max_batch_size", "pipeline",
+                20, "Maximum documents that can be submitted in a single batch (classify/import operation).");
+
+        log.info("Seeded pipeline throttle configuration.");
+    }
+
     private void seedBertTrainingConfig() {
         if (!configService.getByCategory("bert").isEmpty()) {
             log.info("BERT training config already seeded, skipping.");
@@ -869,6 +883,22 @@ public class GovernanceDataSeeder implements ApplicationRunner {
                 2000, "Maximum characters per training sample (BERT typically uses 512 tokens ~ 2000 chars)");
 
         log.info("Seeded BERT training configuration.");
+    }
+
+    private void seedDriveStorageConfig() {
+        if (!configService.getByCategory("drives").isEmpty()) {
+            log.info("Drive storage config already seeded, skipping.");
+            return;
+        }
+
+        configService.save("drives.storage_mode", "drives",
+                "cache", "Storage mode for Google Drive documents. 'cache' downloads to MinIO for processing. 'stream' processes directly from Google Drive without caching.");
+        configService.save("drives.cache_cleanup_enabled", "drives",
+                false, "Automatically delete cached MinIO files for Google Drive documents after classification completes.");
+        configService.save("drives.cache_cleanup_delay_hours", "drives",
+                1, "Hours to wait after classification before cleaning up cached files.");
+
+        log.info("Seeded drive storage configuration.");
     }
 
     private GovernancePolicy policy(String name, String desc, List<String> rules,
@@ -1338,6 +1368,33 @@ public class GovernanceDataSeeder implements ApplicationRunner {
         return t;
     }
 
+    /**
+     * Seed EMAIL_BODY and EMAIL_ATTACHMENT traits for email classification.
+     * Runs independently of seedTraitDefinitions so these traits are added
+     * to existing deployments that already have trait data.
+     */
+    private void seedEmailTraits() {
+        if (traitRepo.findByKey("EMAIL_BODY").isPresent()) return;
+
+        List<TraitDefinition> emailTraits = List.of(
+                trait("EMAIL_BODY", "Email Body",
+                        "The body text of an ingested email message including headers",
+                        "SOURCE",
+                        "This document is the body of an email. It contains From, To, Subject, Date headers and the message text. Classify based on the email content and purpose.",
+                        List.of("From:", "To:", "Subject:", "Date:"),
+                        false),
+                trait("EMAIL_ATTACHMENT", "Email Attachment",
+                        "A file attached to an ingested email message",
+                        "SOURCE",
+                        "This document was extracted from an email attachment. Classify based on its own content, not the email it came from.",
+                        List.of(),
+                        false)
+        );
+
+        traitRepo.saveAll(emailTraits);
+        log.info("Seeded {} email trait definitions", emailTraits.size());
+    }
+
     // ── Node Type Definition Migrations ─────────────────────────────────
 
     private void migrateNodeTypeDefinitions() {
@@ -1434,6 +1491,24 @@ public class GovernanceDataSeeder implements ApplicationRunner {
                         )),
                         null, null,
                         "Type: {{triggerType}}", "triggerType", now),
+
+                nodeType("gmailWatcher", "Gmail Watcher",
+                        "Periodically polls a connected Gmail account for new messages matching a query and ingests them as documents",
+                        "TRIGGER", 1, "NOOP", null, false, "PRE_CLASSIFICATION",
+                        "Mail", "red", sourceOnly, null,
+                        Map.of("properties", Map.of(
+                                "accountId", Map.of("type", "string",
+                                        "ui:widget", "select",
+                                        "ui:help", "Connected Gmail account to watch"),
+                                "query", Map.of("type", "string",
+                                        "ui:placeholder", "label:inbox has:attachment newer_than:1d",
+                                        "ui:help", "Gmail search query syntax"),
+                                "pollIntervalMinutes", Map.of("type", "integer", "minimum", 5, "maximum", 1440,
+                                        "default", 15, "ui:widget", "number",
+                                        "ui:help", "How often to check for new messages (minutes)")
+                        )),
+                        null, null,
+                        "{{query}}", "accountId", now),
 
                 // ── PROCESSING ──
                 nodeType("textExtraction", "Text Extraction", "Extracts text content from uploaded documents using Apache Tika or OCR",
@@ -1589,6 +1664,21 @@ public class GovernanceDataSeeder implements ApplicationRunner {
                         )),
                         "ENFORCER", null,
                         "Retention + policies", null, now),
+
+                nodeType("writeDriveLabel", "Write Drive Label",
+                        "Writes classification metadata back to Google Drive as a native Drive Label visible in the Drive UI",
+                        "ACTION", 3, "BUILT_IN", null, false, "POST_CLASSIFICATION",
+                        "Tag", "blue", simpleHandles, null,
+                        Map.of("properties", Map.of(
+                                "mode", Map.of("type", "string", "enum", List.of("properties", "label", "both"),
+                                        "default", "both", "ui:widget", "select",
+                                        "ui:help", "Write file properties, Drive Label, or both"),
+                                "onError", Map.of("type", "string", "enum", List.of("continue", "fail"),
+                                        "default", "continue", "ui:widget", "select",
+                                        "ui:help", "Continue pipeline or fail if write-back errors")
+                        )),
+                        null, null,
+                        "Mode: {{mode}}", "mode", now),
 
                 nodeType("humanReview", "Human Review", "Routes documents to a human review queue when confidence is below threshold",
                         "ACTION", 1, "BUILT_IN", null, true, "POST_CLASSIFICATION",

@@ -70,6 +70,7 @@ public class SearchController {
             filters.add(new Criteria().orOperator(
                     Criteria.where("originalFileName").regex(pattern, "i"),
                     Criteria.where("categoryName").regex(pattern, "i"),
+                    Criteria.where("classificationCode").regex(pattern, "i"),
                     Criteria.where("tags").regex(pattern, "i"),
                     Criteria.where("extractedText").regex(pattern, "i")
             ));
@@ -95,6 +96,18 @@ public class SearchController {
         if (request.uploadedBy() != null && !request.uploadedBy().isBlank()) {
             filters.add(Criteria.where("uploadedBy").regex(
                     ".*" + java.util.regex.Pattern.quote(request.uploadedBy()) + ".*", "i"));
+        }
+
+        // Classification code filters
+        if (request.classificationCode() != null && !request.classificationCode().isBlank()) {
+            filters.add(Criteria.where("classificationCode").is(request.classificationCode()));
+        }
+        if (request.classificationCodePrefix() != null && !request.classificationCodePrefix().isBlank()) {
+            filters.add(Criteria.where("classificationCode").regex(
+                    "^" + java.util.regex.Pattern.quote(request.classificationCodePrefix()), "i"));
+        }
+        if (request.classificationLevel() != null && !request.classificationLevel().isBlank()) {
+            filters.add(Criteria.where("classificationLevel").is(request.classificationLevel()));
         }
 
         // Date range
@@ -221,13 +234,82 @@ public class SearchController {
                 })
                 .toList();
 
+        // Classification code counts
+        Map<String, Long> byCode = new java.util.LinkedHashMap<>();
+        try {
+            var codePipeline = org.springframework.data.mongodb.core.aggregation.Aggregation.newAggregation(
+                    org.springframework.data.mongodb.core.aggregation.Aggregation.match(Criteria.where("status").ne("DISPOSED").and("classificationCode").ne(null)),
+                    org.springframework.data.mongodb.core.aggregation.Aggregation.group("classificationCode").count().as("count"),
+                    org.springframework.data.mongodb.core.aggregation.Aggregation.sort(org.springframework.data.domain.Sort.Direction.ASC, "_id")
+            );
+            mongoTemplate.aggregate(codePipeline, "documents", org.bson.Document.class)
+                    .getMappedResults().forEach(d -> byCode.put(d.getString("_id"), d.get("count", Number.class).longValue()));
+        } catch (Exception e) { log.warn("Classification code aggregation failed: {}", e.getMessage()); }
+
         return ResponseEntity.ok(Map.of(
                 "categories", byCat,
                 "sensitivities", bySensitivity,
                 "statuses", byStatus,
+                "classificationCodes", byCode,
                 "totalFiltered", totalFiltered,
                 "metadataSchemas", schemas
         ));
+    }
+
+    // ── Taxonomy tree with document counts ─────────────────────
+
+    @GetMapping("/taxonomy-tree")
+    public ResponseEntity<List<Map<String, Object>>> taxonomyTree(@AuthenticationPrincipal UserDetails user) {
+        List<ClassificationCategory> all = governanceService.getFullTaxonomy();
+
+        // Aggregate document counts by classificationCode
+        Map<String, Long> codeCounts = new java.util.LinkedHashMap<>();
+        try {
+            var pipeline = org.springframework.data.mongodb.core.aggregation.Aggregation.newAggregation(
+                    org.springframework.data.mongodb.core.aggregation.Aggregation.match(
+                            Criteria.where("status").ne("DISPOSED").and("classificationCode").ne(null)),
+                    org.springframework.data.mongodb.core.aggregation.Aggregation.group("classificationCode").count().as("count")
+            );
+            mongoTemplate.aggregate(pipeline, "documents", org.bson.Document.class)
+                    .getMappedResults().forEach(d -> codeCounts.put(d.getString("_id"), d.get("count", Number.class).longValue()));
+        } catch (Exception e) { log.warn("Taxonomy tree aggregation failed: {}", e.getMessage()); }
+
+        // Build lookup maps
+        Map<String, List<ClassificationCategory>> byParent = new java.util.LinkedHashMap<>();
+        Map<String, ClassificationCategory> byId = new java.util.LinkedHashMap<>();
+        for (ClassificationCategory cat : all) {
+            byId.put(cat.getId(), cat);
+            byParent.computeIfAbsent(cat.getParentId() != null ? cat.getParentId() : "root", k -> new ArrayList<>()).add(cat);
+        }
+
+        // Build tree from roots
+        List<Map<String, Object>> roots = new ArrayList<>();
+        for (ClassificationCategory cat : byParent.getOrDefault("root", List.of())) {
+            roots.add(buildTreeNode(cat, byParent, codeCounts));
+        }
+        return ResponseEntity.ok(roots);
+    }
+
+    private Map<String, Object> buildTreeNode(ClassificationCategory cat,
+                                               Map<String, List<ClassificationCategory>> byParent,
+                                               Map<String, Long> codeCounts) {
+        List<Map<String, Object>> children = new ArrayList<>();
+        long childTotal = 0;
+        for (ClassificationCategory child : byParent.getOrDefault(cat.getId(), List.of())) {
+            Map<String, Object> childNode = buildTreeNode(child, byParent, codeCounts);
+            childTotal += ((Number) childNode.get("documentCount")).longValue();
+            children.add(childNode);
+        }
+        long ownCount = codeCounts.getOrDefault(cat.getClassificationCode(), 0L);
+        Map<String, Object> node = new java.util.LinkedHashMap<>();
+        node.put("id", cat.getId());
+        node.put("name", cat.getName());
+        node.put("classificationCode", cat.getClassificationCode());
+        node.put("level", cat.getLevel() != null ? cat.getLevel().name() : null);
+        node.put("documentCount", ownCount + childTotal);
+        node.put("ownDocumentCount", ownCount);
+        node.put("children", children);
+        return node;
     }
 
     record SearchRequest(
@@ -236,6 +318,9 @@ public class SearchController {
             String sensitivity,
             String categoryId,
             String categoryName,
+            String classificationCode,
+            String classificationCodePrefix,
+            String classificationLevel,
             String mimeType,
             String uploadedBy,
             String createdAfter,

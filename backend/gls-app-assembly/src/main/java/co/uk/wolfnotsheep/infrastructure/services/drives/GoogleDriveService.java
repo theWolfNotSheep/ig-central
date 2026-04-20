@@ -63,17 +63,17 @@ public class GoogleDriveService implements co.uk.wolfnotsheep.document.services.
         this.httpClient = HttpClient.newHttpClient();
     }
 
-    private String getClientId() {
+    public String getClientId() {
         String val = configService.getValue("google.oauth.client_id", "");
         return val.isBlank() ? fallbackClientId : val;
     }
 
-    private String getClientSecret() {
+    public String getClientSecret() {
         String val = configService.getValue("google.oauth.client_secret", "");
         return val.isBlank() ? fallbackClientSecret : val;
     }
 
-    private String getRedirectUri() {
+    public String getRedirectUri() {
         String val = configService.getValue("google.oauth.redirect_uri", "");
         return val.isBlank() ? fallbackRedirectUri : val;
     }
@@ -91,6 +91,7 @@ public class GoogleDriveService implements co.uk.wolfnotsheep.document.services.
                 "&redirect_uri=" + getRedirectUri() +
                 "&response_type=code" +
                 "&scope=https://www.googleapis.com/auth/drive%20" +
+                "https://www.googleapis.com/auth/drive.labels%20" +
                 "https://www.googleapis.com/auth/userinfo.email%20" +
                 "https://www.googleapis.com/auth/userinfo.profile" +
                 "&access_type=offline" +
@@ -165,6 +166,30 @@ public class GoogleDriveService implements co.uk.wolfnotsheep.document.services.
     }
 
     /**
+     * Count all non-folder, non-trashed files visible to the user across
+     * My Drive and shared drives. Uses minimal fields for speed.
+     */
+    public long countAllFiles(ConnectedDrive drive) throws Exception {
+        Drive service = buildDriveService(drive);
+        String query = "mimeType != 'application/vnd.google-apps.folder' and trashed = false";
+        long count = 0;
+        String pageToken = null;
+        do {
+            FileList result = service.files().list()
+                    .setQ(query)
+                    .setFields("nextPageToken,files(id)")
+                    .setPageSize(1000)
+                    .setSupportsAllDrives(true)
+                    .setIncludeItemsFromAllDrives(true)
+                    .setPageToken(pageToken)
+                    .execute();
+            if (result.getFiles() != null) count += result.getFiles().size();
+            pageToken = result.getNextPageToken();
+        } while (pageToken != null);
+        return count;
+    }
+
+    /**
      * List files in a folder (or root). Supports shared drives.
      */
     public List<DriveFileInfo> listFilesInternal(ConnectedDrive drive, String folderId) throws Exception {
@@ -174,33 +199,41 @@ public class GoogleDriveService implements co.uk.wolfnotsheep.document.services.
                 ? "'" + folderId + "' in parents and trashed = false"
                 : "'root' in parents and trashed = false";
 
-        FileList result = service.files().list()
-                .setQ(query)
-                .setFields("files(id,name,mimeType,size,modifiedTime,owners,webViewLink,iconLink,driveId,properties)")
-                .setPageSize(200)
-                .setOrderBy("folder,name")
-                .setSupportsAllDrives(true)
-                .setIncludeItemsFromAllDrives(true)
-                .execute();
-
         List<DriveFileInfo> files = new ArrayList<>();
-        if (result.getFiles() != null) {
-            for (File f : result.getFiles()) {
-                String ownerEmail = f.getOwners() != null && !f.getOwners().isEmpty()
-                        ? f.getOwners().getFirst().getEmailAddress() : null;
-                Map<String, String> props = f.getProperties() != null ? f.getProperties() : Map.of();
-                files.add(new DriveFileInfo(
-                        f.getId(), f.getName(), f.getMimeType(),
-                        f.getSize() != null ? f.getSize() : 0,
-                        f.getModifiedTime() != null ? f.getModifiedTime().toString() : null,
-                        ownerEmail, f.getWebViewLink(), f.getIconLink(),
-                        "application/vnd.google-apps.folder".equals(f.getMimeType()),
-                        props.get("ig_central_status"),
-                        props.get("ig_central_category"),
-                        props.get("ig_central_sensitivity")
-                ));
+        String pageToken = null;
+        do {
+            var req = service.files().list()
+                    .setQ(query)
+                    .setFields("nextPageToken,files(id,name,mimeType,size,modifiedTime,owners,webViewLink,iconLink,driveId,properties)")
+                    .setPageSize(200)
+                    .setOrderBy("folder,name")
+                    .setCorpora("allDrives")
+                    .setSupportsAllDrives(true)
+                    .setIncludeItemsFromAllDrives(true);
+            if (pageToken != null) req.setPageToken(pageToken);
+
+            FileList result = req.execute();
+
+            if (result.getFiles() != null) {
+                for (File f : result.getFiles()) {
+                    String ownerEmail = f.getOwners() != null && !f.getOwners().isEmpty()
+                            ? f.getOwners().getFirst().getEmailAddress() : null;
+                    Map<String, String> props = f.getProperties() != null ? f.getProperties() : Map.of();
+                    files.add(new DriveFileInfo(
+                            f.getId(), f.getName(), f.getMimeType(),
+                            f.getSize() != null ? f.getSize() : 0,
+                            f.getModifiedTime() != null ? f.getModifiedTime().toString() : null,
+                            ownerEmail, f.getWebViewLink(), f.getIconLink(),
+                            "application/vnd.google-apps.folder".equals(f.getMimeType()),
+                            props.get("ig_central_status"),
+                            props.get("ig_central_category"),
+                            props.get("ig_central_sensitivity")
+                    ));
+                }
             }
-        }
+            pageToken = result.getNextPageToken();
+        } while (pageToken != null);
+
         return files;
     }
 
@@ -370,22 +403,30 @@ public class GoogleDriveService implements co.uk.wolfnotsheep.document.services.
         String query = "'" + (parentId != null ? parentId : "root") + "' in parents and " +
                 "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
 
-        FileList result = service.files().list()
-                .setQ(query)
-                .setFields("files(id,name,mimeType)")
-                .setPageSize(100)
-                .setOrderBy("name")
-                .setSupportsAllDrives(true)
-                .setIncludeItemsFromAllDrives(true)
-                .execute();
-
         List<DriveFileInfo> folders = new ArrayList<>();
-        if (result.getFiles() != null) {
-            for (File f : result.getFiles()) {
-                folders.add(new DriveFileInfo(f.getId(), f.getName(), f.getMimeType(),
-                        0, null, null, null, null, true, null, null, null));
+        String pageToken = null;
+        do {
+            var req = service.files().list()
+                    .setQ(query)
+                    .setFields("nextPageToken,files(id,name,mimeType)")
+                    .setPageSize(200)
+                    .setOrderBy("name")
+                    .setCorpora("allDrives")
+                    .setSupportsAllDrives(true)
+                    .setIncludeItemsFromAllDrives(true);
+            if (pageToken != null) req.setPageToken(pageToken);
+
+            FileList result = req.execute();
+
+            if (result.getFiles() != null) {
+                for (File f : result.getFiles()) {
+                    folders.add(new DriveFileInfo(f.getId(), f.getName(), f.getMimeType(),
+                            0, null, null, null, null, true, null, null, null));
+                }
             }
-        }
+            pageToken = result.getNextPageToken();
+        } while (pageToken != null);
+
         return folders;
     }
 

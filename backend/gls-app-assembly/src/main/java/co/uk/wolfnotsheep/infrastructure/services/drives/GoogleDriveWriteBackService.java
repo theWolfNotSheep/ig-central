@@ -30,15 +30,18 @@ public class GoogleDriveWriteBackService {
     private final DocumentRepository documentRepo;
     private final ConnectedDriveRepository driveRepo;
     private final GoogleDriveService googleDriveService;
+    private final GoogleDriveLabelsService labelsService;
     private final SystemErrorRepository systemErrorRepo;
 
     public GoogleDriveWriteBackService(DocumentRepository documentRepo,
                                         ConnectedDriveRepository driveRepo,
                                         GoogleDriveService googleDriveService,
+                                        GoogleDriveLabelsService labelsService,
                                         SystemErrorRepository systemErrorRepo) {
         this.documentRepo = documentRepo;
         this.driveRepo = driveRepo;
         this.googleDriveService = googleDriveService;
+        this.labelsService = labelsService;
         this.systemErrorRepo = systemErrorRepo;
     }
 
@@ -69,8 +72,25 @@ public class GoogleDriveWriteBackService {
                     doc.getSensitivityLabel() != null ? doc.getSensitivityLabel().name() : "",
                     doc.getId());
 
-            log.info("Wrote classification back to Google Drive for doc {} ({})",
+            log.info("Wrote classification properties to Google Drive for doc {} ({})",
                     documentId, doc.getOriginalFileName());
+
+            // Drive Labels write-back (if configured)
+            if (drive.getDefaultLabelId() != null && !drive.getDefaultLabelId().isBlank()) {
+                try {
+                    labelsService.writeClassificationLabel(drive, ref.get("fileId"),
+                            drive.getDefaultLabelId(), drive.getFieldMappings(), doc);
+                    log.info("Applied Drive Label to file {} for doc {}", ref.get("fileId"), documentId);
+                } catch (Exception labelEx) {
+                    log.error("Drive Label write failed for doc {} (properties write succeeded): {}",
+                            documentId, labelEx.getMessage());
+                    SystemError labelError = SystemError.of("WARNING", "EXTERNAL_API",
+                            "Drive Label write failed for document " + documentId + ": " + labelEx.getMessage());
+                    labelError.setDocumentId(documentId);
+                    labelError.setService("api");
+                    systemErrorRepo.save(labelError);
+                }
+            }
 
         } catch (Exception e) {
             log.error("Google Drive write-back failed for doc {}: {}", documentId, e.getMessage());

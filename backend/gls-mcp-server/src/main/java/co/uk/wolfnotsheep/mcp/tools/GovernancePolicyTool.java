@@ -27,7 +27,7 @@ public class GovernancePolicyTool {
         this.toolLog = toolLog;
     }
 
-    @Cacheable(value = CacheConfig.CACHE_POLICIES, key = "#categoryId + ':' + #sensitivityLabel")
+    @Cacheable(value = CacheConfig.CACHE_POLICIES, key = "(#p0 != null ? #p0 : 'null') + ':' + (#p1 != null ? #p1 : 'null')")
     @McpTool(name = "get_governance_policies",
             description = "Retrieve active governance policies. Optionally filter by category ID or sensitivity label. " +
                     "Use this to understand what rules apply to a document based on its classification.")

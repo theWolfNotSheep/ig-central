@@ -89,7 +89,10 @@ public class ElasticsearchIndexService {
                       "classifiedAt": { "type": "date" },
                       "fileSizeBytes": { "type": "long" },
                       "slug": { "type": "keyword" },
-                      "extractedMetadata": { "type": "object", "dynamic": true }
+                      "extractedMetadata": { "type": "object", "dynamic": true },
+                      "classificationCode": { "type": "keyword" },
+                      "classificationPath": { "type": "keyword" },
+                      "classificationLevel": { "type": "keyword" }
                     }
                   }
                 }
@@ -243,6 +246,18 @@ public class ElasticsearchIndexService {
             for (int i = 0; i < doc.getTags().size(); i++) {
                 if (i > 0) sb.append(",");
                 sb.append("\"").append(escapeJson(doc.getTags().get(i))).append("\"");
+            }
+            sb.append("],");
+        }
+
+        // Classification codes (ISO 15489)
+        appendField(sb, "classificationCode", doc.getClassificationCode());
+        appendField(sb, "classificationLevel", doc.getClassificationLevel() != null ? doc.getClassificationLevel().name() : null);
+        if (doc.getClassificationPath() != null && !doc.getClassificationPath().isEmpty()) {
+            sb.append("\"classificationPath\":[");
+            for (int i = 0; i < doc.getClassificationPath().size(); i++) {
+                if (i > 0) sb.append(",");
+                sb.append("\"").append(escapeJson(doc.getClassificationPath().get(i))).append("\"");
             }
             sb.append("],");
         }

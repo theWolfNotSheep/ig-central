@@ -17,11 +17,18 @@ type SearchResult = {
     fileSizeBytes: number;
     status: string;
     categoryName?: string;
+    classificationCode?: string;
     sensitivityLabel?: string;
     uploadedBy: string;
     createdAt: string;
     extractedMetadata?: Record<string, string>;
     tags?: string[];
+};
+
+type TaxNode = {
+    id: string; name: string; classificationCode: string;
+    level: string; documentCount: number; ownDocumentCount: number;
+    children: TaxNode[];
 };
 
 type PageResponse = {
@@ -71,14 +78,25 @@ export default function SearchPage() {
 
     // Standard filters
     const [categoryFilter, setCategoryFilter] = useState("");
+    const [codeFilter, setCodeFilter] = useState("");
     const [sensitivityFilter, setSensitivityFilter] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [dateAfter, setDateAfter] = useState("");
     const [dateBefore, setDateBefore] = useState("");
 
+    // Taxonomy cascading filter
+    const [taxTree, setTaxTree] = useState<TaxNode[]>([]);
+    const [selFunction, setSelFunction] = useState<TaxNode | null>(null);
+    const [selActivity, setSelActivity] = useState<TaxNode | null>(null);
+    const [selTransaction, setSelTransaction] = useState<TaxNode | null>(null);
+
     // Dynamic metadata filters (populated from schema)
     const [metadataFilters, setMetadataFilters] = useState<Record<string, string>>({});
     const [activeSchema, setActiveSchema] = useState<MetadataSchemaInfo | null>(null);
+
+    useEffect(() => {
+        api.get("/search/taxonomy-tree").then(({ data }) => setTaxTree(data)).catch(() => {});
+    }, []);
 
     // Load facets — re-fetch when category or sensitivity changes so counts are scoped
     const fetchFacets = useCallback(async () => {
@@ -106,7 +124,8 @@ export default function SearchPage() {
         try {
             const body: Record<string, unknown> = {};
             if (query) body.q = query;
-            if (categoryFilter) body.categoryName = categoryFilter;
+            if (codeFilter) body.classificationCodePrefix = codeFilter;
+            else if (categoryFilter) body.categoryName = categoryFilter;
             if (sensitivityFilter) body.sensitivity = sensitivityFilter;
             if (statusFilter) body.status = statusFilter;
             if (dateAfter) body.createdAfter = new Date(dateAfter).toISOString();
@@ -124,7 +143,7 @@ export default function SearchPage() {
         } finally {
             setLoading(false);
         }
-    }, [query, categoryFilter, sensitivityFilter, statusFilter, dateAfter, dateBefore, metadataFilters, page]);
+    }, [query, categoryFilter, codeFilter, sensitivityFilter, statusFilter, dateAfter, dateBefore, metadataFilters, page]);
 
     // Search on filter change
     useEffect(() => { doSearch(); }, [doSearch]);
@@ -132,6 +151,10 @@ export default function SearchPage() {
     const clearFilters = () => {
         setQuery("");
         setCategoryFilter("");
+        setCodeFilter("");
+        setSelFunction(null);
+        setSelActivity(null);
+        setSelTransaction(null);
         setSensitivityFilter("");
         setStatusFilter("");
         setDateAfter("");
@@ -151,7 +174,7 @@ export default function SearchPage() {
         setPage(0);
     };
 
-    const hasActiveFilters = categoryFilter || sensitivityFilter || statusFilter ||
+    const hasActiveFilters = categoryFilter || codeFilter || sensitivityFilter || statusFilter ||
         dateAfter || dateBefore || Object.values(metadataFilters).some(v => v.trim());
 
     return (
@@ -197,17 +220,99 @@ export default function SearchPage() {
                                 )}
                             </div>
 
-                            {/* Category */}
-                            <FilterSection label="Category">
-                                <select value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setPage(0); }}
-                                    className="w-full text-sm border border-gray-300 rounded-md px-2.5 py-1.5">
-                                    <option value="">All categories</option>
-                                    {facets && Object.entries(facets.categories)
-                                        .sort(([, a], [, b]) => b - a)
-                                        .map(([cat, count]) => (
-                                            <option key={cat} value={cat}>{cat} ({count})</option>
-                                        ))}
+                            {/* Taxonomy: Function → Activity → Transaction */}
+                            <FilterSection label="Function">
+                                <select value={selFunction?.id ?? ""} onChange={e => {
+                                    const fn = taxTree.find(f => f.id === e.target.value) ?? null;
+                                    setSelFunction(fn); setSelActivity(null); setSelTransaction(null);
+                                    setCodeFilter(fn?.classificationCode ?? ""); setCategoryFilter(""); setPage(0);
+                                }} className="w-full text-sm border border-gray-300 rounded-md px-2.5 py-1.5">
+                                    <option value="">All functions</option>
+                                    {taxTree.map(fn => (
+                                        <option key={fn.id} value={fn.id}>{fn.name} ({fn.classificationCode})</option>
+                                    ))}
                                 </select>
+                            </FilterSection>
+
+                            {selFunction && selFunction.children.length > 0 && (
+                                <FilterSection label="Activity">
+                                    <select value={selActivity?.id ?? ""} onChange={e => {
+                                        const ac = selFunction.children.find(a => a.id === e.target.value) ?? null;
+                                        setSelActivity(ac); setSelTransaction(null);
+                                        setCodeFilter(ac?.classificationCode ?? selFunction.classificationCode); setPage(0);
+                                    }} className="w-full text-sm border border-gray-300 rounded-md px-2.5 py-1.5">
+                                        <option value="">All activities</option>
+                                        {selFunction.children.map(ac => (
+                                            <option key={ac.id} value={ac.id}>{ac.name} ({ac.classificationCode})</option>
+                                        ))}
+                                    </select>
+                                </FilterSection>
+                            )}
+
+                            {selActivity && selActivity.children.length > 0 && (
+                                <FilterSection label="Transaction">
+                                    <select value={selTransaction?.id ?? ""} onChange={e => {
+                                        const tx = selActivity.children.find(t => t.id === e.target.value) ?? null;
+                                        setSelTransaction(tx);
+                                        setCodeFilter(tx?.classificationCode ?? selActivity.classificationCode); setPage(0);
+                                    }} className="w-full text-sm border border-gray-300 rounded-md px-2.5 py-1.5">
+                                        <option value="">All transactions</option>
+                                        {selActivity.children.map(tx => (
+                                            <option key={tx.id} value={tx.id}>{tx.name} ({tx.classificationCode})</option>
+                                        ))}
+                                    </select>
+                                </FilterSection>
+                            )}
+
+                            {/* Record codes accordion */}
+                            <FilterSection label="Record Codes">
+                                <div className="max-h-48 overflow-y-auto space-y-0.5 border border-gray-200 rounded-md p-2">
+                                    {(() => {
+                                        // Derive visible codes from current taxonomy selection
+                                        let codes: { code: string; name: string; count: number }[] = [];
+                                        const codeCounts = (facets as any)?.classificationCodes as Record<string, number> | undefined;
+                                        if (selActivity) {
+                                            // Show transactions under selected activity
+                                            codes = selActivity.children.map(tx => ({
+                                                code: tx.classificationCode, name: tx.name,
+                                                count: codeCounts?.[tx.classificationCode] ?? 0,
+                                            }));
+                                            // Include activity-level docs too
+                                            if (codeCounts?.[selActivity.classificationCode]) {
+                                                codes.unshift({ code: selActivity.classificationCode, name: selActivity.name,
+                                                    count: codeCounts[selActivity.classificationCode] });
+                                            }
+                                        } else if (selFunction) {
+                                            // Show activities + their transactions
+                                            for (const ac of selFunction.children) {
+                                                codes.push({ code: ac.classificationCode, name: ac.name,
+                                                    count: codeCounts?.[ac.classificationCode] ?? 0 });
+                                                for (const tx of ac.children) {
+                                                    codes.push({ code: tx.classificationCode, name: tx.name,
+                                                        count: codeCounts?.[tx.classificationCode] ?? 0 });
+                                                }
+                                            }
+                                        } else {
+                                            // Show all codes with counts
+                                            if (codeCounts) {
+                                                codes = Object.entries(codeCounts)
+                                                    .sort(([a], [b]) => a.localeCompare(b))
+                                                    .map(([code, count]) => ({ code, name: "", count }));
+                                            }
+                                        }
+                                        if (codes.length === 0) return <span className="text-xs text-gray-400">No codes available</span>;
+                                        return codes.map(c => (
+                                            <button key={c.code} onClick={() => { setCodeFilter(codeFilter === c.code ? (selActivity?.classificationCode ?? selFunction?.classificationCode ?? "") : c.code); setPage(0); }}
+                                                className={`w-full text-left flex items-center gap-2 px-2 py-1 rounded text-xs transition-colors ${
+                                                    codeFilter === c.code ? "bg-blue-50 text-blue-700 font-medium" : "text-gray-700 hover:bg-gray-50"
+                                                }`}>
+                                                <span className="font-mono shrink-0 w-24 truncate">{c.code}</span>
+                                                {c.name && <span className="truncate flex-1 text-gray-500">{c.name}</span>}
+                                                {c.count > 0 && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 rounded-full shrink-0">{c.count}</span>}
+                                            </button>
+                                        ));
+                                    })()}
+                                </div>
                             </FilterSection>
 
                             {/* Sensitivity */}
@@ -349,6 +454,11 @@ export default function SearchPage() {
                                                     </span>
                                                 </div>
                                                 <div className="flex items-center gap-2 flex-wrap">
+                                                    {doc.classificationCode && (
+                                                        <span className="text-[10px] font-mono font-semibold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                                                            {doc.classificationCode}
+                                                        </span>
+                                                    )}
                                                     {doc.categoryName && (
                                                         <span className="text-xs text-gray-500">{doc.categoryName}</span>
                                                     )}

@@ -83,6 +83,15 @@ export const helpSections: HelpSection[] = [
             { type: "heading", text: "Watching Folders" },
             { type: "paragraph", text: "You can set a folder to be 'watched' — new files added to that folder will be automatically picked up and classified every 5 minutes." },
             { type: "tip", text: "If you see an amber dot on a drive, it has read-only access. Disconnect and reconnect it to grant write permission for classification write-back." },
+            { type: "heading", text: "Drive Labels" },
+            { type: "paragraph", text: "Google Workspace admins can create Drive Labels that surface classification metadata directly in the Google Drive UI. Once configured, IG Central writes category, sensitivity, and retention information as a native Drive Label on each classified file." },
+            { type: "steps", items: [
+                "Click **Configure Labels** in the Drive Labels status bar.",
+                "Select a Workspace label from the list (created by your Google Admin).",
+                "Map each IG Central field (category, sensitivity, etc.) to a label field.",
+                "Click **Save Configuration** — new classifications will apply the label automatically.",
+                "Use **Relabel Existing Docs** to backfill labels on already-classified files.",
+            ]},
             { type: "heading", text: "Uploading Files" },
             { type: "list", items: [
                 "Click the **Upload** button in the toolbar, or drag-and-drop files onto the page.",
@@ -90,6 +99,35 @@ export const helpSections: HelpSection[] = [
                 "Supported formats: PDF, DOCX, XLSX, CSV, TXT, images (with OCR), and more.",
                 "Files are automatically queued for the AI classification pipeline.",
             ]},
+        ],
+    },
+
+    // ── Mailboxes & Email Classification ──────────────
+    {
+        slug: "mailboxes",
+        title: "Mailboxes & Email Classification",
+        category: "user",
+        icon: "Mail",
+        summary: "Connect Gmail accounts, browse emails, and classify email bodies and attachments.",
+        content: [
+            { type: "paragraph", text: "IG Central can classify emails and their attachments from connected Gmail accounts. Each email is treated as a document (the body text) with linked child documents (attachments)." },
+            { type: "heading", text: "Connecting Gmail" },
+            { type: "steps", items: [
+                "Go to **Mailboxes** in the sidebar.",
+                "Click the **+** button or **Connect Gmail**.",
+                "Sign in with your Google account and grant read-only access.",
+                "Your mailbox appears in the list — browse and search messages.",
+            ]},
+            { type: "heading", text: "Importing Emails" },
+            { type: "steps", items: [
+                "Browse messages or use the Gmail search bar (supports Gmail query syntax like `from:`, `has:attachment`, `newer_than:`).",
+                "Click **Import** on a single message, or select multiple and click **Import N**.",
+                "The email body and each attachment are created as separate documents and queued for classification.",
+                "View imported emails in the **Documents** page — they show email headers and an attachments list.",
+            ]},
+            { type: "heading", text: "Automated Email Watching" },
+            { type: "paragraph", text: "Admins can configure a **Gmail Watcher** pipeline trigger node that automatically polls a Gmail account on a schedule and ingests new messages matching a search query." },
+            { type: "tip", text: "Duplicate emails are never imported twice — IG Central checks the Gmail message ID before ingesting." },
         ],
     },
 
@@ -548,8 +586,29 @@ export const helpSections: HelpSection[] = [
                 "**Retry Failed** — re-queue all failed documents for another attempt.",
                 "**Cancel All** — purge queues and reset all in-progress documents.",
             ]},
+            { type: "heading", text: "LLM Circuit Breaker" },
+            { type: "paragraph", text: "The classification pipeline includes a circuit breaker that automatically pauses LLM calls when the model is unresponsive. This prevents queue overload and retry storms." },
+            { type: "table", headers: ["State", "Meaning", "Behaviour"], rows: [
+                ["CLOSED", "Normal operation", "LLM calls proceed as usual. Failures are counted."],
+                ["OPEN", "LLM is down or overloaded", "Classification paused for 2 minutes. Documents stay at PROCESSED and are retried later."],
+            ]},
+            { type: "list", items: [
+                "The circuit opens after **5 consecutive failures** (timeouts or errors).",
+                "After a **2-minute cooldown**, one probe request is allowed to test recovery.",
+                "If the probe succeeds, the circuit closes and normal processing resumes.",
+                "If the probe fails, the circuit stays open for another 2 minutes.",
+                "A **CRITICAL system error** is logged when the circuit opens — visible in the error panel.",
+            ]},
+            { type: "tip", text: "The circuit breaker status is shown on the monitoring page above the queue depths. A red pulsing dot means the circuit is open and classification is paused." },
+            { type: "heading", text: "Queue TTL & Overflow Protection" },
+            { type: "paragraph", text: "Messages in the classification queue (gls.documents.processed) have a 1-hour TTL. If the LLM worker can't process them within an hour, they expire and are routed to the dead-letter queue. This prevents unbounded queue growth during outages." },
+            { type: "list", items: [
+                "The stale document recovery task re-queues stuck documents, but with a **30-minute cooldown** to prevent re-queuing the same documents every 5 minutes.",
+                "Each document has a retry cap of **3 automatic retries** — after that it stays at PROCESSED until manually retried.",
+                "Consumer prefetch is limited to **2-5 messages** to prevent overwhelming the LLM with concurrent requests.",
+            ]},
             { type: "heading", text: "System Errors" },
-            { type: "paragraph", text: "Unhandled errors are automatically persisted and visible in the monitoring page. Each error shows the category (PIPELINE, QUEUE, STORAGE, AUTH, EXTERNAL_API), stack trace, and affected document. You can resolve errors with notes." },
+            { type: "paragraph", text: "Unhandled errors are automatically persisted and visible in the monitoring page. Each error shows the category (PIPELINE, QUEUE, STORAGE, AUTH, EXTERNAL_API, LLM_CIRCUIT_BREAKER), stack trace, and affected document. You can resolve errors with notes." },
         ],
     },
 
@@ -635,6 +694,26 @@ export const helpSections: HelpSection[] = [
             ]},
             { type: "tip", text: "Start with **qwen2.5:32b** for the best balance of speed and quality. If you have 96GB RAM and want maximum accuracy, use **qwen2.5:72b**. The correction feedback loop (past human corrections fed to the model via MCP tools) significantly improves accuracy regardless of model size." },
 
+            { type: "heading", text: "Performance Tuning (Mac Studio)" },
+            { type: "paragraph", text: "Mac Studio with Apple Ultra chips (M1/M2/M3/M4 Ultra) can run large models very effectively using Unified Memory Architecture (UMA). These optimisations are configured in the Ollama launchd plist and significantly improve classification throughput." },
+            { type: "table", headers: ["Setting", "Value", "Effect"], rows: [
+                ["OLLAMA_KEEP_ALIVE", "-1", "Keep model permanently loaded in GPU memory. Eliminates 30-50s cold start between batches."],
+                ["OLLAMA_NUM_PARALLEL", "2", "Allow 2 concurrent inferences sharing the KV cache. Nearly doubles throughput (2x wall-clock for batch processing)."],
+                ["OLLAMA_FLASH_ATTENTION", "1", "Enable flash attention for faster prompt processing. Reduces prefill latency."],
+                ["OLLAMA_KV_CACHE_TYPE", "q8_0", "Quantise KV cache to 8-bit. Reduces memory usage per context slot, allowing more parallelism."],
+            ]},
+            { type: "paragraph", text: "These are set in the Ollama launchd plist at `~/Library/LaunchAgents/homebrew.mxcl.ollama.plist` under the `EnvironmentVariables` dict. After editing, restart with `brew services restart ollama`." },
+            { type: "paragraph", text: "**Benchmarks (Mac Studio M3 Ultra, 96GB, qwen2.5:32b Q4_K_M):**" },
+            { type: "table", headers: ["Metric", "Before Tuning", "After Tuning"], rows: [
+                ["Model load", "30-50s cold start after 5min idle", "Always loaded (0s)"],
+                ["Prefill", "109 tok/s", "130 tok/s (flash attention)"],
+                ["Decode", "26 tok/s", "27 tok/s"],
+                ["2 docs sequential", "184s", "184s"],
+                ["2 docs parallel", "N/A (serial only)", "98s (1.9x faster)"],
+                ["Throughput", "~2 docs/min", "~4 docs/min"],
+            ]},
+            { type: "tip", text: "Ollama v0.19+ uses Apple's MLX framework automatically on Apple Silicon for supported architectures, providing up to 7x faster inference compared to older llama.cpp builds. Ensure you're on Ollama 0.19 or later: `ollama --version`" },
+
             { type: "heading", text: "Keeping Ollama Running" },
             { type: "paragraph", text: "To have Ollama start automatically on macOS boot:" },
             { type: "steps", items: [
@@ -642,6 +721,7 @@ export const helpSections: HelpSection[] = [
                 "This registers Ollama as a background service that starts on login.",
                 "To stop: `brew services stop ollama`",
                 "To check status: `brew services list | grep ollama`",
+                "To verify GPU usage: `ollama ps` — should show 100% GPU.",
             ]},
 
             { type: "heading", text: "Troubleshooting" },
@@ -659,6 +739,100 @@ export const helpSections: HelpSection[] = [
                 ["Ollama (qwen2.5:72b)", "$0", "Excellent quality, runs locally, needs 42GB RAM"],
                 ["Ollama (qwen2.5:32b)", "$0", "Very good quality, runs locally, needs 34GB RAM"],
             ]},
+        ],
+    },
+
+    // ── Google Cloud Setup ──────────────────────────────
+    {
+        slug: "google-cloud-setup",
+        title: "Google Cloud Setup",
+        category: "admin",
+        icon: "Cloud",
+        summary: "Set up Google Cloud APIs for Google Drive, Drive Labels, and Gmail integration.",
+        content: [
+            { type: "paragraph", text: "IG Central connects to Google Drive and Gmail using OAuth 2.0. This requires a Google Cloud project with the correct APIs enabled, OAuth consent configured, and credentials created. This guide covers the full setup." },
+
+            { type: "heading", text: "1. Create a Google Cloud Project" },
+            { type: "steps", items: [
+                "Go to **console.cloud.google.com** and sign in with a Google Workspace admin account.",
+                "Click the project dropdown at the top and select **New Project**.",
+                "Name it (e.g. 'IG Central') and click **Create**.",
+                "Make sure the new project is selected in the project dropdown.",
+            ]},
+
+            { type: "heading", text: "2. Enable Required APIs" },
+            { type: "paragraph", text: "Each Google service needs its API enabled individually. Go to **APIs & Services > Library** and enable the following:" },
+            { type: "table", headers: ["API", "Used For", "Search Name"], rows: [
+                ["Google Drive API", "Browsing files, classification write-back, file properties", "Google Drive API"],
+                ["Google Drive Labels API", "Native Drive Labels visible in Drive UI", "Google Drive Labels API"],
+                ["Gmail API", "Reading emails, downloading attachments", "Gmail API"],
+            ]},
+            { type: "steps", items: [
+                "In the Google Cloud Console, go to **APIs & Services > Library**.",
+                "Search for each API name in the table above.",
+                "Click on the API and click **Enable**.",
+                "Repeat for all three APIs.",
+            ]},
+            { type: "tip", text: "If you skip enabling an API, you'll see a '403 SERVICE_DISABLED' error when trying to use that feature. The error message includes a direct link to enable the missing API." },
+
+            { type: "heading", text: "3. Configure OAuth Consent Screen" },
+            { type: "steps", items: [
+                "Go to **APIs & Services > OAuth consent screen**.",
+                "Choose **Internal** (for Workspace users only) or **External** (for any Google account).",
+                "Fill in the app name (e.g. 'IG Central'), user support email, and developer contact.",
+                "On the **Scopes** page, add these scopes:",
+            ]},
+            { type: "table", headers: ["Scope", "Purpose"], rows: [
+                ["https://www.googleapis.com/auth/drive", "Read and write Drive files"],
+                ["https://www.googleapis.com/auth/drive.labels", "Read and apply Drive Labels"],
+                ["https://www.googleapis.com/auth/gmail.readonly", "Read Gmail messages and attachments"],
+                ["https://www.googleapis.com/auth/userinfo.email", "Get user email address"],
+                ["https://www.googleapis.com/auth/userinfo.profile", "Get user display name"],
+            ]},
+            { type: "paragraph", text: "If using **External** user type, add test users under the **Test users** section until you publish the app for production." },
+
+            { type: "heading", text: "4. Create OAuth Credentials" },
+            { type: "steps", items: [
+                "Go to **APIs & Services > Credentials**.",
+                "Click **Create Credentials > OAuth client ID**.",
+                "Set application type to **Web application**.",
+                "Name it (e.g. 'IG Central Web Client').",
+                "Under **Authorized redirect URIs**, add:\n`{YOUR_PUBLIC_URL}/api/drives/google/callback`\n`{YOUR_PUBLIC_URL}/api/auth/public/google/callback`\nReplace `{YOUR_PUBLIC_URL}` with your domain (e.g. `https://igcentral.example.com`).",
+                "Click **Create** and copy the **Client ID** and **Client Secret**.",
+            ]},
+
+            { type: "heading", text: "5. Configure IG Central" },
+            { type: "steps", items: [
+                "In IG Central, go to **Settings > Google OAuth**.",
+                "Paste your **Client ID** and **Client Secret**.",
+                "Set the **Redirect URI** to match what you registered (e.g. `https://igcentral.example.com/api/drives/google/callback`).",
+                "Save the settings.",
+            ]},
+            { type: "paragraph", text: "Alternatively, set these as environment variables in your `.env` file:" },
+            { type: "list", items: [
+                "`GOOGLE_OAUTH_CLIENT_ID=your_client_id.apps.googleusercontent.com`",
+                "`GOOGLE_OAUTH_CLIENT_SECRET=your_client_secret`",
+                "`PUBLIC_URL=https://your-domain.com` (redirect URIs are derived from this)",
+            ]},
+
+            { type: "heading", text: "6. Drive Labels Setup (Optional)" },
+            { type: "paragraph", text: "Drive Labels are a Google Workspace feature that lets you attach structured metadata to files visible in the Drive UI. This requires a Workspace admin to create a label definition." },
+            { type: "steps", items: [
+                "A Google Workspace admin goes to **admin.google.com > Apps > Google Workspace > Drive and Docs > Labels**.",
+                "Create a new label (e.g. 'IG Central Classification').",
+                "Add fields: **Category** (text), **Sensitivity** (text or selection), **Retention Until** (text or date), **Vital Record** (text or selection), **Legal Hold** (text or selection).",
+                "Publish the label to make it available.",
+                "In IG Central, go to **Drives > [your drive] > Configure Labels**.",
+                "Select the label and map each IG Central field to the corresponding label field.",
+            ]},
+            { type: "tip", text: "Drive Labels require the `drive.labels` scope. If you connected your Drive before this was added, disconnect and reconnect to grant the new scope. A green dot on the drive indicates labels are configured; an orange dot means reconnection is needed." },
+
+            { type: "heading", text: "Troubleshooting" },
+            { type: "faq", question: "'403 SERVICE_DISABLED' when connecting", answer: "The required API is not enabled in your Google Cloud project. The error message includes a direct link — click it to enable the API, wait 1-2 minutes, then retry." },
+            { type: "faq", question: "'redirect_uri_mismatch' error", answer: "The redirect URI in your IG Central settings doesn't match what's registered in Google Cloud Console. They must match exactly, including the protocol (https) and path." },
+            { type: "faq", question: "'access_denied' or 'app not verified'", answer: "For External OAuth consent, Google requires app verification for sensitive scopes. During development, add your account as a test user in the consent screen settings." },
+            { type: "faq", question: "Drive Labels not showing in Drive UI", answer: "Ensure the label is published (not draft) in Google Admin. Check that the field mapping is saved in IG Central. Verify the document reached a terminal status (CLASSIFIED or GOVERNANCE_APPLIED) to trigger the write-back." },
+            { type: "faq", question: "Gmail shows 'no messages' even though I have emails", answer: "Check that the Gmail API is enabled in Google Cloud Console. If you just enabled it, wait a few minutes for propagation. Also verify the Gmail account was connected with the gmail.readonly scope — disconnect and reconnect if needed." },
         ],
     },
 ];

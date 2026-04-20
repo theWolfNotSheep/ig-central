@@ -4,9 +4,10 @@ spring:
     port: 5672
     listener:
       simple:
-        concurrency: 2
-        max-concurrency: 5
+        concurrency: 3
+        max-concurrency: 6
         prefetch: 1
+        default-requeue-rejected: false
   threads:
     virtual:
       enabled: true

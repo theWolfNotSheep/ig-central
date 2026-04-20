@@ -62,6 +62,7 @@ public class DefaultSecurityConfig {
                         .ignoringRequestMatchers("/api/auth/public/**")
                         .ignoringRequestMatchers("/api/internal/**")
                         .ignoringRequestMatchers("/api/drives/google/callback")
+                        .ignoringRequestMatchers("/api/mailboxes/gmail/callback")
                         .ignoringRequestMatchers("/api/auth/public/google/**")
                         .ignoringRequestMatchers(IdentityPaths.VERIFY)
                         .ignoringRequestMatchers("/actuator/**")

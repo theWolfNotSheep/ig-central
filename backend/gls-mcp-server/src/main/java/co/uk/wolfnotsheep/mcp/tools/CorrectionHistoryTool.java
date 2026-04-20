@@ -24,7 +24,7 @@ public class CorrectionHistoryTool {
         this.toolLog = toolLog;
     }
 
-    @Cacheable(value = CacheConfig.CACHE_CORRECTIONS, key = "#categoryId + ':' + #mimeType")
+    @Cacheable(value = CacheConfig.CACHE_CORRECTIONS, key = "(#p0 != null ? #p0 : 'null') + ':' + (#p1 != null ? #p1 : 'null')")
     @McpTool(name = "get_correction_history",
             description = "Retrieve past human corrections to LLM classifications. " +
                     "ALWAYS call this BEFORE making a classification decision. " +

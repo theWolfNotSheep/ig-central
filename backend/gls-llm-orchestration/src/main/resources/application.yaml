@@ -44,6 +44,12 @@ spring:
 llm:
   provider: ${LLM_PROVIDER:anthropic}
 
+logging:
+  level:
+    org.springframework.ai.model.tool: DEBUG
+    org.springframework.ai.chat.client: DEBUG
+    org.springframework.ai.mcp: DEBUG
+
 
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}

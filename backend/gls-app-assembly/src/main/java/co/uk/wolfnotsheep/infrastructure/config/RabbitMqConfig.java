@@ -166,6 +166,7 @@ public class RabbitMqConfig {
         factory.setConnectionFactory(connectionFactory);
         factory.setMessageConverter(jsonMessageConverter);
         factory.setDefaultRequeueRejected(false);
+        factory.setPrefetchCount(5); // Limit prefetch to prevent overwhelming LLM/Ollama
         return factory;
     }
 }

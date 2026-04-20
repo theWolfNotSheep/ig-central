@@ -46,6 +46,16 @@ const FIELD_DEFS: FieldDef[] = [
         helpText: "Add BOTH URIs to Google Cloud Console: this one for Drive connections, and /api/auth/public/google/callback for login.",
         group: "Google Drive", groupIcon: HardDrive },
 
+    // Pipeline Throttling
+    { key: "pipeline.throttle.max_in_flight", label: "Max In-Flight Documents", type: "number", category: "pipeline",
+        min: 1, max: 500,
+        helpText: "Maximum documents in PROCESSING + CLASSIFYING + PROCESSED states before new submissions are rejected. Set based on LLM capacity.",
+        group: "Pipeline Throttling", groupIcon: Settings2 },
+    { key: "pipeline.throttle.max_batch_size", label: "Max Batch Size", type: "number", category: "pipeline",
+        min: 1, max: 100,
+        helpText: "Maximum documents that can be submitted in a single classify/import operation.",
+        group: "Pipeline Throttling", groupIcon: Settings2 },
+
     // Governance Hub
     { key: "governance.hub.url", label: "Hub URL", type: "text", category: "integrations",
         placeholder: "https://hub.igcentral.com",

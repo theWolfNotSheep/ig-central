@@ -29,4 +29,8 @@ public interface AiUsageLogRepository extends MongoRepository<AiUsageLog, String
     long countByTimestampAfter(Instant after);
 
     List<AiUsageLog> findByDocumentIdAndUsageTypeOrderByTimestampDesc(String documentId, String usageType);
+
+    List<AiUsageLog> findByTimestampBetween(Instant from, Instant to);
+
+    List<AiUsageLog> findByTimestampAfterOrderByTimestampAsc(Instant after);
 }

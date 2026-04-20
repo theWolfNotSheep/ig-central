@@ -25,6 +25,8 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The core classification pipeline. Consumes document.processed events,
@@ -39,6 +41,15 @@ import java.util.List;
 public class ClassificationPipeline {
 
     private static final Logger log = LoggerFactory.getLogger(ClassificationPipeline.class);
+
+    // ── Circuit breaker state ────────────────────────────
+    /** Number of consecutive failures before opening the circuit */
+    private static final int CIRCUIT_BREAKER_THRESHOLD = 5;
+    /** How long the circuit stays open before allowing a probe request (ms) */
+    private static final long CIRCUIT_BREAKER_COOLDOWN_MS = 120_000; // 2 minutes
+
+    private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
+    private final AtomicLong circuitOpenedAt = new AtomicLong(0);
 
     private final LlmClientFactory llmClientFactory;
     private final ClassificationPromptBuilder promptBuilder;
@@ -80,6 +91,14 @@ public class ClassificationPipeline {
     public void onDocumentProcessed(DocumentProcessedEvent event) {
         log.info("Received document for classification: {} ({})", event.documentId(), event.fileName());
 
+        // Circuit breaker: reject immediately if LLM is down
+        if (isCircuitOpen()) {
+            log.warn("Circuit breaker OPEN — skipping classification for {} ({}). Will retry after cooldown.",
+                    event.documentId(), event.fileName());
+            // Don't set to FAILED — leave as PROCESSED so stale recovery can retry later
+            return;
+        }
+
         try {
             // Status guard: skip if document was cancelled or is no longer at PROCESSED
             DocumentModel current = documentService.getById(event.documentId());
@@ -97,7 +116,12 @@ public class ClassificationPipeline {
             long classifyMs = System.currentTimeMillis() - classifyStart;
             statusNotifier.emitLog(event.documentId(), event.fileName(), "CLASSIFICATION", "INFO",
                     "Classification complete", classifyMs);
+
+            // Success — reset circuit breaker
+            recordSuccess();
         } catch (Exception e) {
+            // Failure — increment circuit breaker
+            recordFailure();
             log.error("Classification failed for document {}: {}", event.documentId(), e.getMessage(), e);
             statusNotifier.emitLog(event.documentId(), event.fileName(), "CLASSIFICATION", "ERROR",
                     "Failed: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()), null);
@@ -375,6 +399,18 @@ public class ClassificationPipeline {
             governanceService.saveClassificationResult(latest);
         }
 
+        // ── Metadata extraction backfill ─────────────────────────────────
+        // If the LLM classified successfully but didn't extract metadata
+        // (skipped get_metadata_schemas), do a focused extraction pass.
+        if (needsMetadataExtraction(latest)) {
+            try {
+                backfillMetadata(latest, event, llmOverrides, usageLog);
+            } catch (Exception e) {
+                log.warn("Metadata extraction backfill failed for document {} — classification is still valid: {}",
+                        event.documentId(), e.getMessage());
+            }
+        }
+
         usageLog.setStatus("SUCCESS");
         usageLog.setReasoning(latest.getReasoning());
         usageLog.setResult(java.util.Map.of(
@@ -590,6 +626,64 @@ public class ClassificationPipeline {
         }
     }
 
+    // ── Circuit breaker ────────────────────────────────────
+
+    private boolean isCircuitOpen() {
+        long openedAt = circuitOpenedAt.get();
+        if (openedAt == 0) return false; // circuit is closed
+        long elapsed = System.currentTimeMillis() - openedAt;
+        if (elapsed > CIRCUIT_BREAKER_COOLDOWN_MS) {
+            // Cooldown expired — allow one probe request (half-open)
+            log.info("Circuit breaker cooldown expired after {}s — allowing probe request",
+                    elapsed / 1000);
+            circuitOpenedAt.set(0);
+            consecutiveFailures.set(CIRCUIT_BREAKER_THRESHOLD - 1); // one more failure re-opens
+            return false;
+        }
+        return true;
+    }
+
+    private void recordSuccess() {
+        int prev = consecutiveFailures.getAndSet(0);
+        if (prev >= CIRCUIT_BREAKER_THRESHOLD) {
+            circuitOpenedAt.set(0);
+            log.info("Circuit breaker CLOSED — LLM call succeeded after recovery");
+        }
+    }
+
+    private void recordFailure() {
+        int failures = consecutiveFailures.incrementAndGet();
+        if (failures >= CIRCUIT_BREAKER_THRESHOLD && circuitOpenedAt.get() == 0) {
+            circuitOpenedAt.set(System.currentTimeMillis());
+            log.error("Circuit breaker OPENED — {} consecutive LLM failures. " +
+                    "Pausing classification for {}s to let LLM recover.",
+                    failures, CIRCUIT_BREAKER_COOLDOWN_MS / 1000);
+            try {
+                var sysError = co.uk.wolfnotsheep.document.models.SystemError.of(
+                        "CRITICAL", "LLM_CIRCUIT_BREAKER",
+                        "Circuit breaker opened after " + failures + " consecutive LLM failures. " +
+                        "Classification paused for " + (CIRCUIT_BREAKER_COOLDOWN_MS / 1000) + "s.");
+                sysError.setService("llm-worker");
+                systemErrorRepo.save(sysError);
+            } catch (Exception e) {
+                log.error("Failed to persist circuit breaker error: {}", e.getMessage());
+            }
+        }
+    }
+
+    /** Expose circuit breaker state for monitoring. */
+    public java.util.Map<String, Object> getCircuitBreakerStatus() {
+        long openedAt = circuitOpenedAt.get();
+        boolean open = openedAt > 0 && (System.currentTimeMillis() - openedAt) <= CIRCUIT_BREAKER_COOLDOWN_MS;
+        return java.util.Map.of(
+                "state", open ? "OPEN" : "CLOSED",
+                "consecutiveFailures", consecutiveFailures.get(),
+                "threshold", CIRCUIT_BREAKER_THRESHOLD,
+                "cooldownSeconds", CIRCUIT_BREAKER_COOLDOWN_MS / 1000,
+                "openedAt", openedAt > 0 ? Instant.ofEpochMilli(openedAt).toString() : ""
+        );
+    }
+
     /**
      * Get the review threshold from the ROUTER block if available,
      * falling back to AppConfigService.
@@ -610,5 +704,100 @@ public class ClassificationPipeline {
             log.debug("Failed to load ROUTER block threshold, using config fallback: {}", e.getMessage());
         }
         return configService.getValue("pipeline.confidence.review_threshold", 0.7);
+    }
+
+    // ── Metadata extraction backfill ─────────────────────────────────
+
+    /**
+     * Returns true if the classification result has no real extracted metadata
+     * (only _traits or empty) — meaning the LLM skipped get_metadata_schemas.
+     */
+    private boolean needsMetadataExtraction(DocumentClassificationResult result) {
+        var meta = result.getExtractedMetadata();
+        if (meta == null || meta.isEmpty()) return true;
+        // Only _traits present — no schema fields were extracted
+        return meta.size() == 1 && meta.containsKey("_traits");
+    }
+
+    /**
+     * Look up the metadata schema for the classified category and run a short,
+     * focused LLM call to extract only those fields.  Updates the existing
+     * classification result in place.
+     */
+    private void backfillMetadata(DocumentClassificationResult result,
+                                  DocumentProcessedEvent event,
+                                  java.util.Map<String, Object> llmOverrides,
+                                  co.uk.wolfnotsheep.document.models.AiUsageLog parentLog) {
+        String categoryId = result.getCategoryId();
+        String schema = governanceService.getMetadataSchemaForCategory(categoryId);
+        if (schema == null) {
+            log.debug("No metadata schema for category {} — skipping backfill", categoryId);
+            return;
+        }
+
+        log.info("Metadata backfill: running focused extraction for document {} (category {})",
+                event.documentId(), result.getCategoryName());
+        statusNotifier.emitLog(event.documentId(), event.fileName(), "METADATA_EXTRACTION", "INFO",
+                "Running metadata extraction for " + result.getCategoryName(), null);
+
+        int maxText = configService.getValue("pipeline.text.max_length", 100000);
+        String docText = event.extractedText();
+        if (docText != null && docText.length() > maxText) {
+            docText = docText.substring(0, maxText);
+        }
+
+        String extractionPrompt = """
+                You are a metadata extraction specialist. Extract ONLY the fields listed below
+                from the document text. Return a single valid JSON object — no markdown, no
+                explanation, just the JSON.
+
+                For fields you cannot find in the document, omit them from the JSON.
+                Be precise: dates in ISO format (YYYY-MM-DD), amounts with currency symbol,
+                full names not abbreviations.
+
+                ## Schema
+
+                """ + schema;
+
+        String userMsg = "Extract metadata from this document:\n\n" + docText;
+
+        try {
+            long timeout = resolveTimeout(llmOverrides);
+            String jsonResponse = callWithTimeout(extractionPrompt, userMsg,
+                    llmOverrides, timeout, event.documentId());
+
+            if (jsonResponse != null && !jsonResponse.isBlank()) {
+                // Strip markdown code fences if the model wraps the JSON
+                String cleaned = jsonResponse.strip();
+                if (cleaned.startsWith("```")) {
+                    cleaned = cleaned.replaceFirst("^```[a-zA-Z]*\\n?", "").replaceFirst("```\\s*$", "").strip();
+                }
+
+                var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                var typeRef = new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, String>>() {};
+                java.util.Map<String, String> extracted = mapper.readValue(cleaned, typeRef);
+
+                // Merge with existing metadata (preserve _traits)
+                var merged = new java.util.HashMap<>(result.getExtractedMetadata() != null
+                        ? result.getExtractedMetadata() : java.util.Map.<String, String>of());
+                merged.putAll(extracted);
+                result.setExtractedMetadata(merged);
+                governanceService.saveClassificationResult(result);
+
+                // Also update the document model
+                DocumentModel doc2 = documentService.getById(event.documentId());
+                if (doc2 != null) {
+                    doc2.setExtractedMetadata(merged);
+                    documentService.save(doc2);
+                }
+
+                log.info("Metadata backfill complete for document {} — extracted {} fields",
+                        event.documentId(), extracted.size());
+                statusNotifier.emitLog(event.documentId(), event.fileName(), "METADATA_EXTRACTION", "INFO",
+                        "Extracted " + extracted.size() + " metadata fields", null);
+            }
+        } catch (Exception e) {
+            log.warn("Metadata backfill LLM call failed for document {}: {}", event.documentId(), e.getMessage());
+        }
     }
 }

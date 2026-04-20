@@ -49,6 +49,9 @@ public class GovernanceAdminController {
     @Value("${spring.ai.anthropic.api-key:}")
     private String anthropicApiKey;
 
+    @Value("${OLLAMA_BASE_URL:http://localhost:11434}")
+    private String ollamaBaseUrl;
+
     public GovernanceAdminController(GovernanceService governanceService,
                                      GovernancePolicyRepository policyRepository,
                                      ClassificationCategoryRepository categoryRepository,
@@ -782,11 +785,28 @@ public class GovernanceAdminController {
             usageLog.setStatus("SUCCESS");
             try { aiUsageLogRepo.save(usageLog); } catch (Exception logErr) { log.error("Failed to save AI usage log: {}", logErr.getMessage()); }
 
+            // Parse the LLM JSON array response into structured fields
+            String cleaned = suggestion.strip();
+            if (cleaned.startsWith("```")) {
+                cleaned = cleaned.replaceFirst("^```[a-zA-Z]*\\n?", "").replaceFirst("```\\s*$", "").strip();
+            }
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            List<?> fields;
+            try {
+                fields = mapper.readValue(cleaned, List.class);
+            } catch (Exception parseErr) {
+                log.warn("Failed to parse LLM suggestion as JSON, returning raw: {}", parseErr.getMessage());
+                fields = List.of();
+            }
+
+            // Suggest a schema name based on category
+            String suggestedName = doc.getCategoryName() != null
+                    ? doc.getCategoryName() : "Suggested Schema";
+
             return ResponseEntity.ok(Map.of(
                     "documentId", documentId,
-                    "fileName", doc.getOriginalFileName() != null ? doc.getOriginalFileName() : "",
-                    "categoryName", doc.getCategoryName() != null ? doc.getCategoryName() : "",
-                    "suggestedFields", suggestion
+                    "name", suggestedName,
+                    "fields", fields
             ));
         } catch (Exception e) {
             log.error("Schema suggestion LLM call failed: {}", e.getMessage());
@@ -885,92 +905,68 @@ public class GovernanceAdminController {
 
     // ── LLM Helper ────────────────────────────────────────
 
-    private String callLlm(String prompt) throws Exception {
-        String escapedPrompt = prompt.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+    private final com.fasterxml.jackson.databind.ObjectMapper jsonMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-        // Check which provider is configured
+    private String callLlm(String prompt) throws Exception {
         String provider = configService.getValue("llm.provider", "anthropic");
         if ("ollama".equalsIgnoreCase(provider)) {
-            return callOllama(escapedPrompt);
+            return callOllama(prompt);
         }
 
-        // Anthropic
         String apiKey = configService.getValue("llm.anthropic.api_key", anthropicApiKey);
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("No LLM configured. Set Anthropic API key or switch to Ollama in Settings.");
         }
         String model = configService.getValue("llm.anthropic.model", "claude-sonnet-4-20250514");
 
-        String requestBody = """
-                {"model":"%s","max_tokens":4096,"messages":[{"role":"user","content":"%s"}]}
-                """.formatted(model, escapedPrompt);
+        Map<String, Object> body = Map.of(
+                "model", model,
+                "max_tokens", 4096,
+                "messages", List.of(Map.of("role", "user", "content", prompt)));
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("https://api.anthropic.com/v1/messages"))
                 .header("Content-Type", "application/json")
                 .header("x-api-key", apiKey)
                 .header("anthropic-version", "2023-06-01")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .POST(HttpRequest.BodyPublishers.ofString(jsonMapper.writeValueAsString(body)))
                 .build();
 
         HttpResponse<String> response = HttpClient.newHttpClient()
                 .send(request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
-            throw new RuntimeException("LLM API error: " + response.statusCode());
+            throw new RuntimeException("LLM API error: " + response.statusCode() + " — " + response.body());
         }
 
-        return extractTextFromAnthropicResponse(response.body());
+        var tree = jsonMapper.readTree(response.body());
+        var content = tree.path("content");
+        if (content.isArray() && !content.isEmpty()) {
+            return content.get(0).path("text").asText("");
+        }
+        return response.body();
     }
 
-    private String callOllama(String escapedPrompt) throws Exception {
-        String baseUrl = configService.getValue("llm.ollama.base_url", "http://localhost:11434");
+    private String callOllama(String prompt) throws Exception {
+        String baseUrl = configService.getValue("llm.ollama.base_url", ollamaBaseUrl);
         String model = configService.getValue("llm.ollama.model", "qwen2.5:32b");
 
-        String requestBody = """
-                {"model":"%s","prompt":"%s","stream":false}
-                """.formatted(model, escapedPrompt);
+        Map<String, Object> body = Map.of("model", model, "prompt", prompt, "stream", false);
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/api/generate"))
                 .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .POST(HttpRequest.BodyPublishers.ofString(jsonMapper.writeValueAsString(body)))
                 .build();
 
         HttpResponse<String> response = HttpClient.newHttpClient()
                 .send(request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() != 200) {
-            throw new RuntimeException("Ollama API error: " + response.statusCode());
+            throw new RuntimeException("Ollama API error: " + response.statusCode() + " — " + response.body());
         }
 
-        // Ollama response: {"response":"...","done":true}
-        String body = response.body();
-        int start = body.indexOf("\"response\":\"") + 12;
-        int end = body.indexOf("\",\"done\"");
-        if (start < 12 || end < 0) {
-            // Try to find response field more flexibly
-            start = body.indexOf("\"response\":\"") + 12;
-            end = body.lastIndexOf("\"");
-        }
-        if (start >= 12 && end > start) {
-            return body.substring(start, end).replace("\\n", "\n").replace("\\\"", "\"").replace("\\t", "\t");
-        }
-        return body;
-    }
-
-    private String extractTextFromAnthropicResponse(String responseBody) {
-        int textStart = responseBody.indexOf("\"text\":\"") + 8;
-        int textEnd = responseBody.indexOf("\"", textStart);
-        if (textStart < 8 || textEnd < 0) {
-            int contentStart = responseBody.indexOf("\"text\":");
-            if (contentStart >= 0) {
-                return responseBody.substring(contentStart + 8, responseBody.indexOf("\"", contentStart + 8))
-                        .replace("\\n", "\n").replace("\\\"", "\"");
-            }
-            return responseBody;
-        }
-        return responseBody.substring(textStart, textEnd).replace("\\n", "\n").replace("\\\"", "\"");
+        return jsonMapper.readTree(response.body()).path("response").asText("");
     }
 
     // ── Helpers ───────────────────────────────────────────
@@ -984,5 +980,33 @@ public class GovernanceAdminController {
             current = current.getParentId() != null ? categoryById.get(current.getParentId()) : null;
         }
         return String.join(" > ", parts);
+    }
+
+    // ── Record Code Service ──────────────────────────────────
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private co.uk.wolfnotsheep.enforcement.services.RecordCodeService recordCodeService;
+
+    @PostMapping("/record-codes/backfill")
+    public ResponseEntity<Map<String, Object>> backfillRecordCodes() {
+        if (recordCodeService == null) {
+            return ResponseEntity.internalServerError().body(Map.of("error", "RecordCodeService not available"));
+        }
+        int updated = recordCodeService.backfillRecordCodes();
+        return ResponseEntity.ok(Map.of("updated", updated));
+    }
+
+    @PostMapping("/record-codes/{documentId}/apply")
+    public ResponseEntity<Map<String, Object>> applyRecordCode(@PathVariable String documentId) {
+        if (recordCodeService == null) {
+            return ResponseEntity.internalServerError().body(Map.of("error", "RecordCodeService not available"));
+        }
+        var doc = recordCodeService.applyRecordCode(documentId);
+        if (doc == null) return ResponseEntity.notFound().build();
+        return ResponseEntity.ok(Map.of(
+                "documentId", documentId,
+                "classificationCode", doc.getClassificationCode() != null ? doc.getClassificationCode() : "",
+                "classificationLevel", doc.getClassificationLevel() != null ? doc.getClassificationLevel().name() : ""
+        ));
     }
 }

@@ -82,7 +82,8 @@ class DocumentUploadFlowIT extends BaseIntegrationTest {
                 "test-bucket",
                 "uploads/test-report.pdf",
                 "test-user",
-                Instant.now()
+                Instant.now(),
+                null
         );
         rabbitTemplate.convertAndSend(
                 RabbitMqConfig.EXCHANGE,
@@ -172,7 +173,8 @@ class DocumentUploadFlowIT extends BaseIntegrationTest {
                 "test-bucket",
                 "uploads/already-processed.pdf",
                 "test-user",
-                Instant.now()
+                Instant.now(),
+                null
         );
         rabbitTemplate.convertAndSend(
                 RabbitMqConfig.EXCHANGE,

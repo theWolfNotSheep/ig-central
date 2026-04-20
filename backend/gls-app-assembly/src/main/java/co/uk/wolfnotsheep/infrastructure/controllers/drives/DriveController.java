@@ -5,6 +5,7 @@ import co.uk.wolfnotsheep.document.models.ConnectedDrive;
 import co.uk.wolfnotsheep.document.models.DocumentModel;
 import co.uk.wolfnotsheep.document.models.DocumentStatus;
 import co.uk.wolfnotsheep.document.repositories.ConnectedDriveRepository;
+import co.uk.wolfnotsheep.document.repositories.DocumentRepository;
 import co.uk.wolfnotsheep.document.services.DocumentService;
 import co.uk.wolfnotsheep.document.services.ObjectStorageService;
 import co.uk.wolfnotsheep.document.services.StorageProviderService;
@@ -12,6 +13,7 @@ import co.uk.wolfnotsheep.document.util.SlugGenerator;
 import co.uk.wolfnotsheep.infrastructure.services.drives.StorageProviderRegistry;
 import co.uk.wolfnotsheep.infrastructure.services.drives.GoogleDriveService;
 import co.uk.wolfnotsheep.infrastructure.services.drives.GoogleDriveService.DriveFileInfo;
+import co.uk.wolfnotsheep.platform.config.services.AppConfigService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -37,23 +39,32 @@ public class DriveController {
 
     private final GoogleDriveService googleDriveService;
     private final ConnectedDriveRepository driveRepo;
+    private final DocumentRepository documentRepo;
     private final DocumentService documentService;
     private final ObjectStorageService objectStorage;
     private final RabbitTemplate rabbitTemplate;
     private final StorageProviderRegistry providerRegistry;
+    private final AppConfigService appConfigService;
+    private final co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService;
 
     public DriveController(GoogleDriveService googleDriveService,
                            ConnectedDriveRepository driveRepo,
+                           DocumentRepository documentRepo,
                            DocumentService documentService,
                            ObjectStorageService objectStorage,
                            RabbitTemplate rabbitTemplate,
-                           StorageProviderRegistry providerRegistry) {
+                           StorageProviderRegistry providerRegistry,
+                           AppConfigService appConfigService,
+                           co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService) {
         this.googleDriveService = googleDriveService;
         this.driveRepo = driveRepo;
+        this.documentRepo = documentRepo;
         this.documentService = documentService;
         this.objectStorage = objectStorage;
         this.rabbitTemplate = rabbitTemplate;
         this.providerRegistry = providerRegistry;
+        this.appConfigService = appConfigService;
+        this.throttleService = throttleService;
     }
 
     // ── Config Check ────────────────────────────────────
@@ -84,13 +95,23 @@ public class DriveController {
             @RequestParam String code,
             @RequestParam String state) {
         try {
-            String email = new String(Base64.getDecoder().decode(state));
+            String decoded = new String(Base64.getDecoder().decode(state));
+            boolean isGmail = decoded.startsWith("GMAIL:");
+            String email = isGmail ? decoded.substring(6) : decoded;
 
             var tokens = googleDriveService.exchangeCode(code);
             var userInfo = googleDriveService.getUserInfo(tokens.accessToken());
 
-            Optional<ConnectedDrive> existing = driveRepo.findByUserIdAndProviderAccountEmail(
-                    email, userInfo.get("email"));
+            String provider = isGmail ? "GMAIL" : "GOOGLE_DRIVE";
+            Optional<ConnectedDrive> existing = driveRepo.findByUserIdAndProviderAndProviderAccountEmail(
+                    email, provider, userInfo.get("email"));
+            if (existing.isEmpty()) {
+                // Fallback: try legacy lookup without provider filter
+                existing = driveRepo.findByUserIdAndProviderAccountEmail(email, userInfo.get("email"));
+                if (existing.isPresent() && !provider.equals(existing.get().getProvider())) {
+                    existing = Optional.empty(); // Different provider — create new
+                }
+            }
 
             ConnectedDrive drive;
             if (existing.isPresent()) {
@@ -98,11 +119,15 @@ public class DriveController {
             } else {
                 drive = new ConnectedDrive();
                 drive.setUserId(email);
-                drive.setProvider("GOOGLE_DRIVE");
+                drive.setProvider(provider);
+                if (isGmail) {
+                    drive.setProviderType(co.uk.wolfnotsheep.document.models.StorageProviderType.GMAIL);
+                    drive.setDisplayName(userInfo.get("name") + " (Gmail)");
+                }
                 drive.setProviderAccountEmail(userInfo.get("email"));
                 drive.setProviderAccountName(userInfo.get("name"));
                 drive.setConnectedAt(Instant.now());
-                drive.setMonitoredFolderIds(List.of());
+                if (!isGmail) drive.setMonitoredFolderIds(List.of());
             }
 
             drive.setAccessToken(tokens.accessToken());
@@ -114,24 +139,25 @@ public class DriveController {
             drive.setActive(true);
             driveRepo.save(drive);
 
-            log.info("Google Drive connected for user {} ({})", email, userInfo.get("email"));
+            String messageType = isGmail ? "gmail-connected" : "google-drive-connected";
+            String fallbackUrl = isGmail ? "/mailboxes?connected=true" : "/drives?connected=true";
+
+            log.info("{} connected for user {} ({})", provider, email, userInfo.get("email"));
 
             // Return HTML that closes the popup and refreshes the parent
             return ResponseEntity.ok()
                     .header(HttpHeaders.CONTENT_TYPE, "text/html")
-                    .body("""
-                        <html><body><script>
-                        if (window.opener) {
-                            window.opener.postMessage({ type: 'google-drive-connected' }, '*');
-                            window.close();
-                        } else {
-                            window.location.href = '/drives?connected=true';
-                        }
-                        </script><p>Connected! You can close this window.</p></body></html>
-                    """);
+                    .body("<html><body><script>" +
+                        "if (window.opener) {" +
+                        "  window.opener.postMessage({ type: '" + messageType + "' }, '*');" +
+                        "  window.close();" +
+                        "} else {" +
+                        "  window.location.href = '" + fallbackUrl + "';" +
+                        "}" +
+                        "</script><p>Connected! You can close this window.</p></body></html>");
 
         } catch (Exception e) {
-            log.error("Google Drive OAuth callback failed: {}", e.getMessage(), e);
+            log.error("Google OAuth callback failed: {}", e.getMessage(), e);
             return ResponseEntity.ok()
                     .header(HttpHeaders.CONTENT_TYPE, "text/html")
                     .body("""
@@ -169,6 +195,52 @@ public class DriveController {
             m.put("lastSyncAt", d.getLastSyncAt());
             m.put("hasWriteAccess", d.hasWriteAccess());
             m.put("needsReconnect", d.needsReconnect());
+            return m;
+        }).toList();
+        return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/stats")
+    public ResponseEntity<List<Map<String, Object>>> driveStats(@AuthenticationPrincipal UserDetails user) {
+        List<ConnectedDrive> drives = driveRepo.findAccessibleDrives(user.getUsername());
+        List<DocumentStatus> classifiedStatuses = List.of(
+                DocumentStatus.CLASSIFIED, DocumentStatus.GOVERNANCE_APPLIED,
+                DocumentStatus.INBOX, DocumentStatus.FILED);
+        List<DocumentStatus> inProgressStatuses = List.of(
+                DocumentStatus.UPLOADED, DocumentStatus.PROCESSING,
+                DocumentStatus.PROCESSED, DocumentStatus.CLASSIFYING);
+        List<DocumentStatus> failedStatuses = List.of(
+                DocumentStatus.PROCESSING_FAILED, DocumentStatus.CLASSIFICATION_FAILED,
+                DocumentStatus.ENFORCEMENT_FAILED);
+
+        List<Map<String, Object>> result = drives.stream().map(d -> {
+            long classified = documentRepo.countByConnectedDriveIdAndStatusIn(d.getId(), classifiedStatuses);
+            long inProgress = documentRepo.countByConnectedDriveIdAndStatusIn(d.getId(), inProgressStatuses);
+            long failed = documentRepo.countByConnectedDriveIdAndStatusIn(d.getId(), failedStatuses);
+            long tracked = documentRepo.countByConnectedDriveId(d.getId());
+
+            // For external drives, get the real file count from the provider
+            long driveFileCount = tracked;
+            if (!d.isSystemDrive()) {
+                try {
+                    driveFileCount = googleDriveService.countAllFiles(d);
+                } catch (Exception e) {
+                    log.warn("Could not count files in drive {}: {}", d.getId(), e.getMessage());
+                    driveFileCount = tracked; // fallback to tracked count
+                }
+            }
+            long unclassified = driveFileCount - classified - inProgress - failed;
+
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("driveId", d.getId());
+            m.put("displayName", d.getDisplayName() != null ? d.getDisplayName() : d.getProviderAccountEmail());
+            m.put("provider", d.getProviderType() != null ? d.getProviderType().name() : d.getProvider());
+            m.put("systemDrive", d.isSystemDrive());
+            m.put("total", driveFileCount);
+            m.put("classified", classified);
+            m.put("inProgress", inProgress);
+            m.put("failed", failed);
+            m.put("unclassified", Math.max(0, unclassified));
             return m;
         }).toList();
         return ResponseEntity.ok(result);
@@ -374,9 +446,19 @@ public class DriveController {
                 }
             }
 
+            // Throttle check
+            String throttleError = throttleService.checkThrottle(fileIds.size());
+            if (throttleError != null) {
+                return ResponseEntity.status(429).body(Map.of(
+                        "error", throttleError,
+                        "available", throttleService.getAvailableSlots(),
+                        "maxBatchSize", throttleService.getMaxBatchSize()
+                ));
+            }
+
             for (String fileId : fileIds) {
                 try {
-                    registerDriveFile(drive, fileId, user.getUsername());
+                    registerDriveFile(drive, fileId, user.getUsername(), request.pipelineId());
                     registered++;
                 } catch (Exception e) {
                     log.warn("Failed to register Drive file {}: {}", fileId, e.getMessage());
@@ -458,7 +540,7 @@ public class DriveController {
                 .orElse(null);
     }
 
-    private void registerDriveFile(ConnectedDrive drive, String fileId, String username) throws Exception {
+    private void registerDriveFile(ConnectedDrive drive, String fileId, String username, String pipelineId) throws Exception {
         DriveFileInfo info = googleDriveService.getFileInfoInternal(drive, fileId);
         if (info.folder()) return;
 
@@ -477,30 +559,43 @@ public class DriveController {
                 "ownerEmail", info.ownerEmail() != null ? info.ownerEmail() : "",
                 "providerAccountEmail", drive.getProviderAccountEmail()
         ));
+        doc.setConnectedDriveId(drive.getId());
         doc.setStatus(DocumentStatus.UPLOADED);
         doc.setUploadedBy(username);
         doc.setCreatedAt(Instant.now());
         doc.setUpdatedAt(Instant.now());
+        if (pipelineId != null) {
+            doc.setPipelineId(pipelineId);
+            doc.setPipelineSelectionMethod("MANUAL");
+        }
 
         doc = documentService.save(doc);
         doc.setSlug(SlugGenerator.generate(info.name(), doc.getId()));
         doc = documentService.save(doc);
 
-        // Download content from Google Drive and cache in MinIO for pipeline processing
-        InputStream content = googleDriveService.downloadContent(drive, fileId, info.mimeType());
-        String storageKey = doc.getId() + "-" + sanitizeStorageKey(info.name());
-        doc.setStorageBucket("gls-documents");
-        doc.setStorageKey(storageKey);
-        documentService.save(doc);
+        // Storage mode: "cache" downloads to MinIO, "stream" processes directly from Drive
+        String storageMode = appConfigService.getValue("drives.storage_mode", "cache");
+        String storageKey = null;
 
-        byte[] bytes = content.readAllBytes();
-        objectStorage.upload(storageKey, new java.io.ByteArrayInputStream(bytes), bytes.length, doc.getMimeType());
+        if ("cache".equals(storageMode)) {
+            InputStream content = googleDriveService.downloadContent(drive, fileId, info.mimeType());
+            storageKey = doc.getId() + "-" + sanitizeStorageKey(info.name());
+            doc.setStorageBucket("gls-documents");
+            doc.setStorageKey(storageKey);
+            documentService.save(doc);
 
-        // Queue for processing
+            byte[] bytes = content.readAllBytes();
+            objectStorage.upload(storageKey, new java.io.ByteArrayInputStream(bytes), bytes.length, doc.getMimeType());
+        } else {
+            log.info("Stream mode — skipping MinIO cache for Drive file: {}", info.name());
+        }
+
+        // Queue for processing (storageBucket/storageKey may be null in stream mode)
         try {
             rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_INGESTED, new DocumentIngestedEvent(
                     doc.getId(), info.name(), doc.getMimeType(), info.size(),
-                    "gls-documents", storageKey, username, Instant.now()
+                    doc.getStorageBucket(), doc.getStorageKey(), username, Instant.now(),
+                    pipelineId
             ));
         } catch (Exception e) {
             log.error("Failed to queue Drive file {} for processing: {}", info.name(), e.getMessage());
@@ -516,5 +611,5 @@ public class DriveController {
         return name.replaceAll("[/\\\\:*?\"<>|,]", "_").replaceAll("\\s+", " ").trim();
     }
 
-    record RegisterRequest(List<String> fileIds, String folderId) {}
+    record RegisterRequest(List<String> fileIds, String folderId, String pipelineId) {}
 }

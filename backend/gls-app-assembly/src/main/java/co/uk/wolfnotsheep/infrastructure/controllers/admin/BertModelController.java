@@ -7,6 +7,7 @@ import co.uk.wolfnotsheep.governance.models.DocumentClassificationResult;
 import co.uk.wolfnotsheep.governance.models.TrainingDataSample;
 import co.uk.wolfnotsheep.governance.repositories.DocumentClassificationResultRepository;
 import co.uk.wolfnotsheep.governance.repositories.TrainingDataSampleRepository;
+import co.uk.wolfnotsheep.infrastructure.services.BertRetrainingAdvisor;
 import co.uk.wolfnotsheep.platform.config.services.AppConfigService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,6 +41,7 @@ public class BertModelController {
     private final DocumentService documentService;
     private final DocumentClassificationResultRepository classificationRepo;
     private final TrainingDataSampleRepository trainingDataSampleRepo;
+    private final BertRetrainingAdvisor retrainingAdvisor;
     private final AppConfigService configService;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -48,11 +50,13 @@ public class BertModelController {
     public BertModelController(DocumentService documentService,
                                 DocumentClassificationResultRepository classificationRepo,
                                 TrainingDataSampleRepository trainingDataSampleRepo,
+                                BertRetrainingAdvisor retrainingAdvisor,
                                 AppConfigService configService,
                                 @Value("${pipeline.bert.service-url:http://bert-classifier:8000}") String defaultServiceUrl) {
         this.documentService = documentService;
         this.classificationRepo = classificationRepo;
         this.trainingDataSampleRepo = trainingDataSampleRepo;
+        this.retrainingAdvisor = retrainingAdvisor;
         this.configService = configService;
         this.objectMapper = new ObjectMapper();
         this.defaultServiceUrl = defaultServiceUrl;
@@ -275,5 +279,13 @@ public class BertModelController {
         result.put("recommendation", recommendation);
 
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Retraining advisor: should we retrain? Based on new samples, corrections, model age.
+     */
+    @GetMapping("/retraining-advice")
+    public ResponseEntity<Map<String, Object>> retrainingAdvice() {
+        return ResponseEntity.ok(retrainingAdvisor.getLastAdvice());
     }
 }

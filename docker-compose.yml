@@ -92,6 +92,9 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      # LLM classification calls can take several minutes; disable consumer delivery ACK timeout
+      # to prevent RabbitMQ from killing channels mid-classification.
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit consumer_timeout 3600000"
     volumes:
       - ./data/rabbitmq:/var/lib/rabbitmq
     ports:
@@ -116,7 +119,11 @@ services:
       BERT_MODEL_DIR: /app/models/default
       BERT_LABEL_MAP: /app/models/default/label_map.json
       BERT_USE_ONNX: "true"
-      BERT_MAX_LENGTH: "512"
+      BERT_MAX_LENGTH: "256"
+    deploy:
+      resources:
+        limits:
+          memory: 4g
     volumes:
       - ./data/bert-models:/app/models
     healthcheck:

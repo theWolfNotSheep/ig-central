@@ -112,11 +112,17 @@ public class DocumentModel {
 
     // ── Pipeline ──────────────────────────────────────
     private String pipelineId;
+    private String pipelineSelectionMethod; // "AUTO" or "MANUAL"
     private String pipelineNodeId; // current position in the visual graph (null = not started or complete)
 
     // ── Folder ─────────────────────────────────────────
     @Indexed
     private String folderId;
+
+    // ── Parent / child (email + attachments) ──────────
+    @Indexed(sparse = true)
+    private String parentDocumentId;       // for attachments: the email document they came from
+    private List<String> childDocumentIds; // for emails: list of attachment document IDs
 
     // ── Filing ─────────────────────────────────────────
     @Indexed
@@ -304,11 +310,20 @@ public class DocumentModel {
     public String getPipelineId() { return pipelineId; }
     public void setPipelineId(String pipelineId) { this.pipelineId = pipelineId; }
 
+    public String getPipelineSelectionMethod() { return pipelineSelectionMethod; }
+    public void setPipelineSelectionMethod(String pipelineSelectionMethod) { this.pipelineSelectionMethod = pipelineSelectionMethod; }
+
     public String getPipelineNodeId() { return pipelineNodeId; }
     public void setPipelineNodeId(String pipelineNodeId) { this.pipelineNodeId = pipelineNodeId; }
 
     public String getFolderId() { return folderId; }
     public void setFolderId(String folderId) { this.folderId = folderId; }
+
+    public String getParentDocumentId() { return parentDocumentId; }
+    public void setParentDocumentId(String parentDocumentId) { this.parentDocumentId = parentDocumentId; }
+
+    public List<String> getChildDocumentIds() { return childDocumentIds; }
+    public void setChildDocumentIds(List<String> childDocumentIds) { this.childDocumentIds = childDocumentIds; }
 
     public String getFiledToDriveId() { return filedToDriveId; }
     public void setFiledToDriveId(String filedToDriveId) { this.filedToDriveId = filedToDriveId; }

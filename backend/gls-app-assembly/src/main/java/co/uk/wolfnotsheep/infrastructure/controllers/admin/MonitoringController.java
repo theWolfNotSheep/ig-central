@@ -46,6 +46,7 @@ public class MonitoringController {
     private final PiiPatternScanner piiScanner;
     private final PipelineRunRepository pipelineRunRepo;
     private final NodeRunRepository nodeRunRepo;
+    private final co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService;
 
     public MonitoringController(MonitoringService monitoringService,
                                 RabbitTemplate rabbitTemplate,
@@ -56,7 +57,9 @@ public class MonitoringController {
                                 SystemErrorRepository systemErrorRepo,
                                 PiiPatternScanner piiScanner,
                                 PipelineRunRepository pipelineRunRepo,
-                                NodeRunRepository nodeRunRepo) {
+                                NodeRunRepository nodeRunRepo,
+                                co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService) {
+        this.throttleService = throttleService;
         this.monitoringService = monitoringService;
         this.rabbitTemplate = rabbitTemplate;
         this.documentService = documentService;
@@ -130,6 +133,11 @@ public class MonitoringController {
     @GetMapping("/pipeline")
     public ResponseEntity<Map<String, Object>> pipeline() {
         return ResponseEntity.ok(monitoringService.getPipelineMetrics());
+    }
+
+    @GetMapping("/pipeline/throttle")
+    public ResponseEntity<Map<String, Object>> throttleStatus() {
+        return ResponseEntity.ok(throttleService.getStatus());
     }
 
     @GetMapping("/infrastructure")
@@ -336,7 +344,8 @@ public class MonitoringController {
                             doc.getStorageBucket(),
                             doc.getStorageKey(),
                             doc.getUploadedBy(),
-                            Instant.now()
+                            Instant.now(),
+                            null
                     )
             );
             return true;

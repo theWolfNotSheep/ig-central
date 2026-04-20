@@ -34,6 +34,7 @@ type BertStats = {
 export default function ModelsPage() {
     const [status, setStatus] = useState<BertStatus | null>(null);
     const [stats, setStats] = useState<BertStats | null>(null);
+    const [retrainAdvice, setRetrainAdvice] = useState<{ recommendation: string; reasons: string[] } | null>(null);
     const [loading, setLoading] = useState(true);
 
     // Ollama state
@@ -79,12 +80,14 @@ export default function ModelsPage() {
 
     const loadStatus = useCallback(async () => {
         try {
-            const [s, st] = await Promise.all([
+            const [s, st, adv] = await Promise.all([
                 api.get("/admin/bert/status"),
                 api.get("/admin/bert/stats"),
+                api.get("/admin/bert/retraining-advice").catch(() => null),
             ]);
             setStatus(s.data);
             setStats(st.data);
+            if (adv?.data) setRetrainAdvice(adv.data);
         } catch { toast.error("Failed to load BERT status"); }
         finally { setLoading(false); }
     }, []);
@@ -197,6 +200,21 @@ export default function ModelsPage() {
                     </div>
                 )}
             </div>
+
+            {/* Retraining Advice Banner */}
+            {retrainAdvice?.recommendation === "RETRAIN_RECOMMENDED" && (
+                <div className="flex items-start gap-3 p-4 bg-blue-50 border border-blue-200 rounded-lg mb-6">
+                    <Brain className="size-5 text-blue-500 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                        <p className="text-sm font-medium text-blue-900">Retraining recommended</p>
+                        <ul className="mt-1 space-y-0.5">
+                            {retrainAdvice.reasons.map((r, i) => (
+                                <li key={i} className="text-xs text-blue-700">{r}</li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+            )}
 
             {/* Ollama Models */}
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-6">
@@ -322,6 +340,8 @@ export default function ModelsPage() {
 /*  Training Data Management Section                                   */
 /* ------------------------------------------------------------------ */
 
+type PerClassMetric = { precision: number; recall: number; f1: number; support: number };
+
 type TrainingJob = {
     id: string;
     status: "PENDING" | "TRAINING" | "COMPLETED" | "FAILED" | "PROMOTED";
@@ -329,7 +349,17 @@ type TrainingJob = {
     baseModel: string;
     sampleCount: number;
     categoryCount: number;
-    metrics?: { accuracy?: number; f1?: number; loss?: number; train_samples?: number; val_samples?: number };
+    metrics?: {
+        accuracy?: number; f1?: number; loss?: number;
+        train_samples?: number; val_samples?: number;
+        per_class?: Record<string, PerClassMetric>;
+        warnings?: string[];
+        label_distribution?: Record<string, number>;
+        progress?: number;
+        current_epoch?: number;
+        total_epochs?: number;
+        current_loss?: number;
+    };
     modelPath?: string;
     promoted: boolean;
     startedBy: string;
@@ -862,19 +892,14 @@ function TrainingDataSection() {
                                         <div className="flex items-center gap-2">
                                             <span className="text-sm font-semibold text-gray-900">{job.modelVersion}</span>
                                             <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${statusStyle(job.status)}`}>
-                                                {job.status}
+                                                {job.status === "TRAINING" && job.metrics?.current_epoch
+                                                    ? `TRAINING ${job.metrics.current_epoch}/${job.metrics.total_epochs}`
+                                                    : job.status}
                                                 {job.status === "TRAINING" && <Loader2 className="inline size-3 ml-1 animate-spin" />}
                                             </span>
                                             <span className="text-[10px] text-gray-400">{job.sampleCount} samples, {job.categoryCount} categories</span>
                                         </div>
                                         <div className="flex items-center gap-2">
-                                            {job.status === "COMPLETED" && !job.promoted && (
-                                                <button onClick={() => handlePromote(job.id)} disabled={promoting === job.id}
-                                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-violet-700 border border-violet-200 rounded-md hover:bg-violet-50">
-                                                    {promoting === job.id ? <Loader2 className="size-3 animate-spin" /> : <CheckCircle className="size-3" />}
-                                                    Promote
-                                                </button>
-                                            )}
                                             {job.promoted && (
                                                 <span className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-violet-700 bg-violet-100 rounded-md">
                                                     <CheckCircle className="size-3" /> Active
@@ -886,12 +911,99 @@ function TrainingDataSection() {
                                         </div>
                                     </div>
                                     {job.metrics && (
-                                        <div className="mt-1.5 flex gap-4 text-xs">
-                                            {job.metrics.accuracy != null && <span className="text-gray-600">Accuracy: <strong className="text-green-700">{(job.metrics.accuracy * 100).toFixed(1)}%</strong></span>}
-                                            {job.metrics.f1 != null && <span className="text-gray-600">F1: <strong className="text-blue-700">{(job.metrics.f1 * 100).toFixed(1)}%</strong></span>}
-                                            {job.metrics.loss != null && <span className="text-gray-600">Loss: <strong>{job.metrics.loss.toFixed(4)}</strong></span>}
+                                        <div className="mt-2 space-y-2">
+                                            {/* Overall metrics */}
+                                            <div className="flex gap-4 text-xs">
+                                                {job.metrics.accuracy != null && (
+                                                    <span className="text-gray-600">Accuracy: <strong className={job.metrics.accuracy >= 0.7 ? "text-green-700" : job.metrics.accuracy >= 0.5 ? "text-amber-700" : "text-red-700"}>{(job.metrics.accuracy * 100).toFixed(1)}%</strong></span>
+                                                )}
+                                                {job.metrics.f1 != null && (
+                                                    <span className="text-gray-600">F1: <strong className={job.metrics.f1 >= 0.7 ? "text-blue-700" : job.metrics.f1 >= 0.5 ? "text-amber-700" : "text-red-700"}>{(job.metrics.f1 * 100).toFixed(1)}%</strong></span>
+                                                )}
+                                                {job.metrics.loss != null && <span className="text-gray-600">Loss: <strong>{job.metrics.loss.toFixed(4)}</strong></span>}
+                                                {job.metrics.train_samples != null && <span className="text-gray-400">Train: {job.metrics.train_samples} / Val: {job.metrics.val_samples}</span>}
+                                            </div>
+
+                                            {/* Warnings */}
+                                            {job.metrics.warnings && job.metrics.warnings.length > 0 && (
+                                                <div className="flex items-start gap-2 p-2 bg-amber-50 border border-amber-200 rounded">
+                                                    <AlertTriangle className="size-3.5 text-amber-500 shrink-0 mt-0.5" />
+                                                    <div className="text-[11px] text-amber-800 space-y-0.5">
+                                                        {job.metrics.warnings.map((w, i) => <p key={i}>{w}</p>)}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Per-class breakdown */}
+                                            {job.metrics.per_class && Object.keys(job.metrics.per_class).length > 0 && (
+                                                <details className="group">
+                                                    <summary className="text-[10px] font-semibold text-gray-500 uppercase cursor-pointer hover:text-gray-700">
+                                                        Per-Category Breakdown
+                                                    </summary>
+                                                    <div className="mt-2 rounded border border-gray-200 overflow-hidden">
+                                                        <table className="w-full text-xs">
+                                                            <thead>
+                                                                <tr className="bg-gray-50 text-[10px] text-gray-500 uppercase">
+                                                                    <th className="text-left px-3 py-1.5">Category</th>
+                                                                    <th className="text-right px-3 py-1.5">Precision</th>
+                                                                    <th className="text-right px-3 py-1.5">Recall</th>
+                                                                    <th className="text-right px-3 py-1.5">F1</th>
+                                                                    <th className="text-right px-3 py-1.5">Samples</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-gray-100">
+                                                                {Object.entries(job.metrics.per_class)
+                                                                    .sort(([, a], [, b]) => b.support - a.support)
+                                                                    .map(([name, m]) => (
+                                                                    <tr key={name} className={m.support <= 1 ? "bg-red-50/50" : ""}>
+                                                                        <td className="px-3 py-1.5 text-gray-900 truncate max-w-[200px]">{name}</td>
+                                                                        <td className={`px-3 py-1.5 text-right font-mono ${m.precision >= 0.7 ? "text-green-700" : m.precision > 0 ? "text-amber-700" : "text-red-500"}`}>
+                                                                            {(m.precision * 100).toFixed(0)}%
+                                                                        </td>
+                                                                        <td className={`px-3 py-1.5 text-right font-mono ${m.recall >= 0.7 ? "text-green-700" : m.recall > 0 ? "text-amber-700" : "text-red-500"}`}>
+                                                                            {(m.recall * 100).toFixed(0)}%
+                                                                        </td>
+                                                                        <td className={`px-3 py-1.5 text-right font-mono ${m.f1 >= 0.7 ? "text-green-700" : m.f1 > 0 ? "text-amber-700" : "text-red-500"}`}>
+                                                                            {(m.f1 * 100).toFixed(0)}%
+                                                                        </td>
+                                                                        <td className="px-3 py-1.5 text-right text-gray-400">{m.support}</td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </details>
+                                            )}
                                         </div>
                                     )}
+                                    {/* Big promote CTA for completed models above 50% accuracy */}
+                                    {job.status === "COMPLETED" && !job.promoted && (job.metrics?.accuracy ?? 0) >= 0.5 && (
+                                        <div className="mt-3 p-4 bg-gradient-to-r from-violet-50 to-indigo-50 border border-violet-200 rounded-lg">
+                                            <div className="flex items-center justify-between gap-4">
+                                                <div>
+                                                    <p className="text-sm font-semibold text-violet-900">
+                                                        Ready to deploy — {((job.metrics?.accuracy ?? 0) * 100).toFixed(0)}% accuracy
+                                                    </p>
+                                                    <p className="text-xs text-violet-600 mt-0.5">
+                                                        Promote this model to start classifying documents with BERT instead of the LLM.
+                                                    </p>
+                                                </div>
+                                                <button onClick={() => handlePromote(job.id)} disabled={promoting === job.id}
+                                                    className="shrink-0 inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-violet-600 rounded-lg hover:bg-violet-700 disabled:opacity-50 shadow-sm transition-colors">
+                                                    {promoting === job.id ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle className="size-4" />}
+                                                    Promote to Production
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Small promote link for models below threshold */}
+                                    {job.status === "COMPLETED" && !job.promoted && (job.metrics?.accuracy ?? 0) < 0.5 && (
+                                        <div className="mt-2 text-xs text-gray-400">
+                                            Accuracy below 50% — add more training data and retrain for a promotable model.
+                                        </div>
+                                    )}
+
                                     {job.error && <div className="mt-1.5 text-xs text-red-600 bg-red-50 rounded px-2 py-1">{job.error}</div>}
                                 </div>
                             ))}
