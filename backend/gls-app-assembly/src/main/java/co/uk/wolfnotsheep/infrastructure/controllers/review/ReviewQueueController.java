@@ -110,8 +110,10 @@ public class ReviewQueueController {
             bertCollector.collectCorrection(correction);
         }
 
-        // Advance status — document goes to inbox for filing
-        doc.setStatus(DocumentStatus.INBOX);
+        // Locally-uploaded documents go to triage for filing; external storage
+        // documents (Google Drive, Gmail) are classified in-situ and skip triage.
+        doc.setStatus("LOCAL".equals(doc.getStorageProvider())
+                ? DocumentStatus.TRIAGE : DocumentStatus.GOVERNANCE_APPLIED);
         doc.setGovernanceAppliedAt(Instant.now());
         documentService.save(doc);
 
@@ -229,7 +231,8 @@ public class ReviewQueueController {
         if (override.getRetentionScheduleId() != null) {
             doc.setRetentionScheduleId(override.getRetentionScheduleId());
         }
-        doc.setStatus(DocumentStatus.INBOX);
+        doc.setStatus("LOCAL".equals(doc.getStorageProvider())
+                ? DocumentStatus.TRIAGE : DocumentStatus.GOVERNANCE_APPLIED);
         doc.setGovernanceAppliedAt(Instant.now());
         documentService.save(doc);
 

@@ -58,7 +58,11 @@ public interface DocumentRepository extends MongoRepository<DocumentModel, Strin
 
     Page<DocumentModel> findByStatusAndUploadedByOrderByUpdatedAtDesc(DocumentStatus status, String uploadedBy, Pageable pageable);
 
+    Page<DocumentModel> findByStatusAndUploadedByAndStorageProviderOrderByUpdatedAtDesc(DocumentStatus status, String uploadedBy, String storageProvider, Pageable pageable);
+
     long countByStatusAndUploadedBy(DocumentStatus status, String uploadedBy);
+
+    long countByStatusAndUploadedByAndStorageProvider(DocumentStatus status, String uploadedBy, String storageProvider);
 
     long countByStatusAndUpdatedAtBefore(DocumentStatus status, Instant before);
 

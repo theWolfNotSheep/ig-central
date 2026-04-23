@@ -71,8 +71,10 @@ public class ClassificationEnforcementConsumer {
                     doc.setStatus(DocumentStatus.REVIEW_REQUIRED);
                     log.info("Document {} flagged for human review (confidence: {}, piiEscalated: {})",
                             event.documentId(), event.confidence(), piiEscalated);
+                } else if ("LOCAL".equals(doc.getStorageProvider())) {
+                    doc.setStatus(DocumentStatus.TRIAGE);
                 } else {
-                    doc.setStatus(DocumentStatus.INBOX);
+                    doc.setStatus(DocumentStatus.GOVERNANCE_APPLIED);
                 }
                 documentService.save(doc);
             }

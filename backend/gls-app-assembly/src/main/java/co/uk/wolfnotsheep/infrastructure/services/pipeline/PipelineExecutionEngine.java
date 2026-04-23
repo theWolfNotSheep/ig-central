@@ -1184,14 +1184,43 @@ public class PipelineExecutionEngine {
             return;
         }
 
+        // Respect per-node config toggles
+        Map<String, Object> config = buildMergedConfig(node);
+        boolean applyRetention = !"false".equals(String.valueOf(config.getOrDefault("retention", "true")));
+        boolean applyStorage = !"false".equals(String.valueOf(config.getOrDefault("storage", "true")));
+        boolean applyPolicies = !"false".equals(String.valueOf(config.getOrDefault("policies", "true")));
+
+        if (!applyRetention && !applyStorage && !applyPolicies) {
+            log.info("[Engine] All governance toggles disabled on node '{}' — skipping for doc {}", node.label(), doc.getId());
+            statusNotifier.emitLog(doc.getId(), "", "ENFORCEMENT", "INFO",
+                    "Governance skipped — all toggles off on node", null);
+            return;
+        }
+
         long start = System.currentTimeMillis();
         statusNotifier.emitLog(doc.getId(), "", "ENFORCEMENT", "INFO",
-                "Applying governance: " + event.categoryName() + " / " + event.sensitivityLabel(), null);
+                "Applying governance: " + event.categoryName() + " / " + event.sensitivityLabel()
+                + " [retention=" + applyRetention + ", storage=" + applyStorage + ", policies=" + applyPolicies + "]", null);
 
         try {
             DocumentModel enforced = enforcementService.enforce(event);
             if (enforced != null) {
-                enforced.setStatus(DocumentStatus.INBOX);
+                // Clear fields the admin toggled off
+                if (!applyRetention) {
+                    enforced.setRetentionScheduleId(null);
+                    enforced.setRetentionExpiresAt(null);
+                }
+                if (!applyStorage) {
+                    enforced.setStorageTierId(null);
+                }
+                // Only locally-uploaded documents go to triage for filing.
+                // External storage documents (Google Drive, Gmail, etc.) are classified
+                // in-situ and skip the filing triage queue.
+                if ("LOCAL".equals(enforced.getStorageProvider())) {
+                    enforced.setStatus(DocumentStatus.TRIAGE);
+                } else {
+                    enforced.setStatus(DocumentStatus.GOVERNANCE_APPLIED);
+                }
                 documentService.save(enforced);
             }
 

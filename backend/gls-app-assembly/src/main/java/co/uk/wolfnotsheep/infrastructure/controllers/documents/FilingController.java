@@ -25,17 +25,18 @@ public class FilingController {
         this.documentRepository = documentRepository;
     }
 
-    @GetMapping("/inbox")
-    public ResponseEntity<Page<DocumentModel>> inbox(@AuthenticationPrincipal UserDetails user,
+    @GetMapping("/triage")
+    public ResponseEntity<Page<DocumentModel>> triage(@AuthenticationPrincipal UserDetails user,
                                                       Pageable pageable) {
-        Page<DocumentModel> docs = documentRepository.findByStatusAndUploadedByOrderByUpdatedAtDesc(
-                DocumentStatus.INBOX, user.getUsername(), pageable);
+        Page<DocumentModel> docs = documentRepository.findByStatusAndUploadedByAndStorageProviderOrderByUpdatedAtDesc(
+                DocumentStatus.TRIAGE, user.getUsername(), "LOCAL", pageable);
         return ResponseEntity.ok(docs);
     }
 
-    @GetMapping("/inbox/count")
-    public ResponseEntity<Map<String, Long>> inboxCount(@AuthenticationPrincipal UserDetails user) {
-        long count = documentRepository.countByStatusAndUploadedBy(DocumentStatus.INBOX, user.getUsername());
+    @GetMapping("/triage/count")
+    public ResponseEntity<Map<String, Long>> triageCount(@AuthenticationPrincipal UserDetails user) {
+        long count = documentRepository.countByStatusAndUploadedByAndStorageProvider(
+                DocumentStatus.TRIAGE, user.getUsername(), "LOCAL");
         return ResponseEntity.ok(Map.of("count", count));
     }
 
@@ -48,10 +49,10 @@ public class FilingController {
         return ResponseEntity.ok(doc);
     }
 
-    @PostMapping("/{documentId}/return-to-inbox")
-    public ResponseEntity<DocumentModel> returnToInbox(@PathVariable String documentId,
+    @PostMapping("/{documentId}/return-to-triage")
+    public ResponseEntity<DocumentModel> returnToTriage(@PathVariable String documentId,
                                                         @AuthenticationPrincipal UserDetails user) {
-        DocumentModel doc = filingService.returnToInbox(documentId, user.getUsername());
+        DocumentModel doc = filingService.returnToTriage(documentId, user.getUsername());
         return ResponseEntity.ok(doc);
     }
 
