@@ -46,6 +46,7 @@ Status legend:
 | 3.9 | BERT training job dashboard | ✅ | Admin AI section (`BertTrainingJobController`) | `scripts/bert-training.md` |
 | 3.10 | Training data sample collection | ✅ | Admin AI section | `scripts/training-data-samples.md` |
 | 3.11 | Pipeline diagnostics (prompt traces, confidence internals) | ✅ | `/admin/ai/diagnostics` | `scripts/pipeline-diagnostics.md` |
+| 3.12 | ML Reports (model performance, quality, cost, feedback, scatter) | ✅ | `/reports` | `scripts/ml-reports.md` |
 
 ## 4. PII & Compliance
 
@@ -63,7 +64,9 @@ Status legend:
 | 5.1 | Google Drive connect & in-situ classification | ✅ | `/drives` | Video 10 |
 | 5.2 | Google Drive watch folders | ✅ | `/drives` | `scripts/drive-watch-folders.md` |
 | 5.3 | Google OAuth login | ✅ | `/login` | `scripts/google-oauth-login.md` |
-| 5.4 | SharePoint / OneDrive connectors | 🔒 | Planned | Interfaces ready per CLAUDE.md |
+| 5.4 | Google Drive labels — read, write, taxonomy bridge | ✅ | `/drives/[id]/labels` | `scripts/drive-labels-taxonomy-bridge.md` |
+| 5.5 | Label → taxonomy mapping & bulk import as training data | ✅ | `/drives/[id]/labels` | `scripts/drive-labels-taxonomy-bridge.md` |
+| 5.6 | SharePoint / OneDrive connectors | 🔒 | Planned | Interfaces ready per CLAUDE.md |
 
 ## 6. Governance Hub (Marketplace)
 
