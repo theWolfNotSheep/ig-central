@@ -23,14 +23,6 @@ spring:
   data:
     mongodb:
       auto-index-creation: true
-
-mongock:
-  enabled: ${MONGOCK_ENABLED:true}
-  migration-scan-package:
-    - co.uk.wolfnotsheep.infrastructure.migrations
-  transaction-enabled: false
-  runner-type: initializing-bean
-  track-ignored: false
   thymeleaf:
     prefix: classpath:/templates/
     suffix: .html
@@ -59,17 +51,23 @@ mongock:
     protocol: smtp
   mongodb:
     uri: ${SPRING_MONGODB_URI:mongodb://root:example@localhost:27017/governance_led_storage_main?authSource=admin}
-
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+  elasticsearch:
+    uris: ${SPRING_ELASTICSEARCH_URIS:http://localhost:9200}
+    socket-timeout: 30s
+    connection-timeout: 10s
 
-spring.elasticsearch:
-  uris: ${SPRING_ELASTICSEARCH_URIS:http://localhost:9200}
-  socket-timeout: 30s
-  connection-timeout: 10s
+mongock:
+  enabled: ${MONGOCK_ENABLED:true}
+  migration-scan-package:
+    - co.uk.wolfnotsheep.infrastructure.migrations
+  transaction-enabled: false
+  runner-type: InitializingBean
+  track-ignored: false
 
 google:
   oauth:
