@@ -350,3 +350,30 @@ Local `./mvnw -pl gls-platform-audit compile` is clean.
 - **Existing audit code in `gls-app-assembly` (`AuditEvent` model in `gls-document`, `AuditEventRepository`, `AuditInterceptor`)** — separate concept (HTTP-request audit log via Spring Security, not the v2 outbox pipeline). Reconciliation deferred to Phase 1 cutover work.
 
 **Next:** Phase 0.7 follow-up PRs (relay; auto-config; validation), or push on to Phase 0.8 / 0.9 / 0.11 / 0.12.
+
+## 2026-04-26 — Phase 0.10 / 0.7 — Mongock runtime smoke (closing entry for runtime gap)
+
+**Done:** Booted the api container against a real Mongo and verified Mongock 5.4.4 actually executes change units. The previous Phase 0.10 PR (#10) and Phase 0.7 indexes PR (#13) compiled clean but were dead at runtime — diagnosed and fixed three real bugs.
+
+**Bugs fixed:**
+
+1. **Missing `@EnableMongock`.** `mongock-springboot-v3-5.4.4.jar` ships **without** a `META-INF/spring/.../AutoConfiguration.imports` manifest — Mongock does not auto-configure on Spring Boot 4 (or 3). The annotation has to be declared explicitly. PR #10 added the dependencies and config but never the annotation; result: zero Mongock log output, no change unit execution. Fix: `@EnableMongock` on `GlsApplication`.
+2. **`mongock:` YAML block absorbed `spring:` sub-keys.** PR #10 inserted the new `mongock:` config but indented `thymeleaf`, `autoconfigure`, `servlet`, `mail`, `mongodb`, `rabbitmq`, and (via dotted notation) `elasticsearch` under it. The live containers still booted because env vars (`SPRING_MONGODB_URI`, `RABBITMQ_HOST` etc.) covered for the lost properties — the breakage was masked, not absent. Fix: restore the keys under `spring:`; leave only Mongock-specific keys under `mongock:`.
+3. **`runner-type: initializing-bean` doesn't match the SpEL guard.** Mongock 5.4.4's `MongockContextBase` declares two runner beans gated by SpEL strings: `'${mongock.runner-type:null}'.toLowerCase().equals('initializingbean')` (and equivalent for `applicationrunner`). The SpEL placeholder reads the **raw config value** — Spring Boot's relaxed binding only kicks in when binding to the `SpringRunnerType` enum, not when resolving a placeholder. Kebab-case `initializing-bean` lowercased is still `initializing-bean`, which doesn't equal `initializingbean`. So neither runner bean was created — Mongock initialised its own collections (lock + changelog) but never scanned for change units. Fix: `runner-type: InitializingBean` (CamelCase, matches the enum name verbatim).
+
+**Verification:** With all three fixes, V001_MongockSmoke and V002_AuditOutboxIndexes both `EXECUTED` in `mongockChangeLog`, and `audit_outbox` carries the three named indexes (`idx_status_nextRetry`, `idx_eventId_unique`, `idx_createdAt`). Boot path confirmed via `docker compose up -d --no-deps --build api` against the existing `ig-central-mongo` container.
+
+**Decisions logged:** None new.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/GlsApplication.java` — add `@EnableMongock`.
+- `backend/gls-app-assembly/src/main/resources/application.yaml` — un-nest the spring sub-keys; switch `runner-type` to `InitializingBean`.
+- `version-2-implementation-log.md` — this entry.
+
+**Open issues:**
+
+- The `--no-deps` smoke skips RabbitMQ/MinIO/ES, which is fine for proving Mongock but doesn't exercise the audit relay (still deferred Phase 0.7 follow-up). A full-stack `docker compose up` is blocked locally because port 9200 is held by a stale `gls-elasticsearch` container from before the project rename — incidental, not a code issue.
+- Consider tightening the smoke into an automated test once issue #7 (Testcontainers MongoDB cleanup) unblocks. Until then, the runtime check is a manual `docker compose up` exercise.
+
+**Next:** Phase 0.7 follow-ups (outbox-to-Rabbit relay; Spring Boot starter auto-config for `gls-platform-audit`; envelope schema validation at emit time), or Phase 0.9 (Maven BOM decoupling) for a small parallel win.
