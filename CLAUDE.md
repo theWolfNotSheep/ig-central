@@ -18,6 +18,70 @@
 - `gls-llm-orchestration` — LLM orchestration layer (RabbitMQ, Anthropic)
 - `gls-app-assembly` — Spring Boot entry point, config, seeders, controllers
 
+## API Contracts
+
+**Every service-to-service interface must be defined by an OpenAPI 3.1.1 specification before any implementation code is written.** The contract is the source of truth; controllers, clients, and tests derive from it — never the other way round.
+
+### Rules
+
+- **OpenAPI 3.1.1** is the only accepted version for synchronous (REST/HTTP) contracts. No 3.0.x, no Swagger 2.0.
+- **AsyncAPI 3.0** is the equivalent for asynchronous (RabbitMQ) interfaces — message schemas, channels, exchanges, routing keys.
+- Contracts live under `contracts/<service>/openapi.yaml` (or `asyncapi.yaml`), each with its own `VERSION` file (semver) and `CHANGELOG.md`.
+- Cross-cutting schemas (error envelope, security scheme, common headers, idempotency, pagination, capabilities) live under `contracts/_shared/` and are referenced via `$ref`. Block content schemas (PROMPT, ROUTER, EXTRACTOR, BERT_CLASSIFIER, ENFORCER) live under `contracts/blocks/` as JSON Schema 2020-12.
+- A contract change requires a `VERSION` bump in the same PR. CI fails the build if the spec changes without a version bump.
+- Breaking changes (removed fields, narrowed types, removed endpoints, changed required-ness) require a major version bump and a deprecation window — the old major stays callable until consumers migrate.
+- Generated server stubs and client SDKs are committed under `contracts/<service>/generated/` so consumers don't need to re-run generators to inspect the surface area.
+
+### Why OpenAPI 3.1.1 specifically
+
+- Full JSON Schema 2020-12 alignment — the same schema vocabulary used in MongoDB documents, pipeline-block content, and metadata schemas.
+- `null` is a first-class type, not a hack — matches Java records and TypeScript optionals cleanly.
+- Webhooks are first-class — relevant for connector callbacks and Hub events.
+- Latest stable patch (Oct 2024); tooling support is mature: springdoc 2.x, openapi-generator 7+, Spectral, Redocly, Swagger UI 5+.
+
+### Workflow
+
+1. Author or modify `contracts/<service>/openapi.yaml`.
+2. Bump `contracts/<service>/VERSION`. Add a `CHANGELOG.md` entry.
+3. Lint locally with Spectral or Redocly against the agreed ruleset.
+4. Regenerate server stubs and client SDK; commit under `generated/`.
+5. Implement against the generated stub — the controller honours what the spec says, not the other way round.
+6. Open the PR. CI re-validates, regenerates, and fails on drift.
+
+### What this means for new code
+
+- **No controller method without an OpenAPI operation.** If you can't describe it in the spec, you can't ship it.
+- **No hand-written HTTP client calls between services.** Use the generated SDK from the target service's contract. Hand-rolled HTTP will be rejected in review.
+- **No "document it later".** The spec is part of the change, not a follow-up PR.
+- **Existing services without specs are grandfathered** — specs are retrofitted via springdoc-openapi as a separate workstream — but new operations on those services still require a spec entry at PR time.
+- **Cross-service refactors start in `contracts/`.** The PR that changes the contract is the PR that changes everything else.
+
+## Decision log
+
+**Every architectural decision lives in `version-2-decision-tree.csv`** — DECIDED, RECOMMENDED, OPEN, or DEFERRED. The CSV is the index; the rationale and full context live in `version-2-architecture.md` (referenced by the `Section` column).
+
+### Rules
+
+- When a new decision is made, append it to the CSV in the same PR as the doc/code change that captures it.
+- When an OPEN question is resolved, update its row in place (status → DECIDED or RECOMMENDED, decision text filled in) — do not delete and re-add.
+- When a DECIDED item is reversed, do not delete the row. Add a new row that supersedes it, and mark the old row's status as `SUPERSEDED` with a note pointing to the new ID.
+- Categories must come from the existing set: Topology, Domain Model, Scaling, Tier strategy, Audit, Contracts — Shape, Contracts — Conventions, Contracts — Non-functional, Contracts — Deferred, Auth & Security, Cost / FinOps, Reliability. Add a new category only when an existing one genuinely doesn't fit.
+- Section column points at the canonical location (`§7.8`, `§11.A.2`, etc.) where the decision is discussed in `version-2-architecture.md`.
+
+## Progress log
+
+**Track what was done in every phase and sub-phase of the v2 implementation in `version-2-implementation-log.md`.** This is the "what happened" companion to the decision log's "why" and the implementation plan's "what's planned."
+
+### Rules
+
+- After completing any work item from `version-2-implementation-plan.md`, append an entry to `version-2-implementation-log.md` in the same PR. Never in a separate PR.
+- Entry shape (also in the log file): date, phase/sub-phase reference, what was done, decisions logged (CSV row IDs), contracts touched (with VERSION bump notes), other files changed, open issues, next step.
+- Append-only — never edit or delete past entries. If a decision reverses or a stage is redone, append a new entry referencing the old one.
+- Chronological — newest at the bottom; read top-to-bottom for the story.
+- Track granularity is sub-phase (1.1, 1.2, …). Multiple entries per sub-phase are fine if work spans sessions; mark the last as the closing entry.
+- Update the per-phase status board at the top of the log when a phase's status changes.
+- Truthful — record detours, false starts, and reversals. The log is for learning, not optics.
+
 ## Configuration-Driven Design
 
 **All application behaviour that is not core data infrastructure must be driven by configuration, not hardcoded.**
