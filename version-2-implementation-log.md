@@ -499,3 +499,35 @@ Local `./mvnw -pl gls-platform-audit compile` is clean.
 - Some `OutboxAuditEmitter`-against-real-Mongo testing remains blocked by issue #7.
 
 **Next:** Outbox-to-Rabbit relay, or pivot to Phase 0.8 (`gls-platform-config`) / 0.12 (dev experience).
+
+## 2026-04-26 — Plan checkboxes synced to reality
+
+**Done:** Flipped 29 checkboxes in `version-2-implementation-plan.md` to `[x]` for items that have actually shipped (PRs #15–#19, all merged before this entry). The plan had drifted from reality — every item was still `[ ]` even when the corresponding work had landed and been logged.
+
+**Decisions logged:** None new. This is a tracking-fidelity fix, not a design change.
+
+**Items now checked:**
+
+- 0.1 — all four §11 shape decisions (A1, A2, A5, A6).
+- 0.3 — directory tree + per-folder metadata. (Per-service placeholders deferred; noted inline.)
+- 0.4 — all eight `_shared/` YAMLs.
+- 0.5 — all five OpenAPI tooling items (lint tool, generator, pom wiring, CI, pre-commit).
+- 0.6 — both AsyncAPI declarations. (`gls.config.changed` as forward-looking; noted inline.)
+- 0.7 — envelope schema, audit_outbox indexes, CLAUDE.md relay docs. **Library item left unchecked** with inline note: envelope + outbox writer + schema validation + auto-config landed; relay + retry/backoff still outstanding.
+- 0.9 — both BOM decoupling items.
+- 0.10 — all four schema-migration items.
+- 0.11 — methodology doc only. **Capture-script and CSV items left unchecked** with inline notes calling out that the scaffold is in place but the load driver is a stub.
+
+**Items left unchecked (with inline notes added):**
+
+- 0.7 library (relay + retry/backoff outstanding).
+- 0.7 Python module sketch (deferred — not started).
+- 0.11 capture script (scaffold; load driver stubbed).
+- 0.11 CSV (scaffold; no real data captured).
+
+**Files changed:**
+
+- `version-2-implementation-plan.md` — 29 `[ ]` → `[x]`; inline parenthetical notes on partial / scaffolded items so a future reader can tell what "checked" meant for each one.
+- `version-2-implementation-log.md` — this entry.
+
+**Next:** Outbox-to-Rabbit relay (the largest outstanding 0.7 piece), Phase 0.8 (`gls-platform-config`), or wire the load driver to upgrade 0.11 from scaffolded to fully done.

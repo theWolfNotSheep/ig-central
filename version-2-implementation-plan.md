@@ -74,43 +74,43 @@ Cross-cutting tracks (parallel):
 #### 0.1 Decision-gate close-out
 Before contract drafting begins, lock down the four §11 shape decisions still marked RECOMMENDED (CSV rows 13, 14, 17, 18). Hour-long sit-down per decision, update CSV in a single PR.
 
-- [ ] A1 (CSV #13) — sync/async response model → DECIDED
-- [ ] A2 (CSV #14) — block-version pinning → DECIDED
-- [ ] A5 (CSV #17) — RFC 7807 error envelope → DECIDED
-- [ ] A6 (CSV #18) — JWT auth → DECIDED
+- [x] A1 (CSV #13) — sync/async response model → DECIDED
+- [x] A2 (CSV #14) — block-version pinning → DECIDED
+- [x] A5 (CSV #17) — RFC 7807 error envelope → DECIDED
+- [x] A6 (CSV #18) — JWT auth → DECIDED
 
 #### 0.2 K8s decision
 Single decision: do new services deploy to K8s or stay on Docker Compose for v1? Affects what manifests get written. Log the decision in the CSV (`Topology` or `Scaling` category) before writing manifests.
 
 #### 0.3 `contracts/` skeleton
-- [ ] Create directory tree: `contracts/_shared/`, `contracts/messaging/`, `contracts/audit/`, `contracts/blocks/`, `contracts/<service>/` placeholders for known services.
-- [ ] Per-folder: `VERSION` (semver, start at `0.1.0`), `CHANGELOG.md`, `README.md` describing scope.
+- [x] Create directory tree: `contracts/_shared/`, `contracts/messaging/`, `contracts/audit/`, `contracts/blocks/`, `contracts/<service>/` placeholders for known services. (Per-service placeholders deferred until each service's phase begins — see 2026-04-26 log entry.)
+- [x] Per-folder: `VERSION` (semver, start at `0.1.0`), `CHANGELOG.md`, `README.md` describing scope.
 
 #### 0.4 `contracts/_shared/` content (hand-authored)
-- [ ] `error-envelope.yaml` — RFC 7807 with GLS extensions (`code`, `lastErrorStage`, `retryable`, `retryAfterMs`, `trace[]`).
-- [ ] `security-schemes.yaml` — JWT scheme definition (per A6 decision).
-- [ ] `common-headers.yaml` — `traceparent`, `Idempotency-Key`, `X-Request-Id`, `Prefer` semantics.
-- [ ] `capabilities.yaml` — `GET /v1/capabilities` response shape.
-- [ ] `text-payload.yaml` — inline-vs-`textRef` payload pattern (per CSV #19).
-- [ ] `pagination.yaml`, `idempotency.yaml`, `retry.yaml` — common conventions.
+- [x] `error-envelope.yaml` — RFC 7807 with GLS extensions (`code`, `lastErrorStage`, `retryable`, `retryAfterMs`, `trace[]`).
+- [x] `security-schemes.yaml` — JWT scheme definition (per A6 decision).
+- [x] `common-headers.yaml` — `traceparent`, `Idempotency-Key`, `X-Request-Id`, `Prefer` semantics.
+- [x] `capabilities.yaml` — `GET /v1/capabilities` response shape.
+- [x] `text-payload.yaml` — inline-vs-`textRef` payload pattern (per CSV #19).
+- [x] `pagination.yaml`, `idempotency.yaml`, `retry.yaml` — common conventions.
 
 #### 0.5 OpenAPI 3.1.1 tooling
-- [ ] Pick lint tool (Spectral or Redocly) — log decision in CSV. Establish ruleset.
-- [ ] Pick generator (`openapi-generator-maven-plugin` recommended for JVM, with TypeScript support for the frontend) — log decision.
-- [ ] Wire into root `pom.xml` as a build phase.
-- [ ] CI: contract diff check, version-bump enforcement, regenerate-on-PR, fail on drift.
-- [ ] Pre-commit hook: validate any spec edited under `contracts/` against its ruleset.
+- [x] Pick lint tool (Spectral or Redocly) — log decision in CSV. Establish ruleset. (Spectral; CSV #40.)
+- [x] Pick generator (`openapi-generator-maven-plugin` recommended for JVM, with TypeScript support for the frontend) — log decision. (CSV #39.)
+- [x] Wire into root `pom.xml` as a build phase.
+- [x] CI: contract diff check, version-bump enforcement, regenerate-on-PR, fail on drift.
+- [x] Pre-commit hook: validate any spec edited under `contracts/` against its ruleset.
 
 #### 0.6 AsyncAPI 3.0 setup
-- [ ] `contracts/messaging/asyncapi.yaml` — declare existing Rabbit topology as it stands today (`gls.documents.{ingested, classified}`, `gls.pipeline.llm.*`, `gls.audit.*`, `gls.config.changed`).
-- [ ] `contracts/audit/asyncapi.yaml` — Tier 1, Tier 2, Tier 3 audit channels.
+- [x] `contracts/messaging/asyncapi.yaml` — declare existing Rabbit topology as it stands today (`gls.documents.{ingested, classified}`, `gls.pipeline.llm.*`, `gls.audit.*`, `gls.config.changed`). (`gls.config.changed` declared as forward-looking in `info.description` only — full channel lands with 0.8.)
+- [x] `contracts/audit/asyncapi.yaml` — Tier 1, Tier 2, Tier 3 audit channels.
 
 #### 0.7 Audit infrastructure (foundation, not unhappy path)
-- [ ] `contracts/audit/event-envelope.schema.json` — JSON Schema 2020-12 for the common envelope (per §7.4).
-- [ ] `audit_outbox` MongoDB collection schema + indexes.
-- [ ] **`gls-platform-audit` shared library** (JVM): envelope construction, outbox writer, relay-to-Rabbit, retry/backoff. Single dependency every service imports.
+- [x] `contracts/audit/event-envelope.schema.json` — JSON Schema 2020-12 for the common envelope (per §7.4).
+- [x] `audit_outbox` MongoDB collection schema + indexes.
+- [ ] **`gls-platform-audit` shared library** (JVM): envelope construction, outbox writer, relay-to-Rabbit, retry/backoff. Single dependency every service imports. (Envelope, outbox writer, schema validation, and Spring Boot starter auto-config all landed; **outbox-to-Rabbit relay + retry/backoff still outstanding**.)
 - [ ] Equivalent Python module sketch (for `gls-bert-trainer` later) — design doc only at this phase.
-- [ ] Audit relay pattern documented in CLAUDE.md.
+- [x] Audit relay pattern documented in CLAUDE.md.
 
 #### 0.8 `gls.config.changed` cache-invalidation infrastructure (per CSV #30)
 - [ ] AsyncAPI for the `gls.config.changed` channel.
@@ -119,19 +119,19 @@ Single decision: do new services deploy to K8s or stay on Docker Compose for v1?
 - [ ] MCP server's Caffeine cache for governance entities replaced with the new pattern.
 
 #### 0.9 Maven BOM decoupling
-- [ ] Introduce per-deployable version properties in `backend/bom/pom.xml`: `gls.api.version`, `gls.orchestrator.version`, etc. All initially set to the current SNAPSHOT — values don't change yet, just the seam exists.
-- [ ] Document independent-version policy in CLAUDE.md.
+- [x] Introduce per-deployable version properties in `backend/bom/pom.xml`: `gls.api.version`, `gls.orchestrator.version`, etc. All initially set to the current SNAPSHOT — values don't change yet, just the seam exists.
+- [x] Document independent-version policy in CLAUDE.md.
 
 #### 0.10 Schema migration tooling
-- [ ] Pick migration tool — Mongock recommended (MongoDB-native; equivalent to Liquibase/Flyway). Log decision.
-- [ ] Wire into `gls-app-assembly` startup.
-- [ ] Write a no-op migration as the smoke test.
-- [ ] Document migration-on-startup policy.
+- [x] Pick migration tool — Mongock recommended (MongoDB-native; equivalent to Liquibase/Flyway). Log decision. (CSV #41.)
+- [x] Wire into `gls-app-assembly` startup.
+- [x] Write a no-op migration as the smoke test. (V001_MongockSmoke.)
+- [x] Document migration-on-startup policy.
 
 #### 0.11 Performance + correctness baseline
-- [ ] Baseline-capture script: p50/p95/p99 classification latency, throughput (docs/min), error rate, MCP cache hit rate, Mongo query patterns from current production traffic (or a replay against a representative sample).
-- [ ] Store baseline as a CSV in the repo (`baselines/2026-04-baseline.csv` or similar).
-- [ ] Document the measurement methodology so it's repeatable each phase.
+- [ ] Baseline-capture script: p50/p95/p99 classification latency, throughput (docs/min), error rate, MCP cache hit rate, Mongo query patterns from current production traffic (or a replay against a representative sample). (`scripts/baselines/capture.sh` scaffold landed; **load driver still stub** — no representative workload yet.)
+- [ ] Store baseline as a CSV in the repo (`baselines/2026-04-baseline.csv` or similar). (CSV scaffold landed with header + structural row; **no real captured data yet**.)
+- [x] Document the measurement methodology so it's repeatable each phase. (`baselines/README.md`.)
 
 #### 0.12 Local dev experience updates
 - [ ] Update `docker-compose.yml` with placeholder service definitions (commented out) for the new containers.
