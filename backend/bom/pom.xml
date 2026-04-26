@@ -49,6 +49,12 @@
                 <version>${gls.version}</version>
             </dependency>
 
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.platformconfig</groupId>
+                <artifactId>gls-platform-config</artifactId>
+                <version>${gls.version}</version>
+            </dependency>
+
             <!-- ==================== Governance ==================== -->
 
             <dependency>

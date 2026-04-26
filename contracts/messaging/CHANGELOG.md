@@ -4,6 +4,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-04-26
+
+### Added
+
+- `configChanged` channel on routing key `config.changed` (exchange `gls.config`, topic). Cache-invalidation fanout for governance entity writes per CSV #30. Publisher convention covers both local writes and Hub-driven imports; consumer convention is a non-durable exclusive queue per replica. No DLX (missed events are transient and self-healing on the next write).
+- `publishConfigChanged` / `consumeConfigChanged` operations.
+- `ConfigChangedEvent` message + payload schema. Required: `entityType`, `changeType`, `timestamp`, `actor`. Optional: `entityIds[]` (empty/absent means bulk wildcard), `traceparent`. `additionalProperties: false`.
+
+### Changed
+
+- `info.description` reframed: `gls.audit.*` is no longer "stub" — declared in `contracts/audit/asyncapi.yaml`, publisher side now in `gls-platform-audit` library. `gls.config.changed` is no longer "forward-looking" — channel + payload now defined here; the publisher/dispatcher implementation lands in `gls-platform-config`.
+
 ## [0.2.0] — 2026-04-26
 
 ### Added
