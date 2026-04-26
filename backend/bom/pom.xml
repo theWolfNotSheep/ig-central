@@ -11,7 +11,25 @@
     <description>Bill of Materials — pins compatible versions for all GLS modules</description>
 
     <properties>
+        <!--
+          Default version, used by every internal library. Libraries are
+          consumed by deployables and version together as one set; bumping
+          one library bumps all libraries.
+        -->
         <gls.version>0.0.1-SNAPSHOT</gls.version>
+
+        <!--
+          Per-deployable versions. Each deployable (Spring Boot app shipped
+          as its own container) has its own seam so it can be versioned and
+          released independently of the others. Today they all track
+          ${gls.version} — change a deployable's value here when its release
+          cadence diverges from the library set. See CLAUDE.md → Independent
+          Deployable Versions.
+        -->
+        <gls.api.version>${gls.version}</gls.api.version>
+        <gls.mcp.version>${gls.version}</gls.mcp.version>
+        <gls.orchestrator.version>${gls.version}</gls.orchestrator.version>
+        <gls.hub.version>${gls.version}</gls.hub.version>
     </properties>
 
     <dependencyManagement>
@@ -66,19 +84,19 @@
             <dependency>
                 <groupId>co.uk.wolfnotsheep</groupId>
                 <artifactId>gls-app-assembly</artifactId>
-                <version>${gls.version}</version>
+                <version>${gls.api.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.mcp</groupId>
                 <artifactId>gls-mcp-server</artifactId>
-                <version>${gls.version}</version>
+                <version>${gls.mcp.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.llm</groupId>
                 <artifactId>gls-llm-orchestration</artifactId>
-                <version>${gls.version}</version>
+                <version>${gls.orchestrator.version}</version>
             </dependency>
 
             <!-- ==================== Governance Hub ==================== -->
@@ -92,7 +110,7 @@
             <dependency>
                 <groupId>co.uk.wolfnotsheep.hub.app</groupId>
                 <artifactId>gls-governance-hub-app</artifactId>
-                <version>${gls.version}</version>
+                <version>${gls.hub.version}</version>
             </dependency>
 
         </dependencies>

@@ -41,7 +41,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 
 | Phase | Status | Started | Completed | Notes |
 |---|---|---|---|---|
-| 0   | In progress | 2026-04-26 | — | 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.10 done; audit decisions #3–#8 DECIDED; 0.7 envelope + outbox indexes + library skeleton landed; relay/auto-config/validation deferred as 0.7 follow-ups; 0.8 / 0.9 / 0.11 / 0.12 still open |
+| 0   | In progress | 2026-04-26 | — | 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.9, 0.10 done; audit decisions #3–#8 DECIDED; 0.7 envelope + outbox indexes + library skeleton landed; relay/auto-config/validation deferred as 0.7 follow-ups; 0.8 / 0.11 / 0.12 still open |
 | 0.5 | Not started | — | — | |
 | 1   | Not started | — | — | |
 | 2   | Not started | — | — | |
@@ -408,3 +408,30 @@ Local `./mvnw -pl gls-platform-audit compile` is clean.
 - **Phase 0.11 acceptance gate (`Performance baseline captured and committed`) is not satisfied yet** — only the scaffolding is. Mark 0.11 fully done in a follow-up PR after the first non-stub capture.
 
 **Next:** A follow-up PR that wires the load driver and produces the first real baseline row. Independently: Phase 0.12 (dev experience), Phase 0.8 (`gls-platform-config`), or the outstanding Phase 0.7 outbox-to-Rabbit relay.
+
+## 2026-04-26 — Phase 0.9 — Maven BOM decoupling (closing entry)
+
+**Done:** Introduced per-deployable version properties in `backend/bom/pom.xml` and documented the independent-versioning policy in `CLAUDE.md`. Every deployable's BOM `<dependency>` entry now references its own version property; libraries continue to share `${gls.version}`. Today every per-deployable property tracks the shared default — the seam is in place but no behaviour changes.
+
+**Decisions logged:** None new — implements the Phase 0.9 work item from `version-2-implementation-plan.md` directly.
+
+**What's wired:**
+
+- `gls.api.version` — `gls-app-assembly`
+- `gls.mcp.version` — `gls-mcp-server`
+- `gls.orchestrator.version` — `gls-llm-orchestration`
+- `gls.hub.version` — `gls-governance-hub-app`
+
+`gls-governance-hub` (a library, not a deployable) keeps `${gls.version}` along with the rest of the libraries.
+
+**Files changed:**
+
+- `backend/bom/pom.xml` — added the four `gls.<deployable>.version` properties (each defaulting to `${gls.version}`); switched the four deployable `<dependency>` entries to reference their own property.
+- `CLAUDE.md` — new "Independent Deployable Versions" section above "Build & Run". Documents the deployable vs library distinction, the property naming convention, and when to bump a deployable's version vs leaving it tracking the shared default.
+- `version-2-implementation-log.md` — status board updated (0.9 → done) + this entry.
+
+**Verification:** `./mvnw -pl gls-app-assembly,gls-mcp-server,gls-llm-orchestration,gls-governance-hub-app -am compile` clean. The BOM resolves correctly: every deployable still finds its dependencies via the per-deployable property which transitively expands to `${gls.version}`.
+
+**Open issues:** None. The seam is intentionally inert until a deployable's release cadence diverges from the library set; the rule for "when to bump" is documented.
+
+**Next:** Phase 0.7 outstanding follow-ups (relay; envelope schema validation), Phase 0.8 (`gls-platform-config` cache + `gls.config.changed`), Phase 0.11 (perf baseline), Phase 0.12 (dev experience).

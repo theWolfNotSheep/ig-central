@@ -405,6 +405,32 @@ See `V002_AuditOutboxIndexes` in `gls-app-assembly`. The `AuditOutboxRecord` POJ
 
 `MONGOCK_ENABLED=false` env var skips migration on startup. Use only for hotfix scenarios where a buggy migration is already in-flight; resolve the underlying issue before re-enabling.
 
+## Independent Deployable Versions
+
+**Each deployable can be versioned and shipped independently of every other deployable, even though the monorepo coordinates a single source tree.**
+
+A "deployable" is a Spring Boot app that ships as its own container — `gls-app-assembly` (the API), `gls-mcp-server`, `gls-llm-orchestration`, `gls-governance-hub-app`. A "library" is anything consumed by deployables (`gls-platform`, `gls-platform-audit`, `gls-governance`, `gls-document`, etc.).
+
+### Rules
+
+- Per-deployable version properties live in `backend/bom/pom.xml`:
+  - `gls.api.version` — `gls-app-assembly`
+  - `gls.mcp.version` — `gls-mcp-server`
+  - `gls.orchestrator.version` — `gls-llm-orchestration`
+  - `gls.hub.version` — `gls-governance-hub-app`
+- Every deployable's BOM `<dependency>` entry references **its own** version property — never `${gls.version}` directly.
+- Today every property tracks `${gls.version}`, so behaviour is identical to a single-version setup. The seam exists so a deployable can be bumped without forcing a coordinated release of the others.
+- Libraries continue to share `${gls.version}` — they version together. Splitting a library's version from the rest is a separate decision and requires removing it from the shared default.
+- Never collapse a deployable's property back to `${gls.version}` in service code. The BOM is the single source of truth for which version a deployable resolves to.
+
+### When to bump a deployable's version
+
+- The deployable ships as a release candidate (its container image is being tagged for promotion to a non-dev environment).
+- A consumer outside the monorepo pins the deployable's artifact at a specific version (e.g. SDK consumers).
+- A deployable's release cadence has genuinely diverged from the rest — for example, `gls-mcp-server` shipping a hotfix while `gls-app-assembly` stays on the previous minor.
+
+If none of those apply, leave the property at `${gls.version}` and bump the shared default instead — the seam is meant to be unused until needed.
+
 ## Build & Run
 
 ```bash
