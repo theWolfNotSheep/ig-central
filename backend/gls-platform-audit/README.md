@@ -9,19 +9,36 @@ Shared library that every JVM service imports to emit audit events. Implements t
 
 ## Status
 
-**Phase 0.7 — auto-configured, schema-validating starter.** This module currently provides:
+**Phase 0.7 — auto-configured, schema-validating, relay-publishing starter.** This module currently provides:
 
 - The `AuditEvent` envelope record (mirrors `contracts/audit/event-envelope.schema.json`) and its supporting enums / nested records (`Tier`, `Outcome`, `ActorType`, `ResourceType`, `Actor`, `Resource`, `AuditDetails`).
 - `AuditOutboxRecord` (the Mongo document mapping for `audit_outbox`).
 - `AuditOutboxRepository` (Spring Data Mongo).
 - `AuditEmitter` interface and `OutboxAuditEmitter` default implementation.
 - `EnvelopeValidator` — JSON Schema 2020-12 validation against the bundled `event-envelope.schema.json`. Every emit goes through it; invalid envelopes raise `IllegalArgumentException` at the call site and never reach the outbox.
-- `PlatformAuditAutoConfiguration` — registers the repository (via `@EnableMongoRepositories`) and the default emitter as beans whenever Spring Data Mongo is on the classpath. Activated through `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`. Consumers depending on this module pick up `AuditEmitter` automatically; override by declaring their own `AuditEmitter` bean.
+- `OutboxRelay` — `@Scheduled` task that polls `audit_outbox` for `PENDING` rows, transforms `details.content` to sha256 hashes for Tier 1 (per CSV #6, via `Tier1HashTransformer`), and publishes JSON envelopes to `audit.tier1.<eventType>` / `audit.tier2.<eventType>` on the `gls.audit` topic exchange. Exponential backoff on transient failures; rows mark `FAILED` after the configured attempt cap. Tunable via `gls.platform.audit.relay.*` properties.
+- `PlatformAuditAutoConfiguration` — registers the repository, emitter, exchange, and relay as beans. The relay only activates when `RabbitTemplate` is on the classpath (consumer pulled in `spring-boot-starter-amqp`) and `gls.platform.audit.relay.enabled` is not `false`. Activated through `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`.
 
 **Not yet here (follow-ups):**
 
-- The **outbox-to-Rabbit relay** — a scheduled task that polls `audit_outbox`, publishes to `audit.tier1.{eventType}` / `audit.tier2.{eventType}`, marks rows `PUBLISHED`. The interesting operational logic (retry/backoff, circuit-breaker on Rabbit, observability, leader election for the Tier 1 single-writer constraint per CSV #4) lives in this piece.
-- **Relay-side tests and tests for the emitter against a real Mongo Testcontainer** — currently blocked by issue #7 (Testcontainers MongoDB cleanup). `EnvelopeValidator` has direct unit coverage that exercises the bundled schema.
+- **Leader election for Tier 1 single-writer per CSV #4** — multi-replica deployments today risk double-publishing the same envelope. Solve with ShedLock (or equivalent) before running more than one replica with the relay enabled. For a single replica the at-least-once delivery is masked by the downstream consumer's `eventId` dedup.
+- **Comprehensive observability** — Micrometer counters for queue depth, publish rate, error rate, retry distribution. Today the relay only logs.
+- **Circuit breaker on Rabbit** — currently each row trips the same backoff independently. A global circuit breaker would short-circuit the poll cycle once the broker is observably down.
+- **Relay-side integration tests against a real RabbitMQ + Mongo Testcontainer** — blocked by issue #7 (Testcontainers MongoDB cleanup). The unit tests against mocks cover serialisation, routing, retry/backoff, and FAILED-cap behaviour.
+
+## Configuration
+
+Properties bound under `gls.platform.audit.relay.*`:
+
+| Property | Default | What it does |
+|---|---|---|
+| `enabled` | `true` | Toggle the entire relay off. |
+| `poll-interval` | `PT5S` | Duration between `pollOnce` cycles. |
+| `batch-size` | `50` | Max rows per poll. |
+| `max-attempts` | `5` | Retries before marking `FAILED`. |
+| `backoff-base` | `PT1S` | Initial retry delay; doubled per attempt. |
+| `backoff-max` | `PT5M` | Cap on the exponential backoff. |
+| `exchange` | `gls.audit` | AMQP topic exchange to publish to. |
 
 ## Usage
 

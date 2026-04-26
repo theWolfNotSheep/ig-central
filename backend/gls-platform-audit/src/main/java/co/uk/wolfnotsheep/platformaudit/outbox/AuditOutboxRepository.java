@@ -1,5 +1,6 @@
 package co.uk.wolfnotsheep.platformaudit.outbox;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import java.time.Instant;
@@ -9,8 +10,9 @@ import java.util.Optional;
 /**
  * Spring Data Mongo repository for {@link AuditOutboxRecord}.
  *
- * <p>The relay (follow-up PR) will use {@link #findByStatusAndNextRetryAtBeforeOrderByCreatedAtAsc}
- * as its primary poll query — supported by the {@code idx_status_nextRetry} index.
+ * <p>The relay uses {@link #findByStatusAndNextRetryAtBeforeOrderByCreatedAtAsc}
+ * as its primary poll query — supported by the {@code idx_status_nextRetry}
+ * index. The {@link Pageable} parameter caps the batch size per poll cycle.
  */
 public interface AuditOutboxRepository extends MongoRepository<AuditOutboxRecord, String> {
 
@@ -22,5 +24,5 @@ public interface AuditOutboxRepository extends MongoRepository<AuditOutboxRecord
      * oldest first. Backed by {@code idx_status_nextRetry}.
      */
     List<AuditOutboxRecord> findByStatusAndNextRetryAtBeforeOrderByCreatedAtAsc(
-            OutboxStatus status, Instant cutoff);
+            OutboxStatus status, Instant cutoff, Pageable pageable);
 }
