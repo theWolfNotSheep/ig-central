@@ -1,0 +1,18 @@
+# Spectral ruleset for ig-central contracts.
+#
+# Strategy (per CSV #40 / Phase 0 Risk callouts in version-2-implementation-plan.md):
+# start permissive, tighten over time. Custom rules added below as conventions
+# surface during 0.4 (_shared/ authoring) and Phase 0.5 (reference service).
+#
+# Run locally:
+#   npx @stoplight/spectral-cli lint contracts/<path>
+# Pre-commit and CI both invoke this ruleset.
+
+extends:
+  - "spectral:oas"
+
+# No custom rules yet. Slot for upcoming additions:
+#   - operation-must-reference-error-envelope (after 0.4 lands error-envelope.yaml)
+#   - operation-must-declare-traceparent (after common-headers.yaml lands)
+#   - response-must-declare-cost-units (after capabilities.yaml lands)
+rules: {}
