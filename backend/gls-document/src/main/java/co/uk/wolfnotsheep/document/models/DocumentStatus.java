@@ -12,6 +12,7 @@ public enum DocumentStatus {
     ENFORCEMENT_FAILED,
     REVIEW_REQUIRED,
     GOVERNANCE_APPLIED,
+    TRIAGE,
     INBOX,
     FILED,
     ARCHIVED,

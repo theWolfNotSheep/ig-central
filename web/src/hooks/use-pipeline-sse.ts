@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type PipelineData = {
     statusCounts: Record<string, number>;
@@ -43,51 +43,54 @@ export function usePipelineSSE(options: UsePipelineSSEOptions) {
     const optionsRef = useRef(options);
     optionsRef.current = options;
 
-    const connect = useCallback(() => {
-        // SSE goes directly to the Spring Boot API via nginx (bypasses Next.js proxy)
-        const es = new EventSource("/api/admin/monitoring/events", { withCredentials: true });
-        eventSourceRef.current = es;
-
-        es.addEventListener("connected", () => {
-            setConnected(true);
-        });
-
-        es.addEventListener("pipeline-metrics", (e) => {
-            try {
-                const data = JSON.parse(e.data);
-                optionsRef.current.onPipelineMetrics?.(data);
-            } catch { /* ignore parse errors */ }
-        });
-
-        es.addEventListener("document-status", (e) => {
-            try {
-                const data = JSON.parse(e.data);
-                optionsRef.current.onDocumentStatus?.(data);
-            } catch { /* ignore parse errors */ }
-        });
-
-        es.addEventListener("pipeline-log", (e) => {
-            try {
-                const data = JSON.parse(e.data);
-                optionsRef.current.onPipelineLog?.(data);
-            } catch { /* ignore parse errors */ }
-        });
-
-        es.onerror = () => {
-            setConnected(false);
-            es.close();
-            // Reconnect after 3 seconds
-            setTimeout(connect, 3000);
-        };
-    }, []);
-
     useEffect(() => {
+        let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const connect = () => {
+            // SSE goes directly to the Spring Boot API via nginx (bypasses Next.js proxy)
+            const es = new EventSource("/api/admin/monitoring/events", { withCredentials: true });
+            eventSourceRef.current = es;
+
+            es.addEventListener("connected", () => {
+                setConnected(true);
+            });
+
+            es.addEventListener("pipeline-metrics", (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    optionsRef.current.onPipelineMetrics?.(data);
+                } catch { /* ignore parse errors */ }
+            });
+
+            es.addEventListener("document-status", (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    optionsRef.current.onDocumentStatus?.(data);
+                } catch { /* ignore parse errors */ }
+            });
+
+            es.addEventListener("pipeline-log", (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    optionsRef.current.onPipelineLog?.(data);
+                } catch { /* ignore parse errors */ }
+            });
+
+            es.onerror = () => {
+                setConnected(false);
+                es.close();
+                reconnectTimer = setTimeout(connect, 3000);
+            };
+        };
+
         connect();
+
         return () => {
+            if (reconnectTimer) clearTimeout(reconnectTimer);
             eventSourceRef.current?.close();
             eventSourceRef.current = null;
         };
-    }, [connect]);
+    }, []);
 
     return { connected };
 }
