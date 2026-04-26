@@ -1,0 +1,2 @@
+date,phase,workload,sample_size,p50_classification_ms,p95_classification_ms,p99_classification_ms,throughput_docs_per_min,error_rate_pct,mcp_cache_hit_rate_pct,mongo_queries_per_doc,notes
+2026-04-26,0-pre-cutover,none,0,,,,,,,,Scaffold row — no workload driven yet. See baselines/README.md "Driving load" for what unblocks real captures.
