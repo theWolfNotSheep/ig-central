@@ -78,6 +78,28 @@ public class FilingService {
         return saved;
     }
 
+    public DocumentModel returnToTriage(String documentId, String performedBy) {
+        DocumentModel doc = documentService.getById(documentId);
+        if (doc == null) {
+            throw new IllegalArgumentException("Document not found: " + documentId);
+        }
+        if (doc.getStatus() != DocumentStatus.INBOX) {
+            throw new IllegalArgumentException("Document is not in INBOX status (current: " + doc.getStatus() + ")");
+        }
+
+        doc.setStatus(DocumentStatus.TRIAGE);
+        doc.setUpdatedAt(Instant.now());
+
+        DocumentModel saved = documentService.save(doc);
+
+        auditEventRepository.save(new AuditEvent(
+                documentId, "DOCUMENT_RETURNED_TO_TRIAGE", performedBy, "USER",
+                Map.of()));
+
+        log.info("Document {} returned to triage by {}", documentId, performedBy);
+        return saved;
+    }
+
     public DocumentModel returnToInbox(String documentId, String performedBy) {
         DocumentModel doc = documentService.getById(documentId);
         if (doc == null) {
