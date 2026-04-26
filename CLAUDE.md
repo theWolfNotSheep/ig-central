@@ -353,6 +353,27 @@ Register both in Google Cloud Console → Credentials → Authorized redirect UR
 
 Same `storageProvider` abstraction — implement `SharePointDriveService` behind the same interface.
 
+## Schema Migrations
+
+**MongoDB schema changes are versioned, tracked, and applied automatically via Mongock at app startup** (per CSV #41 / Phase 0.10).
+
+### Rules
+
+- **Every schema change is a Mongock `@ChangeUnit`.** New collections, new indexes, renamed fields, backfilled values — all of these go through this. No ad-hoc shell scripts; no `@PostConstruct` migrations.
+- Change units live under `co.uk.wolfnotsheep.infrastructure.migrations` in `gls-app-assembly`. Naming convention: `V<numeric-order>_<short-name>` (e.g. `V001_MongockSmoke`, `V002_AddDocumentSlugIndex`).
+- Each `@ChangeUnit` declares a unique `id` and a numeric `order`. **`id` is immutable once landed** — renaming breaks the `mongockChangeLog` collection's tracking.
+- Provide a `@RollbackExecution` method for any non-trivial change. No-op for additive cases (new indexes, new collections).
+- Mongock's lock coordination handles multi-replica startup safely.
+
+### How it runs
+
+- On `gls-app-assembly` startup, Mongock scans `co.uk.wolfnotsheep.infrastructure.migrations`, compares declared change units against the `mongockChangeLog` collection, and runs any unrun units in declared order.
+- **Failure halts startup loudly.** The fix-forward pattern is: write a new `@ChangeUnit` that corrects the bad state — never edit a landed unit.
+
+### Disabling Mongock (rare)
+
+`MONGOCK_ENABLED=false` env var skips migration on startup. Use only for hotfix scenarios where a buggy migration is already in-flight; resolve the underlying issue before re-enabling.
+
 ## Build & Run
 
 ```bash
