@@ -1,0 +1,38 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Security Schemes
+  version: 0.1.0
+  description: |
+    Shared security scheme definitions for inter-service authentication.
+
+    Source decision: `version-2-decision-tree.csv` #18 — service-account
+    JWTs (service identity + scopes as claims). mTLS is deferred to a
+    future service-mesh adoption (see CSV #38 and
+    `docs/operations/k8s-deferred-guidance.md`).
+
+paths: {}
+
+components:
+  securitySchemes:
+    serviceJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Service-account JWT issued by the platform identity service.
+
+        Required claims:
+
+        - `iss` — issuer URI (the identity service).
+        - `sub` — service identity (e.g. `service:gls-orchestrator`).
+        - `aud` — target service identifier.
+        - `exp`, `iat`, `nbf` — standard time claims.
+        - `scope` — space-separated scopes naming permitted operations
+          (e.g. `extract:invoke classify:invoke`).
+        - `traceId` — optional propagation field aligned with the
+          `traceparent` header (see `common-headers.yaml`).
+
+        Tokens are short-lived (≤ 5 min). Reissuance is the caller's
+        responsibility. Rotation of signing keys does not require client
+        redeploys — the JWKS endpoint is published by the identity
+        service.

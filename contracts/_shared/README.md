@@ -11,7 +11,7 @@ Cross-cutting OpenAPI components and patterns referenced by every service's spec
 
 If five services each hand-write their own error response, they will drift. Defining the error envelope once and `$ref`-ing it from every operation guarantees that orchestrator-side error handling is a single shape, not a per-worker translation layer.
 
-## Content (target — populated in Phase 0.4)
+## Content (delivered in Phase 0.4 — VERSION 0.2.0)
 
 - `error-envelope.yaml` — RFC 7807 `application/problem+json` plus ig-central extensions: `code`, `lastErrorStage`, `retryable`, `retryAfterMs`, `trace[]`. Per CSV #17.
 - `security-schemes.yaml` — service-account JWT bearer scheme. Per CSV #18.
