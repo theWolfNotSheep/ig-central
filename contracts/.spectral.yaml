@@ -16,3 +16,15 @@ extends:
 #   - operation-must-declare-traceparent (after common-headers.yaml lands)
 #   - response-must-declare-cost-units (after capabilities.yaml lands)
 rules: {}
+
+# Per-folder overrides. `_shared/` files are partial OpenAPI documents
+# (component libraries) referenced via `$ref` from per-service specs —
+# they don't have `servers`, don't carry `contact`, and their components
+# are intentionally "unused" within the file.
+overrides:
+  - files:
+      - "**/_shared/*.yaml"
+    rules:
+      oas3-api-servers: off
+      info-contact: off
+      oas3-unused-component: off

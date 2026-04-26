@@ -1,0 +1,75 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Hello World (smoke)
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    Smoke spec for end-to-end exercising of the OpenAPI tooling
+    pipeline. Not a real service. Demonstrates `$ref` resolution
+    into `_shared/` (error envelope, security scheme, common
+    headers) so a per-service spec adopting the same pattern has a
+    known-good template.
+
+    A change here that breaks the generator caught in CI proves the
+    smoke does its job.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (placeholder).
+
+tags:
+  - name: hello
+    description: Smoke endpoints — not a real service.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/hello/{name}:
+    get:
+      operationId: getHello
+      tags: [hello]
+      summary: Greet the named caller.
+      description: |
+        Returns a greeting addressed to `{name}`. Smoke operation — its
+        only purpose is to exercise the full tooling pipeline against a
+        spec that uses every cross-file `$ref` pattern a real service
+        would adopt.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: A greeting.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HelloResponse'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+components:
+  schemas:
+    HelloResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          examples:
+            - Hello, John.
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'
