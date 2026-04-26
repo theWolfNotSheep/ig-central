@@ -531,3 +531,54 @@ Local `./mvnw -pl gls-platform-audit compile` is clean.
 - `version-2-implementation-log.md` — this entry.
 
 **Next:** Outbox-to-Rabbit relay (the largest outstanding 0.7 piece), Phase 0.8 (`gls-platform-config`), or wire the load driver to upgrade 0.11 from scaffolded to fully done.
+
+## 2026-04-26 — Phase 0.7 (relay skeleton) — outbox-to-Rabbit relay
+
+**Done:** Landed the **skeleton + happy path** of the outbox-to-Rabbit relay. `OutboxRelay` polls `audit_outbox`, applies the Tier 1 hash transformation per CSV #6, publishes to the `gls.audit` topic exchange with tier-aware routing keys, and marks rows `PUBLISHED` / `FAILED` based on outcome. Exponential backoff on transient failures; cap on attempts. Tunable via `gls.platform.audit.relay.*` properties. **18 tests, all green.**
+
+**Decisions logged:** None new. Implements the relay implied by architecture §7.7 / CSV #4 / CSV #6 and the audit AsyncAPI declaration.
+
+**What's wired:**
+
+- `OutboxRelay` — `@Scheduled(fixedDelayString = "${gls.platform.audit.relay.poll-interval:PT5S}")`. Each poll cycle: fetch up to `batchSize` PENDING rows where `nextRetryAt <= now`, ordered by `createdAt` ascending (backed by `idx_status_nextRetry`). For each row: apply Tier 1 hash transform if `tier=DOMAIN`, serialise to JSON, publish to `audit.tier1.<eventType>` (DOMAIN) or `audit.tier2.<eventType>` (SYSTEM) on the configured exchange. On success → status PUBLISHED + publishedAt. On failure → bump attempts, set nextRetryAt = now + exponential backoff (capped), capture lastError. Once attempts ≥ maxAttempts → FAILED.
+- `Tier1HashTransformer` — strips `details.content` map values to `sha256:<hex>` for `tier=DOMAIN` envelopes per CSV #6 (right-to-erasure boundary). Pass-through for SYSTEM. Pass-through for DOMAIN with no/empty content. `metadata`, `supersedes`, `supersededBy` preserved verbatim.
+- `OutboxRelayProperties` — `@ConfigurationProperties("gls.platform.audit.relay")` record with sensible defaults (`enabled=true`, poll 5s, batch 50, maxAttempts 5, backoffBase 1s, backoffMax 5m, exchange `gls.audit`). Compact constructor enforces defaults so partial config is well-formed.
+- `PlatformAuditAutoConfiguration` — extended with `@EnableConfigurationProperties(OutboxRelayProperties.class)`; the `glsAuditExchange` bean (`TopicExchange("gls.audit")`); the `outboxRelay` bean. Both Rabbit-touching beans are `@ConditionalOnClass(RabbitTemplate.class)`. The relay is also gated by `@ConditionalOnProperty("gls.platform.audit.relay.enabled", matchIfMissing=true)`.
+- `AuditOutboxRepository` — primary poll query now takes `Pageable` so the relay caps the batch size per cycle. The previous unparameterised method had no callers.
+- `gls-platform-audit/pom.xml` — `spring-boot-starter-amqp` added as `<optional>true</optional>`. Consumers without Rabbit on their classpath still consume the library happily; the relay just doesn't activate.
+
+**Tests (18 total, all green):**
+
+- `Tier1HashTransformerTest` (6) — DOMAIN content hashed, metadata preserved, no-op cases (no content / empty content / SYSTEM tier), determinism, supersedes link preserved.
+- `OutboxRelayTest` (6) — empty batch no-op, disabled relay short-circuits, SYSTEM tier publishes with tier2 routing + marks PUBLISHED, DOMAIN tier strips content + publishes with tier1 routing + JSON body contains `sha256:`, publish failure bumps attempts + sets nextRetry, terminal failure marks FAILED at maxAttempts.
+- (Plus the 6 existing `EnvelopeValidatorTest` cases.)
+
+**Implementation notes worth flagging:**
+
+- **Single-writer constraint (CSV #4) is NOT enforced here.** Multi-replica deployments today risk double-publishing the same envelope. Until the ShedLock follow-up lands, run a single replica with the relay enabled. The downstream consumer (`gls-audit-collector`) deduplicates on `eventId`, so at-least-once delivery is masked operationally — but Tier 1's single-writer guarantee is genuinely deferred.
+- **Serialisation failure is not retried.** A `JsonProcessingException` indicates a structurally broken envelope; no amount of retrying fixes it. The relay marks the row FAILED immediately so a human surfaces it.
+- **`@EnableScheduling` is the consumer's responsibility.** `gls-app-assembly` already has it on `GlsApplication`. New consumers must declare it themselves or the relay bean exists but never ticks.
+
+**Files changed:**
+
+- `backend/gls-platform-audit/src/main/java/.../relay/OutboxRelay.java` (new).
+- `backend/gls-platform-audit/src/main/java/.../relay/OutboxRelayProperties.java` (new).
+- `backend/gls-platform-audit/src/main/java/.../relay/Tier1HashTransformer.java` (new).
+- `backend/gls-platform-audit/src/main/java/.../autoconfigure/PlatformAuditAutoConfiguration.java` — register exchange + relay beans, conditional on Rabbit + property.
+- `backend/gls-platform-audit/src/main/java/.../outbox/AuditOutboxRepository.java` — poll query now takes `Pageable`.
+- `backend/gls-platform-audit/pom.xml` — add optional `spring-boot-starter-amqp` dep.
+- `backend/gls-platform-audit/src/test/java/.../relay/Tier1HashTransformerTest.java` (new) — 6 tests.
+- `backend/gls-platform-audit/src/test/java/.../relay/OutboxRelayTest.java` (new) — 6 tests with mock repo + RabbitTemplate.
+- `backend/gls-platform-audit/README.md` — Status reframed; "Configuration" table for the new tunables.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-platform-audit test` — 18/18 pass. `./mvnw -pl gls-app-assembly -am compile` clean. End-to-end runtime smoke (boot the api, stage some envelopes via `auditEmitter.emit(...)`, observe them flow through the relay to a RabbitMQ exchange) is best done after this PR merges so it can be exercised against the full stack.
+
+**Open issues (deferred to follow-up PRs):**
+
+- **Leader election (ShedLock) for Tier 1 single-writer.** Hard requirement before running multi-replica with the relay enabled.
+- **Micrometer counters / gauges** for queue depth, publish rate, error rate, retry distribution.
+- **Circuit breaker on Rabbit** — short-circuit the poll cycle when the broker is observably down rather than tripping per-row backoff in parallel.
+- **Tests against real RabbitMQ + Mongo Testcontainer** — blocked by issue #7.
+
+**Next:** Phase 0.8 (`gls-platform-config` cache + `gls.config.changed` channel), Phase 0.12 (dev experience), wiring the 0.11 load driver, or the relay hardening follow-up (ShedLock + observability).
