@@ -41,7 +41,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 
 | Phase | Status | Started | Completed | Notes |
 |---|---|---|---|---|
-| 0   | In progress | 2026-04-26 | — | 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.10 done; 0.7/0.8/0.9/0.11/0.12 not yet started |
+| 0   | In progress | 2026-04-26 | — | 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.10 done; audit decisions #3–#8 DECIDED; 0.7 envelope schema landed; remaining 0.7 (audit_outbox + gls-platform-audit lib) + 0.8/0.9/0.11/0.12 still open |
 | 0.5 | Not started | — | — | |
 | 1   | Not started | — | — | |
 | 2   | Not started | — | — | |
@@ -259,3 +259,36 @@ Cross-cutting tracks:
 - Tier 2 backend (OpenSearch + S3 ILM) is *proposed* in `version-2-architecture.md` §7 but not yet a CSV row. Lift to a DECIDED CSV row in Phase 0.7 once the implementation specifics are known.
 
 **Next:** Phase 0.7 — author `contracts/audit/event-envelope.schema.json` (informed by CSV #4 / #6 / #7 / #8); design the `audit_outbox` MongoDB collection; build the `gls-platform-audit` shared library skeleton. Independently: Phase 0.8 (`gls-platform-config` + `gls.config.changed`), Phase 0.9 (Maven BOM decoupling — small), Phase 0.11 (perf baseline), Phase 0.12 (dev experience).
+
+## 2026-04-26 — Phase 0.7 (envelope) — Audit event envelope schema
+
+**Done:** Authored `contracts/audit/event-envelope.schema.json` — the JSON Schema 2020-12 contract for every audit event written by every container. Cross-tier correlation, per-resource hash-chain integrity, metadata/content partition for right-to-erasure, supersession links, traceparent propagation. Aligns with `version-2-architecture.md` §7.4 and the now-DECIDED audit decisions.
+
+**Decisions logged:** None new. Implements CSV #4 (per-resource hash chain via `previousEventHash`), CSV #6 (metadata/content partition under `details`), CSV #7 (`supersedes` / `supersededBy` links), CSV #20 (`traceparent`). CSV #3 / #5 / #8 are referenced in the description fields but don't shape the envelope structurally.
+
+**Schema highlights:**
+
+- `tier` enum: `DOMAIN` (Tier 1, compliance) / `SYSTEM` (Tier 2, operations). Tier 3 (traces) is OpenTelemetry-only and out of scope for this envelope.
+- `eventId` is a ULID — Crockford base32, 26 chars, time-sortable. Tier 2 paging benefits from lex order matching chronological order.
+- `actor.type=USER` triggers a conditional `required: [id]` via `allOf`/`if`/`then` — JSON Schema 2020-12 native form.
+- `tier=DOMAIN` triggers a conditional `required: [previousEventHash, resource, retentionClass]` via the same pattern. Tier 1 events MUST chain; Tier 2 events MAY omit chain.
+- `details` partitioned: `metadata` (always retained), `content` (raw at Tier 2; sha256-hashed at Tier 1 — the relay strips raw values when promoting). `supersedes` and `supersededBy` (each ULID-pattern strings) implement CSV #7.
+- `additionalProperties: false` at the envelope top level — locks the schema down. `details.metadata` and `details.content` permit additional properties so per-event-type payloads can extend.
+
+**Contracts touched:**
+
+- `contracts/audit/event-envelope.schema.json` (new) — the envelope.
+- `contracts/audit/VERSION` — 0.2.0 → 0.3.0.
+- `contracts/audit/CHANGELOG.md` — 0.3.0 entry.
+- `contracts/audit/README.md` — Tier 1 backend status updated (DECIDED per CSV #3); content list reframed delivered vs target.
+
+**Files changed:** 1 new schema, 3 updated metadata files. `version-2-implementation-log.md` (status board + this entry).
+
+**Open issues:**
+
+- Cross-format `$ref` between `audit/asyncapi.yaml` (YAML) and `event-envelope.schema.json` (JSON Schema 2020-12) is not yet wired — the asyncapi still carries its own opaque `AuditEventEnvelope` placeholder. Tightening this is a small follow-up; AsyncAPI 3.0 supports external `$ref` to JSON Schema files.
+- `audit_outbox` MongoDB collection schema (indexes, write patterns, retention) — outstanding 0.7 work.
+- `gls-platform-audit` shared library (JVM) — outstanding 0.7 work; will exercise this envelope schema by constructing valid events at every emission site.
+- Tier 2 backend (OpenSearch + S3 ILM) — still proposed in architecture doc, not yet a CSV row. Lift in a future close-out PR.
+
+**Next:** Continue 0.7 — design the `audit_outbox` collection (likely a Mongock `@ChangeUnit` for indexes); start the `gls-platform-audit` library skeleton (envelope construction helpers + outbox writer). Independently: 0.8 / 0.9 / 0.11 / 0.12.
