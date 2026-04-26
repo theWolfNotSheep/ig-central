@@ -41,7 +41,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 
 | Phase | Status | Started | Completed | Notes |
 |---|---|---|---|---|
-| 0   | In progress | 2026-04-26 | — | 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.10 done; audit decisions #3–#8 DECIDED; 0.7 envelope schema landed; remaining 0.7 (audit_outbox + gls-platform-audit lib) + 0.8/0.9/0.11/0.12 still open |
+| 0   | In progress | 2026-04-26 | — | 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.10 done; audit decisions #3–#8 DECIDED; 0.7 envelope + outbox indexes + library skeleton landed; relay/auto-config/validation deferred as 0.7 follow-ups; 0.8 / 0.9 / 0.11 / 0.12 still open |
 | 0.5 | Not started | — | — | |
 | 1   | Not started | — | — | |
 | 2   | Not started | — | — | |
@@ -318,3 +318,35 @@ Cross-cutting tracks:
 - TTL / retention job for `PUBLISHED` rows is Phase 2 work.
 
 **Next:** Last piece of 0.7 — `gls-platform-audit` shared library skeleton (envelope construction helpers, `AuditOutboxRecord`, outbox writer, relay-to-Rabbit). New Maven module under `backend/`. Independently: 0.8 / 0.9 / 0.11 / 0.12.
+
+## 2026-04-26 — Phase 0.7 (platform-audit library skeleton) — closing entry for sub-phase
+
+**Done:** New Maven module `gls-platform-audit` under `backend/`. Provides the envelope, outbox model, repository, and emitter — the building blocks every JVM service will use. The relay-to-Rabbit piece (and the Spring Boot starter auto-configuration) are the remaining 0.7 follow-ups.
+
+**Decisions logged:** None new — implements CSV #4 / #6 / #7 / #20 (already DECIDED) by mirroring `event-envelope.schema.json` in Java.
+
+**Module layout:**
+
+- `co.uk.wolfnotsheep.platformaudit.envelope.*` — `AuditEvent` record + `Tier` / `Outcome` / `ActorType` / `ResourceType` enums + `Actor` / `Resource` / `AuditDetails` nested records. Mirrors `contracts/audit/event-envelope.schema.json`. Static factory methods (`Actor.system`, `Actor.user`, `Actor.connector`, `Resource.of`, `AuditDetails.metadataOnly`, `AuditDetails.of`, `AuditDetails.withSupersedes`) for ergonomic construction.
+- `co.uk.wolfnotsheep.platformaudit.outbox.*` — `AuditOutboxRecord` (Spring Data Mongo `@Document` mapped to `audit_outbox`), `OutboxStatus` enum, `AuditOutboxRepository` (Spring Data interface). The repository's `findByStatusAndNextRetryAtBeforeOrderByCreatedAtAsc` is the relay's primary poll query.
+- `co.uk.wolfnotsheep.platformaudit.emit.*` — `AuditEmitter` interface + `OutboxAuditEmitter` default implementation. `OutboxAuditEmitter.emit` is idempotent on `eventId` (upsert via `findByEventId` short-circuit; the unique index is the durable guard).
+
+**Files changed:**
+
+- 14 new files under `backend/gls-platform-audit/` (pom.xml, README.md, 12 Java sources).
+- `backend/pom.xml` — added `gls-platform-audit` to `<modules>`.
+- `backend/bom/pom.xml` — added `gls-platform-audit` dependency entry.
+- `version-2-implementation-log.md` — status board pending update + this entry.
+
+Local `./mvnw -pl gls-platform-audit compile` is clean.
+
+**Open issues (deferred to follow-up PRs in 0.7):**
+
+- **Outbox-to-Rabbit relay.** The `OutboxRelay` scheduled task: poll `audit_outbox` via `idx_status_nextRetry`, publish to `audit.tier1.{eventType}` (DOMAIN) or `audit.tier2.{eventType}` (SYSTEM), mark `PUBLISHED`. Operationally the most interesting piece — retry/backoff, circuit-breaker on Rabbit, observability, ShedLock-coordinated leader election for the Tier 1 single-writer constraint per CSV #4.
+- **Auto-configuration.** Convert this module into a Spring Boot starter (META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports) so consumers don't need to declare beans manually. Until then `OutboxAuditEmitter` is a `@Component` consumers can pick up via `@ComponentScan`.
+- **Schema validation.** Validate envelope construction against `event-envelope.schema.json` at emit time (probably via `everit-org/json-schema` or `networknt/json-schema-validator`). Currently the caller is on the hook for valid envelopes.
+- **ULID generation utility.** A small helper that produces Crockford-base32 ULIDs would fit in `envelope.AuditEvent` as a static factory. Defer until first call sites need it.
+- **Tests.** No unit tests yet. The skeleton is intentionally untested; testing the emitter requires either a Mongo Testcontainer (currently broken — issue #7) or a deeper mock of Spring Data. Defer until #7 unblocks.
+- **Existing audit code in `gls-app-assembly` (`AuditEvent` model in `gls-document`, `AuditEventRepository`, `AuditInterceptor`)** — separate concept (HTTP-request audit log via Spring Security, not the v2 outbox pipeline). Reconciliation deferred to Phase 1 cutover work.
+
+**Next:** Phase 0.7 follow-up PRs (relay; auto-config; validation), or push on to Phase 0.8 / 0.9 / 0.11 / 0.12.
