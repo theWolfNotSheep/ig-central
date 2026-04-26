@@ -462,3 +462,40 @@ Local `./mvnw -pl gls-platform-audit compile` is clean.
 - Schema validation against `event-envelope.schema.json` at emit time is still deferred — separate follow-up.
 
 **Next:** The remaining Phase 0.7 follow-ups (outbox-to-Rabbit relay; envelope schema validation), then Phase 0.8 / 0.11 / 0.12.
+
+## 2026-04-26 — Phase 0.7 (schema validation) — envelope validation at emit time
+
+**Done:** Added runtime JSON Schema 2020-12 validation against `contracts/audit/event-envelope.schema.json` inside `OutboxAuditEmitter`. Invalid envelopes raise `IllegalArgumentException` at the call site and never reach the outbox.
+
+**Decisions logged:** None new. Implements the schema-validation follow-up flagged in PR #14's closing entry.
+
+**What's wired:**
+
+- New `EnvelopeValidator` class (in `gls-platform-audit/.../envelope/`). Loads the schema once at construction (compiled via `com.networknt:json-schema-validator` 1.5.7 — supports JSON Schema 2020-12) and validates every envelope through Jackson's tree model. Thread-safe; cheap to call repeatedly.
+- The schema is **bundled into the jar at build time** via Maven `<resources>`: `contracts/audit/event-envelope.schema.json` lives single-sourced under `contracts/`, and the build copies it into `target/classes/schemas/` so the validator works the same in tests, in the api container, and in any other consumer (no filesystem dependency on the `contracts/` tree at runtime).
+- `OutboxAuditEmitter` now calls `validator.validate(envelope)` before the existing idempotency check + outbox write.
+- `EnvelopeValidatorTest` (6 tests, all green) exercises the bundled schema directly: happy paths for both tiers; invalid ULID; DOMAIN tier missing required fields; USER actor missing id; multi-violation aggregation.
+
+**Implementation notes (worth flagging):**
+
+- Default Jackson `NON_NULL` inclusion strips fields whose Java value is null. The schema requires `previousEventHash` to be **present** (with value either null or a sha256 string) for `tier=DOMAIN` first-in-chain events — stripping the field would fail validation for legitimate envelopes. Resolved with a Jackson mixin (`AuditEventValidationMixin`) that pins `previousEventHash` to `Include.ALWAYS` while leaving every other field on the global NON_NULL setting. Mixin lives inside `EnvelopeValidator` so the records stay clean of validation-flavoured annotations.
+- Added `jackson-datatype-jsr310` as an explicit dependency so the validator's local `ObjectMapper` serialises `Instant` to RFC 3339 strings (Spring Boot apps already pull it in transitively, but the validator must work in any consumer including non-Spring-Boot test contexts).
+
+**Files changed:**
+
+- `backend/pom.xml` — added `json-schema-validator.version` property (1.5.7) and managed `com.networknt:json-schema-validator` in `dependencyManagement`.
+- `backend/gls-platform-audit/pom.xml` — added the validator + JSR-310 deps; added a `<build><resources>` block that copies `contracts/audit/event-envelope.schema.json` into the jar at `schemas/event-envelope.schema.json`.
+- `backend/gls-platform-audit/src/main/java/.../envelope/EnvelopeValidator.java` (new).
+- `backend/gls-platform-audit/src/main/java/.../emit/OutboxAuditEmitter.java` — `emit()` calls validator first; doc tweaked to note schema validation now landed.
+- `backend/gls-platform-audit/src/test/java/.../envelope/EnvelopeValidatorTest.java` (new) — 6 tests, AssertJ + JUnit 5 from `spring-boot-starter-test`.
+- `backend/gls-platform-audit/README.md` — Status section reframed to "auto-configured, schema-validating starter"; follow-ups list updated.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-platform-audit test` — all 6 tests pass. Consumer compile (`gls-app-assembly`) clean. Schema is present in the built jar at `schemas/event-envelope.schema.json`.
+
+**Open issues:**
+
+- The relay (the most operationally interesting Phase 0.7 piece) is the largest outstanding 0.7 work.
+- Some `OutboxAuditEmitter`-against-real-Mongo testing remains blocked by issue #7.
+
+**Next:** Outbox-to-Rabbit relay, or pivot to Phase 0.8 (`gls-platform-config`) / 0.12 (dev experience).
