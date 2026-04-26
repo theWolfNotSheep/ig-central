@@ -41,7 +41,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 
 | Phase | Status | Started | Completed | Notes |
 |---|---|---|---|---|
-| 0   | Not started | — | — | A1/A2/A5/A6 decisions still RECOMMENDED |
+| 0   | In progress | 2026-04-26 | — | 0.1, 0.2, 0.5 tooling, 0.10 confirmed; 0.3 cross-cutting scaffolded; 0.4 _shared/ YAMLs next |
 | 0.5 | Not started | — | — | |
 | 1   | Not started | — | — | |
 | 2   | Not started | — | — | |
@@ -60,4 +60,67 @@ Cross-cutting tracks:
 
 ## Entries
 
-(First entry will appear here when Phase 0.1 work begins.)
+## 2026-04-26 — Phase 0.1 — Decision-gate close-out (and 0.2 deployment target)
+
+**Done:** Locked the §11.A shape decisions and §11.B / §11.C convention decisions to DECIDED; locked the v2 deployment target.
+
+**Decisions logged:**
+- §11.A shape: CSV #13 (sync/async response), #14 (block-version pinning), #16 (idempotency / nodeRunId TTL), #17 (RFC 7807 error envelope), #18 (service-account JWTs).
+- §11.B conventions: CSV #19 (text payload inline ≤ 256 KB else `textRef`), #20 (`traceparent` mandated), #21 (`GET /v1/capabilities`), #22 (`costUnits` + `tokensIn/Out`).
+- §11.C non-functional: CSV #23 (429 + `Retry-After`), #24 (12 s sync timeout), #25 (path-based versioning), #26 (free-form `extractedMetadata` Map).
+- Topology: CSV #38 (new) — Docker Compose for v2; K8s deferred.
+
+**How decisions were made (flagged for review):** All thirteen RECOMMENDED rows above were accepted *as-written* — no per-decision sit-down was held. The plan calls for one (§Plan 0.1: "hour-long sit-down per decision"). Decisions are reversible by appending a superseding row per `CLAUDE.md` decision-log rules; flagged here so a future review can revisit any of them. CSV #16 was added to the batch alongside #13/#14/#17/#18 because `idempotency.yaml` is part of 0.4 substrate — strictly outside the originally-framed 19–26 scope but inside the spirit of "lock §11 before authoring `_shared/`."
+
+**Contracts touched:** None yet — substrate authoring begins in 0.3 / 0.4.
+
+**Files changed:**
+- `version-2-decision-tree.csv` — 13 rows flipped RECOMMENDED → DECIDED; 1 new row (#38).
+- `version-2-implementation-log.md` — status board updated; first entry appended.
+- `docs/operations/k8s-deferred-guidance.md` (new) — guidance for adopting K8s when the trigger conditions arrive.
+
+**Open issues:**
+- 0.5 lint tool: Spectral vs Redocly — not yet decided.
+- 0.5 generator: `openapi-generator-maven-plugin` recommended in plan; not yet confirmed.
+- 0.10 migration tool: Mongock recommended in plan; not yet confirmed.
+- The thirteen accepted-as-written decisions warrant a review pass before Phase 1 cutover work begins.
+
+**Next:** Phase 0.3 — `contracts/` skeleton, once 0.5 tooling is confirmed.
+
+## 2026-04-26 — Phase 0.5 / 0.10 — Tooling decisions (closing entry)
+
+**Done:** Closed the three tooling open issues from the previous entry: OpenAPI generator, OpenAPI linter, MongoDB migration tool. Substrate authoring is now unblocked.
+
+**Decisions logged:**
+- CSV #39 — `openapi-generator-maven-plugin` (OpenAPITools). Spring Boot server stubs (`interfaceOnly=true`, `useSpringBoot3=true`, `useJakartaEe=true`) + TypeScript fetch client for the Next.js frontend.
+- CSV #40 — Spectral as the OpenAPI 3.1.1 linter. Start from `spectral:oas recommended`; tighten via `contracts/.spectral.yaml` over time. Pre-commit + CI integration.
+- CSV #41 — Mongock 5+ as the MongoDB schema migration tool. Wired into `gls-app-assembly`; no-op smoke `@ChangeUnit` ships as part of 0.10.
+
+**Contracts touched:** None yet — substrate authoring begins in 0.3 / 0.4.
+
+**Files changed:** `version-2-decision-tree.csv` (3 new rows: #39, #40, #41); `version-2-implementation-log.md` (status board + this entry).
+
+**Open issues:** None blocking 0.3. Cumulatively across the two log entries to date, 16 decisions were accepted on the recommended option without the per-decision sit-down the plan calls for — 13 §11 shape/convention decisions in a bulk pass; 3 tooling decisions one-by-one with rationale walk-through. All reversible via superseding rows per `CLAUDE.md` decision-log rules. Flagged for a review pass before Phase 1 cutover work begins.
+
+**Next:** Phase 0.3 — `contracts/` skeleton (`_shared/`, `messaging/`, `audit/`, `blocks/`, per-service placeholders), each folder with its own `VERSION` (0.1.0) and `CHANGELOG.md`.
+
+## 2026-04-26 — Phase 0.3 — `contracts/` skeleton (cross-cutting only)
+
+**Done:** Scaffolded the cross-cutting subset of the `contracts/` directory. Per-service folders deferred until each service's phase begins (the convention is established by the cross-cutting folders; per-service noise without value is avoided).
+
+**Decisions logged:** None new — this entry implements decisions logged in the previous two entries. A pacing-decision (defer per-service placeholders) was made in-session and is recorded in **Open issues** below rather than the CSV, since it does not change the architectural contract.
+
+**Contracts touched:**
+
+- `contracts/README.md` (new) — top-level index, layout, workflow, cross-references.
+- `contracts/.spectral.yaml` (new) — initial ruleset extending `spectral:oas`. Custom rules empty until 0.4 conventions surface.
+- `contracts/_shared/` — `README.md`, `VERSION` (0.1.0), `CHANGELOG.md`.
+- `contracts/messaging/` — `README.md`, `VERSION` (0.1.0), `CHANGELOG.md`.
+- `contracts/audit/` — `README.md`, `VERSION` (0.1.0), `CHANGELOG.md`.
+- `contracts/blocks/` — `README.md`, `VERSION` (0.1.0), `CHANGELOG.md`.
+
+**Files changed:** 14 new files under `contracts/`. `version-2-implementation-log.md` (status board + this entry).
+
+**Open issues:** Per-service folders are not created yet. They will spawn in the PR that begins each service's contract work. The 0.3 acceptance gate (per `version-2-implementation-plan.md`) calls for "placeholders for known services" — this strict reading is being relaxed here per a pacing decision in this session. If literal compliance with the gate-as-written matters, revisit before declaring Phase 0 closed.
+
+**Next:** Phase 0.4 — author the eight `_shared/` YAML schemas (`error-envelope`, `security-schemes`, `common-headers`, `capabilities`, `text-payload`, `pagination`, `idempotency`, `retry`).
