@@ -23,6 +23,14 @@ spring:
   data:
     mongodb:
       auto-index-creation: true
+
+mongock:
+  enabled: ${MONGOCK_ENABLED:true}
+  migration-scan-package:
+    - co.uk.wolfnotsheep.infrastructure.migrations
+  transaction-enabled: false
+  runner-type: initializing-bean
+  track-ignored: false
   thymeleaf:
     prefix: classpath:/templates/
     suffix: .html
