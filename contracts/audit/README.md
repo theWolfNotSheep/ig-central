@@ -9,20 +9,22 @@ Schemas for the three-tier audit model (per `version-2-architecture.md` §7).
 
 ## Tiers
 
-- **Tier 1 — compliance.** Append-only, hash-chained per resource. Backend RECOMMENDED in CSV #3 (external WORM); not yet DECIDED.
+- **Tier 1 — compliance.** Append-only, hash-chained per resource. Backend DECIDED in CSV #3 (external WORM — S3 Object Lock + Athena, or managed audit service). Concrete vendor / configuration choice deferred to Phase 1.12 implementation.
 - **Tier 2 — operations / debugging.** Hot-then-cold time-series store; OpenSearch + S3 ILM proposed.
 - **Tier 3 — distributed traces.** OpenTelemetry collector; references back to Tier 1 / 2 events via `traceparent`.
 
 ## Content
 
-**Delivered (Phase 0.6 — VERSION 0.2.0):**
+**Delivered (VERSION 0.3.0):**
 
-- `asyncapi.yaml` (stub) — declares the three audit tier channel families with parameterised routing-key suffix. Forward-looking `AuditEventEnvelope` schema placeholder pending Phase 0.7.
+- `event-envelope.schema.json` — JSON Schema 2020-12 for the common audit event envelope. Cross-tier correlation, per-resource hash-chain integrity, metadata/content partition for right-to-erasure, supersession links. Aligns with `version-2-architecture.md` §7.4 and the audit decisions CSV #4 / #6 / #7 / #20.
+- `asyncapi.yaml` (stub) — declares the three audit tier channel families with parameterised routing-key suffix. Channel ↔ envelope binding lands as a follow-up in this folder.
 
-**Target (Phase 0.7):**
+**Target (remaining Phase 0.7):**
 
-- `event-envelope.schema.json` — JSON Schema 2020-12 for the common envelope across all tiers (per architecture doc §7.4). Defines `metadata` (always retained) vs `content` (subject to right-to-erasure) per CSV #6.
-- `asyncapi.yaml` — fill in the payload bindings now that envelope is settled; close out CSV #3 / #4 / #5 / #6 / #7 / #8 first.
+- `asyncapi.yaml` — bind the channels to `event-envelope.schema.json` (currently the asyncapi has its own opaque `AuditEventEnvelope` schema; cross-format `$ref` between AsyncAPI YAML and JSON Schema 2020-12 needs a small follow-up).
+- `audit_outbox` MongoDB collection schema and indexes — designed alongside the `gls-platform-audit` library since they're operationally coupled.
+- `gls-platform-audit` shared library (JVM) — envelope construction, outbox writer, relay-to-Rabbit, retry/backoff. Single dependency every service imports.
 
 ## Why a separate folder from `messaging/`
 
