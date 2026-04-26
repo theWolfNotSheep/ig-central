@@ -1,0 +1,43 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Idempotency
+  version: 0.1.0
+  description: |
+    Idempotency semantics for replay and duplicate-key handling on
+    inter-service calls.
+
+    Source decision: `version-2-decision-tree.csv` #16. Within a 24-hour
+    TTL, a repeated request with the same `Idempotency-Key`:
+
+    - returns the cached response (with original status and body) if
+      the original completed;
+    - returns 409 Conflict with `code: IN_FLIGHT` if the original is
+      still running.
+
+    The orchestrator generates a fresh `Idempotency-Key` (typically
+    `nodeRun:<run-id>`) on every explicit retry — duplicate-handling
+    catches accidental replays, not deliberate retries.
+
+paths: {}
+
+components:
+  responses:
+    InFlight:
+      description: |
+        A request with the same `Idempotency-Key` is still in flight.
+        Caller SHOULD wait and retry after the suggested delay rather
+        than launching a new request.
+      headers:
+        Retry-After:
+          $ref: 'retry.yaml#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: 'error-envelope.yaml#/components/schemas/ProblemDetails'
+          example:
+            type: https://errors.ig-central.example/idempotency/in-flight
+            title: Request in flight
+            status: 409
+            code: IN_FLIGHT
+            retryable: true
+            retryAfterMs: 1000
