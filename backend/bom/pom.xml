@@ -25,6 +25,12 @@
                 <version>${gls.version}</version>
             </dependency>
 
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.platformaudit</groupId>
+                <artifactId>gls-platform-audit</artifactId>
+                <version>${gls.version}</version>
+            </dependency>
+
             <!-- ==================== Governance ==================== -->
 
             <dependency>

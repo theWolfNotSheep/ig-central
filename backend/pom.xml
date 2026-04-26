@@ -38,6 +38,7 @@
         <module>gls-governance-hub</module>
         <module>gls-governance-hub-app</module>
         <module>contracts-smoke</module>
+        <module>gls-platform-audit</module>
     </modules>
 
     <dependencyManagement>
