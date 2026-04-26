@@ -1,7 +1,7 @@
 asyncapi: 3.0.0
 info:
   title: ig-central — Messaging
-  version: 0.2.0
+  version: 0.3.0
   contact:
     name: ig-central engineering
     url: https://github.com/theWolfNotSheep/ig-central
@@ -18,11 +18,15 @@ info:
     **Forward-looking** (declared in `version-2-implementation-plan.md`
     but not yet wired in code; will land in their respective phases):
 
-    - `gls.config.changed` — cache invalidation. Per CSV #30. Lands
-      with the Phase 0.8 `gls-platform-config` shared library.
     - `gls.audit.*` — audit tier channels. Per CSV #3 / #4 / #5.
-      Declared (in stub form) in `contracts/audit/asyncapi.yaml`;
-      filled out in Phase 0.7 alongside the audit envelope schema.
+      Declared in `contracts/audit/asyncapi.yaml`; the publisher side
+      lives in the `gls-platform-audit` library's outbox-relay (see
+      Phase 0.7).
+    - `gls.config.changed` — cache invalidation per CSV #30.
+      Channel + payload schema declared here (0.3.0); the publisher /
+      dispatcher / cache primitive ship in the `gls-platform-config`
+      shared library (Phase 0.8). `AppConfigService` and the MCP
+      governance cache migrate as separate follow-ups.
 
     **Listener-stub policy** (per `messaging/README.md`):
     - This file is *validated* in pre-commit + CI (via `@asyncapi/cli`).
@@ -131,6 +135,34 @@ channels:
       published or consumed in current code — the engine resumes via
       `pipeline.llm.completed` directly. Kept for forward
       compatibility with a future split between completion and resume.
+
+  configChanged:
+    address: 'config.changed'
+    description: |
+      Routing key on exchange `gls.config` (topic). Cache-invalidation
+      fanout: every write to a governance entity (taxonomy, PII patterns,
+      retention schedules, sensitivity definitions, metadata schemas,
+      storage tiers, traits, governance policies, pipeline blocks) fires
+      one of these so all replicas drop the relevant cache entries.
+
+      **Producer convention.** Both local writes (admin UI, API mutations)
+      and Hub-driven imports (`PackImportService`) MUST publish — the
+      contract is a single channel, no matter where the change came from.
+      Per CSV #30, this replaces the existing MCP Caffeine TTL cache for
+      governance entities.
+
+      **Consumer convention.** Every replica subscribes via a
+      *non-durable, exclusive* queue with auto-generated name (each
+      replica gets its own copy of every event). The `gls-platform-config`
+      shared library's `ConfigChangeDispatcher` does this automatically
+      and routes to registered `ConfigCache` instances by `entityType`.
+
+      **DLX:** none — invalidation events are inherently retryable and a
+      missed event is a transient correctness gap, not a fatal bug. The
+      next write fixes it.
+    messages:
+      configChangedMessage:
+        $ref: '#/components/messages/ConfigChanged'
 
   documentsDeadLetter:
     address: '#'
@@ -244,6 +276,31 @@ operations:
     messages:
       - $ref: '#/channels/llmJobCompleted/messages/llmJobCompletedMessage'
 
+  publishConfigChanged:
+    action: send
+    channel:
+      $ref: '#/channels/configChanged'
+    summary: |
+      Any service mutating a governance entity publishes a
+      `ConfigChangedEvent` so peer replicas drop their cache entries.
+      `gls-platform-config` library's `ConfigChangePublisher` is the
+      single emitter — services don't call `RabbitTemplate.convertAndSend`
+      for this directly.
+    messages:
+      - $ref: '#/channels/configChanged/messages/configChangedMessage'
+
+  consumeConfigChanged:
+    action: receive
+    channel:
+      $ref: '#/channels/configChanged'
+    summary: |
+      Every replica binds a non-durable exclusive queue to
+      `gls.config` so it receives every invalidation. The
+      `gls-platform-config` library's `ConfigChangeDispatcher` consumes
+      and routes to registered `ConfigCache` instances by `entityType`.
+    messages:
+      - $ref: '#/channels/configChanged/messages/configChangedMessage'
+
 components:
   messages:
     DocumentIngested:
@@ -280,6 +337,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/LlmJobCompletedEvent'
+
+    ConfigChanged:
+      name: ConfigChangedEvent
+      title: Cache-invalidation event for a governance entity write.
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ConfigChangedEvent'
 
   schemas:
     DocumentIngestedEvent:
@@ -526,3 +590,61 @@ components:
         completedAt:
           type: string
           format: date-time
+
+    ConfigChangedEvent:
+      type: object
+      description: |
+        Published when a governance entity (taxonomy, PII patterns,
+        retention schedule, sensitivity definition, metadata schema,
+        storage tier, trait, governance policy, pipeline block, etc.)
+        is mutated. Every replica with the matching `entityType`
+        cache invalidates the listed entries. Empty `entityIds` is the
+        bulk signal — invalidate the whole cache for that type.
+
+        Java record:
+        `co.uk.wolfnotsheep.platformconfig.event.ConfigChangedEvent`.
+      required:
+        - entityType
+        - changeType
+        - timestamp
+        - actor
+      additionalProperties: false
+      properties:
+        entityType:
+          type: string
+          description: |
+            Uppercase snake-case identifier for the entity family
+            (e.g. `TAXONOMY`, `POLICY`, `PII_PATTERN_SET`,
+            `RETENTION_SCHEDULE`, `METADATA_SCHEMA`,
+            `STORAGE_TIER`, `TRAIT`, `BLOCK`).
+          minLength: 1
+          maxLength: 64
+        entityIds:
+          type: array
+          description: |
+            Specific entity IDs that changed. Empty array (or omitted)
+            means "everything of this type" — bulk import, schema
+            migration, or wildcard refresh.
+          items:
+            type: string
+          default: []
+        changeType:
+          type: string
+          enum: [CREATED, UPDATED, DELETED]
+          description: |
+            Cache treats all three identically (invalidate the entry).
+            The distinction matters for downstream listeners that aren't
+            caches — e.g. metric counters or audit pipelines.
+        timestamp:
+          type: string
+          format: date-time
+          description: RFC 3339 producer-side timestamp.
+        actor:
+          type: string
+          description: |
+            Service identifier that fired the event (e.g.
+            `gls-app-assembly`, `gls-governance-hub`).
+        traceparent:
+          type: string
+          description: W3C trace context per CSV #20; optional.
+          pattern: '^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'

@@ -40,6 +40,7 @@
         <module>gls-governance-hub-app</module>
         <module>contracts-smoke</module>
         <module>gls-platform-audit</module>
+        <module>gls-platform-config</module>
     </modules>
 
     <dependencyManagement>

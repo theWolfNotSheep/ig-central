@@ -582,3 +582,59 @@ Local `./mvnw -pl gls-platform-audit compile` is clean.
 - **Tests against real RabbitMQ + Mongo Testcontainer** — blocked by issue #7.
 
 **Next:** Phase 0.8 (`gls-platform-config` cache + `gls.config.changed` channel), Phase 0.12 (dev experience), wiring the 0.11 load driver, or the relay hardening follow-up (ShedLock + observability).
+
+## 2026-04-26 — Phase 0.8 — `gls-platform-config` skeleton + `gls.config.changed` channel
+
+**Done:** Landed the AsyncAPI declaration and the `gls-platform-config` shared library skeleton implementing the change-driven config-cache pattern from CSV #30. Replaces the previous Caffeine TTL conventions across services: per-replica in-memory cache, change-driven invalidation via the `gls.config.changed` Rabbit channel.
+
+**`AppConfigService` migration and the MCP server's Caffeine cache replacement are deferred to follow-up PRs** (mirrors how Phase 0.7 unfolded — skeleton first, migrations second).
+
+**Decisions logged:** None new. Implements CSV #30 (DECIDED).
+
+**What's wired:**
+
+- `contracts/messaging/asyncapi.yaml` (0.2.0 → 0.3.0) — added `configChanged` channel on routing key `config.changed` (exchange `gls.config`, topic). Producer/consumer conventions documented (Hub imports MUST publish too; consumer uses non-durable exclusive auto-delete queue per replica; no DLX). Added `publishConfigChanged` / `consumeConfigChanged` operations. Added `ConfigChanged` message + `ConfigChangedEvent` schema (required: `entityType`, `changeType`, `timestamp`, `actor`; optional: `entityIds[]`, `traceparent`; `additionalProperties: false`).
+- `gls-platform-config` library — new Maven module under `backend/`. Java side mirrors the AsyncAPI:
+  - `ConfigCache<V>` — per-replica in-memory cache for one entity type. Backed by `ConcurrentHashMap.computeIfAbsent`. Null loader returns are not cached so transient misses retry on next call.
+  - `ConfigCacheRegistry` — entity-type → cache routing. Multiple caches per type permitted; bulk events trigger `invalidateAll()`, targeted events invalidate per-id.
+  - `ConfigChangedEvent` (record) — mirrors the wire schema; defensive copies for `entityIds`; convenience factories `single` / `bulk`. `@JsonIgnore` on `isBulk()` so the bean-property name doesn't sneak into the JSON.
+  - `ConfigChangePublisher` — single emitter into `gls.config` exchange. Failures logged, never re-raised — a missed invalidation is transient (next write self-heals). Convenience methods for single / bulk / many.
+  - `ConfigChangeListener` (functional interface) — non-cache reactions (metrics, audit emits, search-index updates).
+  - `ConfigChangeDispatcher` — `@RabbitListener` against an anonymous queue (`autoDelete=true, durable=false, exclusive=true`) bound to `gls.config`. Dispatches caches first, then listeners; per-listener failures are isolated.
+  - `PlatformConfigAutoConfiguration` — registers the registry + publisher + dispatcher + topic exchange. Broker-touching beans `@ConditionalOnClass(RabbitTemplate.class)` so the cache layer works without a broker (offline / tests).
+
+**Tests (19 total, all green):**
+
+- `ConfigCacheTest` (5) — miss-then-hit caches result, single invalidate, bulk invalidate, null loader not cached, blank entity type rejected.
+- `ConfigCacheRegistryTest` (4) — targeted event invalidates only listed ids, bulk clears, unregistered-type silently ignored, multiple caches per type all invalidate.
+- `ConfigChangedEventTest` (6) — required-field rejections, null entityIds normalises to empty + isBulk=true, single factory shape, Jackson roundtrip with JSR-310.
+- `ConfigChangeDispatcherTest` (4) — caches invalidate before listeners run, listener failure does not abort siblings, `onMessage` decodes JSON + dispatches, malformed payload dropped silently.
+
+**Files changed:**
+
+- `contracts/messaging/asyncapi.yaml` — channel + operations + message + schema.
+- `contracts/messaging/VERSION` — 0.2.0 → 0.3.0.
+- `contracts/messaging/CHANGELOG.md` — 0.3.0 entry.
+- `backend/gls-platform-config/pom.xml` (new).
+- `backend/gls-platform-config/README.md` (new).
+- `backend/gls-platform-config/src/main/java/.../event/{ChangeType,ConfigChangedEvent}.java` (new).
+- `backend/gls-platform-config/src/main/java/.../cache/{ConfigCache,ConfigCacheRegistry}.java` (new).
+- `backend/gls-platform-config/src/main/java/.../listen/{ConfigChangeListener,ConfigChangeDispatcher}.java` (new).
+- `backend/gls-platform-config/src/main/java/.../publish/ConfigChangePublisher.java` (new).
+- `backend/gls-platform-config/src/main/java/.../autoconfigure/PlatformConfigAutoConfiguration.java` (new).
+- `backend/gls-platform-config/src/main/resources/META-INF/spring/...AutoConfiguration.imports` (new).
+- `backend/gls-platform-config/src/test/java/...` (4 test classes, 19 tests).
+- `backend/pom.xml` — added `gls-platform-config` to `<modules>`.
+- `backend/bom/pom.xml` — added `gls-platform-config` dependency entry.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-platform-config test` — 19/19 pass. Compile clean against the rest of the reactor.
+
+**Open issues (deferred to follow-up PRs):**
+
+- **`AppConfigService` migration.** Today it uses a hand-rolled `ConcurrentHashMap` with no broker-driven invalidation. Cutover to `ConfigCache` + emit on write.
+- **MCP server's Caffeine cache replacement** for governance entities. Per CSV #30, this is the original target of the change.
+- **Hub-side publisher wiring** — the asyncapi declares Hub imports MUST publish. The Hub-side code change lives outside this monorepo's main path; track in cross-cutting Track A.
+- **Real-broker integration tests** — blocked by issue #7 (Testcontainers MongoDB cleanup, but RabbitMQ Testcontainer should also be exercised once we have a working test harness).
+
+**Next:** AppConfigService migration (closes the easiest 0.8 follow-up), MCP cache migration, or pivot to Phase 0.12 (dev experience), the 0.11 load driver, or relay hardening.
