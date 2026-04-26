@@ -235,3 +235,27 @@ Cross-cutting tracks:
 - Existing ad-hoc startup runners (e.g. `SlugBackfillRunner`) should be migrated to Mongock change units in a focused follow-up PR. Not in scope here.
 
 **Next:** Phase 0.7 — audit infrastructure (envelope schema + outbox + `gls-platform-audit` shared library). Phase 0.8 — `gls-platform-config` cache library + `gls.config.changed` channel. Phase 0.11 — performance baseline. Phase 0.12 — local dev experience updates.
+
+## 2026-04-26 — Audit decisions close-out (closing entry)
+
+**Done:** Locked the six audit-domain decisions from §7.8 / §10 to DECIDED so Phase 0.7 (audit infrastructure: envelope schema, outbox, `gls-platform-audit` library) is unblocked.
+
+**Decisions logged (all flipped RECOMMENDED → DECIDED, recommendations accepted as written):**
+
+- CSV #3 — Tier 1 backend: external WORM (S3 Object Lock + Athena, or managed audit service). Not in-Mongo with role-based deny.
+- CSV #4 — Per-resource audit hash chain (per-document, per-block, per-user) — not a single global chain.
+- CSV #5 — Failed classifications recorded in **both** Tier 1 (`CLASSIFICATION_FAILED` final outcome) and Tier 2 (`CLASSIFICATION_ATTEMPT_FAILED` per attempt), with different event types.
+- CSV #6 — Right-to-erasure: envelope schema marks each details field as `metadata` (always retained) or `content` (subject to erasure); Tier 1 stores hashes of content, never raw text.
+- CSV #7 — Reclassification supersession: every Tier 1 reclassification event carries `supersedes` / `supersededBy` links; queries reconstruct as-of-date views by walking the chain.
+- CSV #8 — MCP tool calls auditable at Tier 2 — `MCP_TOOL_CALLED` event with `tool`, `paramsHash`, `responseHash`, `latencyMs`.
+
+**How decisions were made (flagged for review):** Same pattern as the §11 batch in the inaugural Phase 0 PR — accepted as-written without per-decision sit-down. All six already had RECOMMENDED rationale in the CSV; treating them as DECIDED unblocks 0.7's envelope schema authoring. Reversible via superseding rows per `CLAUDE.md` decision-log rules. Cumulative count of accepted-as-written decisions across the project to date: 22 (16 §11 / tooling earlier + 6 audit here).
+
+**Files changed:** `version-2-decision-tree.csv` (six rows flipped); `version-2-implementation-log.md` (this entry).
+
+**Open issues:**
+
+- Tier 1 backend choice between **S3 Object Lock + Athena** and a **managed audit service** (CSV #3 names both as the recommendation). Final concrete vendor / configuration choice deferred to Phase 0.7 / 1.12 when implementation begins.
+- Tier 2 backend (OpenSearch + S3 ILM) is *proposed* in `version-2-architecture.md` §7 but not yet a CSV row. Lift to a DECIDED CSV row in Phase 0.7 once the implementation specifics are known.
+
+**Next:** Phase 0.7 — author `contracts/audit/event-envelope.schema.json` (informed by CSV #4 / #6 / #7 / #8); design the `audit_outbox` MongoDB collection; build the `gls-platform-audit` shared library skeleton. Independently: Phase 0.8 (`gls-platform-config` + `gls.config.changed`), Phase 0.9 (Maven BOM decoupling — small), Phase 0.11 (perf baseline), Phase 0.12 (dev experience).
