@@ -55,6 +55,15 @@ Each folder contains:
 
 Service-specific folders (e.g. `extraction-tika/`, `classifier-router/`) are added in the PR that begins that service's contract work — not preemptively. The convention is established here; following it for a new service is a copy of the cross-cutting folder layout.
 
+## Smoke
+
+`contracts/hello-world/` is a non-service smoke spec that exercises Spectral + `openapi-generator-maven-plugin` end-to-end via the `backend/contracts-smoke` Maven module. Per-service authors should treat its `$ref` patterns as the working template.
+
+## Validation
+
+- **Pre-commit:** Spectral lint runs on any YAML edited under `contracts/`. Install hooks once with `pre-commit install` (config in `.pre-commit-config.yaml`).
+- **CI:** `contracts-validate` job in `.github/workflows/ci.yml` runs Spectral lint plus the Maven smoke (generator + compile).
+
 ## Cross-references
 
 - `CLAUDE.md` — API Contracts section (the rules).
