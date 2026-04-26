@@ -13,13 +13,17 @@ The role OpenAPI plays for synchronous interfaces, AsyncAPI plays for async ones
 
 Per `CLAUDE.md`: AsyncAPI 3.0 only. No 2.x.
 
-## Content (target — populated in Phase 0.6)
+## Content (delivered in Phase 0.6 — VERSION 0.2.0)
 
-- `asyncapi.yaml` — declares the existing topology as it stands today:
-  - `gls.documents.{ingested, classified}` — pipeline-stage events.
-  - `gls.pipeline.llm.*` — orchestrator → worker dispatch.
-  - `gls.audit.*` — Tier 2 / 3 audit fan-out (Tier 1 lives in `audit/`).
-  - `gls.config.changed` — cache invalidation per CSV #30.
+- `asyncapi.yaml` — declares the production topology:
+  - `gls.documents` topic exchange — `document.ingested`, `document.processed`, `document.classified`, `document.classification.failed`.
+  - `gls.pipeline` topic exchange — `pipeline.llm.requested`, `pipeline.llm.completed`, `pipeline.resume`, `pipeline.dlq`.
+  - DLX: `gls.documents.dlx` (fanout).
+
+Forward-looking — declared in this file's description but not yet wired in code:
+
+- `gls.config.changed` — cache invalidation per CSV #30. Lands with the Phase 0.8 `gls-platform-config` shared library.
+- `gls.audit.*` — audit tier channels per CSV #3 / #4 / #5. Stub exists in `contracts/audit/asyncapi.yaml`; full payload schema and tier wiring in Phase 0.7.
 
 ## Versioning
 
