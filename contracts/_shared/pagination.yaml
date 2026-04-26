@@ -1,0 +1,69 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Pagination
+  version: 0.1.0
+  description: |
+    Cursor-based pagination convention for any list endpoint that may
+    return more rows than fit in one response. Cursor is opaque — the
+    client treats it as a black-box token; the server defines the shape.
+
+    Convention: cursor over offset. Offsets break under concurrent
+    inserts. Use offset-based pagination only for pre-aggregated read
+    models where stability isn't a concern, and log that decision in
+    the affected service's spec.
+
+paths: {}
+
+components:
+  parameters:
+    PageCursor:
+      name: cursor
+      in: query
+      required: false
+      description: |
+        Opaque continuation token from the previous page's
+        `nextCursor`. Omit for the first page. Cursors are valid for at
+        least 30 minutes; longer-lived cursors are server-defined.
+      schema:
+        type: string
+
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      description: |
+        Maximum number of items to return. Server enforces a maximum;
+        if the client requests more, the server returns its maximum and
+        includes `nextCursor`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 50
+
+  schemas:
+    Page:
+      type: object
+      description: |
+        Paginated response envelope. Specific list endpoints embed this
+        and add a typed `items[]` field via composition.
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          description: Page contents — typed by the embedding spec.
+          items: {}
+        nextCursor:
+          type: string
+          description: |
+            Opaque token to pass as `cursor` on the next request.
+            Absent when the current page is the last one.
+        totalKnown:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Optional total-count hint, populated only when the server
+            can compute it cheaply. Clients MUST NOT rely on it being
+            present.

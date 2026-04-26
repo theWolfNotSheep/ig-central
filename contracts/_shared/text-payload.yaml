@@ -1,0 +1,78 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Text Payload
+  version: 0.1.0
+  description: |
+    Shared schema for passing extracted document text between services
+    without bouncing 200 MB bodies across the fleet.
+
+    Source decision: `version-2-decision-tree.csv` #19. Inline if the
+    serialised text length is ≤ 256 KB; otherwise `textRef` to a
+    pre-signed MinIO/S3 URL that the worker fetches lazily.
+
+    Exactly one of `text` (with `encoding`) and `textRef` MUST be
+    present. Producers enforce the boundary; consumers MUST handle
+    both shapes.
+
+paths: {}
+
+components:
+  schemas:
+    TextPayload:
+      type: object
+      description: |
+        Either inline text or a reference to it. Producers SHOULD
+        prefer `textRef` when serialised text would exceed 256 KB.
+      oneOf:
+        - $ref: '#/components/schemas/TextInline'
+        - $ref: '#/components/schemas/TextReference'
+
+    TextInline:
+      type: object
+      required:
+        - text
+        - encoding
+      properties:
+        text:
+          type: string
+          description: |
+            UTF-8 plain text content, ≤ 256 KB after encoding.
+            Producers MUST switch to `TextReference` if the content
+            would exceed this ceiling.
+          maxLength: 262144
+        encoding:
+          type: string
+          const: utf-8
+
+    TextReference:
+      type: object
+      required:
+        - textRef
+      properties:
+        textRef:
+          type: string
+          format: uri
+          description: |
+            Pre-signed, short-lived URL (typically MinIO / S3) from
+            which the consumer fetches the text. URL validity MUST be
+            at least the HTTP timeout ceiling (12 s, per CSV #24) plus
+            a margin to accommodate retry budget.
+          examples:
+            - https://s3.ig-central.example/extracted/abc123?X-Amz-Expires=60&X-Amz-Signature=
+        contentLength:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Byte length of the referenced content.
+        contentType:
+          type: string
+          description: MIME type of the referenced content.
+          examples:
+            - text/plain; charset=utf-8
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: |
+            Hex-encoded SHA-256 of the content. Consumers SHOULD verify
+            after fetch — corrupted intermediate storage is a real
+            failure mode and worth the cost of a checksum.

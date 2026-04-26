@@ -1,0 +1,45 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Retry semantics
+  version: 0.1.0
+  description: |
+    Backpressure and retry-after semantics shared across every service.
+
+    Source decision: `version-2-decision-tree.csv` #23. Workers under
+    load reply 429 Too Many Requests with a `Retry-After` header (in
+    seconds, per RFC 9110). The orchestrator re-queues on Rabbit with
+    the requested delay rather than spinning over HTTP.
+
+paths: {}
+
+components:
+  headers:
+    RetryAfter:
+      description: |
+        Seconds the caller SHOULD wait before retrying. Honour this
+        over a fixed backoff. The orchestrator translates this header
+        into a Rabbit re-queue delay; ad-hoc HTTP callers translate it
+        into their backoff schedule.
+      schema:
+        type: integer
+        minimum: 0
+      example: 5
+
+  responses:
+    TooManyRequests:
+      description: |
+        The worker is shedding load. Retry after the indicated delay.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: 'error-envelope.yaml#/components/schemas/ProblemDetails'
+          example:
+            type: https://errors.ig-central.example/backpressure/too-many-requests
+            title: Too many requests
+            status: 429
+            code: BACKPRESSURE
+            retryable: true
+            retryAfterMs: 5000

@@ -1,0 +1,94 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Capabilities
+  version: 0.1.0
+  description: |
+    Shared response shape for `GET /v1/capabilities`. Every container in
+    the v2 fleet exposes this endpoint.
+
+    Source decision: `version-2-decision-tree.csv` #21.
+
+    Used by:
+    - the orchestrator's pre-flight check (skip a tier the worker
+      reports as unhealthy);
+    - the admin UI's live topology view;
+    - CI smoke tests (presence + version assertions).
+
+paths: {}
+
+components:
+  schemas:
+    Capabilities:
+      type: object
+      required:
+        - service
+        - version
+        - tiers
+        - models
+      properties:
+        service:
+          type: string
+          description: Service identifier (matches the `gls-*` deployable name).
+          examples:
+            - gls-extraction-tika
+            - gls-classifier-router
+        version:
+          type: string
+          description: Semantic version of the running container image.
+          examples:
+            - 0.4.2
+        tiers:
+          type: array
+          description: |
+            Tiers this container is currently healthy for. Empty array
+            means the container is not accepting work right now (warming
+            up, in-flight model reload, etc.). The orchestrator skips
+            empty-tier containers in pre-flight.
+          items:
+            type: string
+          examples:
+            - ["bert"]
+            - ["slm", "llm"]
+            - ["extract.tika"]
+        models:
+          type: array
+          description: |
+            Loaded model versions, where applicable. Inference and
+            classification containers populate this; pure extraction
+            containers leave it empty.
+          items:
+            $ref: '#/components/schemas/CapabilityModel'
+        flags:
+          type: object
+          description: |
+            Free-form key-value flags reflecting runtime state. Use for
+            things callers need to know but that don't justify their
+            own field — feature toggles, vendor-mode (`anthropic` vs
+            `ollama`), GPU presence, etc.
+          additionalProperties:
+            type: string
+
+    CapabilityModel:
+      type: object
+      required:
+        - name
+        - version
+      properties:
+        name:
+          type: string
+          examples:
+            - modernbert-base-uk-hr
+            - claude-haiku
+        version:
+          type: string
+          description: |
+            Model version. For owned models (BERT) this is the ONNX
+            artefact key; for vendor models (Anthropic, Ollama) this is
+            the vendor's model identifier + revision where available.
+          examples:
+            - 2026-04-12-a3f
+            - claude-haiku-4-5-20251001
+        loadedAt:
+          type: string
+          format: date-time
+          description: When this model was loaded into memory.

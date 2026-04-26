@@ -1,0 +1,79 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Common Headers
+  version: 0.1.0
+  description: |
+    Shared header parameters declared once and referenced from every
+    operation that requires them.
+
+    Source decisions:
+    - `traceparent` — CSV #20 (W3C trace-context propagation).
+    - `Idempotency-Key` — CSV #16 (idempotent retries with 24-hour TTL).
+    - `Prefer: respond-async` — CSV #13 (sync vs async response model).
+
+paths: {}
+
+components:
+  parameters:
+    Traceparent:
+      name: traceparent
+      in: header
+      required: true
+      description: |
+        W3C trace context, propagated on every inter-service call.
+        Format: `<version>-<trace-id>-<parent-id>-<flags>` per the W3C
+        Trace Context recommendation. Workers MUST forward this
+        unchanged on outbound calls and MUST include it on every audit
+        event for cross-tier correlation.
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$'
+      example: 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Caller-supplied idempotency token. Within a 24-hour TTL,
+        repeated requests with the same key return the cached result
+        (200) if completed, or 409 IN_FLIGHT (see `idempotency.yaml`)
+        if still running. The orchestrator typically uses
+        `nodeRun:<run-id>` for this value.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+      example: nodeRun:01HX2KQ8
+
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: |
+        Optional client-supplied request correlation id. If absent, the
+        server generates one. Echoed in the response and logged with
+        every request. Distinct from the trace id — request ids are
+        per-call; trace ids span a workflow.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+
+    Prefer:
+      name: Prefer
+      in: header
+      required: false
+      description: |
+        RFC 7240 preference indicator. The only honoured token is
+        `respond-async`, which signals that the caller is willing to
+        accept a 202 Accepted response with a callback channel. Workers
+        that cannot satisfy `respond-async` SHOULD ignore it and respond
+        synchronously.
+      schema:
+        type: string
+      examples:
+        respondAsync:
+          value: respond-async
+        empty:
+          value: ""
