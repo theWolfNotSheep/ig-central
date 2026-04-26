@@ -353,6 +353,37 @@ Register both in Google Cloud Console → Credentials → Authorized redirect UR
 
 Same `storageProvider` abstraction — implement `SharePointDriveService` behind the same interface.
 
+## Audit Relay Pattern
+
+**Audit events are persisted to `audit_outbox` in the same transaction as the state change, then relayed to RabbitMQ by a separate process.** This guarantees no audit drops on crashes and no duplicates downstream (per architecture §7.7 / CSV #4 / #6).
+
+### Why an outbox
+
+- **Crash before publish** → replay: the outbox row is still in Mongo. The relay picks it up next cycle.
+- **Crash after publish but before status update** → at-least-once delivery: the downstream idempotent consumer (`gls-audit-collector`) deduplicates by `eventId`.
+- **Without the outbox** → state change committed but audit not published. Compliance hole.
+
+### How it runs
+
+- Each service writes to `audit_outbox` via the `gls-platform-audit` shared library. The write is part of the **same Mongo transaction** as the originating state change.
+- A relay component (also in `gls-platform-audit`) polls or subscribes to change streams, publishes to `audit.tier1.{eventType}` (DOMAIN) or `audit.tier2.{eventType}` (SYSTEM) per the envelope's `tier`, then marks the row `PUBLISHED`.
+- Failed publishes increment `attempts` and set `nextRetryAt` (exponential backoff). After a cap, the row is marked `FAILED` and surfaced via metrics.
+
+### Rules
+
+- **Never bypass the outbox.** No direct AMQP publishes from service code for audit traffic. The library is the only emitter.
+- **Never edit the outbox post-publish.** Published rows stay for diagnostics until cleaned by a TTL job (Phase 2 work).
+- **The envelope schema is `contracts/audit/event-envelope.schema.json`.** The library validates emitted events against it; malformed envelopes are rejected at the call site, not silently dropped.
+- **Idempotency:** `eventId` is unique-indexed. Idempotent re-emission of the same event is a no-op upsert.
+
+### Indexes (managed by Mongock)
+
+- `idx_status_nextRetry` — relay's primary query.
+- `idx_eventId_unique` — uniqueness guard for idempotent re-emission.
+- `idx_createdAt` — retention / cleanup.
+
+See `V002_AuditOutboxIndexes` in `gls-app-assembly`. The `AuditOutboxRecord` POJO that maps the document shape lives in the upcoming `gls-platform-audit` shared library.
+
 ## Schema Migrations
 
 **MongoDB schema changes are versioned, tracked, and applied automatically via Mongock at app startup** (per CSV #41 / Phase 0.10).

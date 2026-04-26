@@ -292,3 +292,29 @@ Cross-cutting tracks:
 - Tier 2 backend (OpenSearch + S3 ILM) — still proposed in architecture doc, not yet a CSV row. Lift in a future close-out PR.
 
 **Next:** Continue 0.7 — design the `audit_outbox` collection (likely a Mongock `@ChangeUnit` for indexes); start the `gls-platform-audit` library skeleton (envelope construction helpers + outbox writer). Independently: 0.8 / 0.9 / 0.11 / 0.12.
+
+## 2026-04-26 — Phase 0.7 (audit_outbox indexes) — Mongock change unit + relay pattern docs
+
+**Done:** Designed the `audit_outbox` MongoDB collection's indexes via a Mongock `@ChangeUnit` and documented the audit relay pattern in `CLAUDE.md`. The collection itself is created lazily on first write (Mongo auto-creates collections when an index is added).
+
+**Decisions logged:** None new. Implements architecture §7.7 (persist-before-publish outbox pattern) and the now-DECIDED CSV #4 (chain) / #6 (metadata-content partition).
+
+**Indexes:**
+
+- `idx_status_nextRetry` on `(status, nextRetryAt)` — the relay's primary query (find PENDING + retry-eligible FAILED rows in time order).
+- `idx_eventId_unique` on `eventId`, unique — guard for idempotent re-emission so retries don't duplicate.
+- `idx_createdAt` on `createdAt` — supports retention/cleanup queries.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/migrations/V002_AuditOutboxIndexes.java` (new) — Mongock change unit. Local `mvn compile` passes.
+- `CLAUDE.md` — new "Audit Relay Pattern" section above "Schema Migrations". Why-the-outbox, how-it-runs, rules (never bypass, never edit post-publish, eventId idempotency).
+- `version-2-implementation-log.md` — status board + this entry.
+
+**Open issues:**
+
+- The `AuditOutboxRecord` POJO (Java mapping for outbox documents) lives in the upcoming `gls-platform-audit` library, not in this PR. Schema validation against `event-envelope.schema.json` lives there too.
+- Runtime smoke (Mongock + Spring Boot 4 startup actually executes the `@ChangeUnit`) still unverified — same `docker compose up` exercise gap as Phase 0.10.
+- TTL / retention job for `PUBLISHED` rows is Phase 2 work.
+
+**Next:** Last piece of 0.7 — `gls-platform-audit` shared library skeleton (envelope construction helpers, `AuditOutboxRecord`, outbox writer, relay-to-Rabbit). New Maven module under `backend/`. Independently: 0.8 / 0.9 / 0.11 / 0.12.
