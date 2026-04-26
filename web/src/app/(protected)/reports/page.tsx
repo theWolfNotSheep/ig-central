@@ -249,13 +249,12 @@ function ModelPerformanceTab({ data, hitRate }: {
     data: { versions: ModelVersion[] } | null;
     hitRate: { daily: DailyHitRate[] } | null;
 }) {
+    const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
+
     if (!data) return <EmptyState message="No model performance data available" />;
 
     const versions = data.versions;
     const promoted = versions.find(v => v.promoted);
-
-    // Find selected version for per-class detail
-    const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
     const selectedJob = versions.find(v => v.version === selectedVersion);
 
     return (
