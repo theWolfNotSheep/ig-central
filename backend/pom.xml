@@ -23,6 +23,7 @@
         <jakarta.validation.version>3.0.2</jakarta.validation.version>
         <openapi-generator-maven-plugin.version>7.10.0</openapi-generator-maven-plugin.version>
         <mongock.version>5.4.4</mongock.version>
+        <json-schema-validator.version>1.5.7</json-schema-validator.version>
     </properties>
 
     <modules>
@@ -98,6 +99,14 @@
                 <version>${mongock.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+
+            <!-- ==================== JSON Schema 2020-12 validator ==================== -->
+
+            <dependency>
+                <groupId>com.networknt</groupId>
+                <artifactId>json-schema-validator</artifactId>
+                <version>${json-schema-validator.version}</version>
             </dependency>
 
         </dependencies>

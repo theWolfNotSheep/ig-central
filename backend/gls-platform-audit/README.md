@@ -9,19 +9,19 @@ Shared library that every JVM service imports to emit audit events. Implements t
 
 ## Status
 
-**Phase 0.7 — auto-configured starter.** This module currently provides:
+**Phase 0.7 — auto-configured, schema-validating starter.** This module currently provides:
 
 - The `AuditEvent` envelope record (mirrors `contracts/audit/event-envelope.schema.json`) and its supporting enums / nested records (`Tier`, `Outcome`, `ActorType`, `ResourceType`, `Actor`, `Resource`, `AuditDetails`).
 - `AuditOutboxRecord` (the Mongo document mapping for `audit_outbox`).
 - `AuditOutboxRepository` (Spring Data Mongo).
 - `AuditEmitter` interface and `OutboxAuditEmitter` default implementation.
+- `EnvelopeValidator` — JSON Schema 2020-12 validation against the bundled `event-envelope.schema.json`. Every emit goes through it; invalid envelopes raise `IllegalArgumentException` at the call site and never reach the outbox.
 - `PlatformAuditAutoConfiguration` — registers the repository (via `@EnableMongoRepositories`) and the default emitter as beans whenever Spring Data Mongo is on the classpath. Activated through `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`. Consumers depending on this module pick up `AuditEmitter` automatically; override by declaring their own `AuditEmitter` bean.
 
 **Not yet here (follow-ups):**
 
 - The **outbox-to-Rabbit relay** — a scheduled task that polls `audit_outbox`, publishes to `audit.tier1.{eventType}` / `audit.tier2.{eventType}`, marks rows `PUBLISHED`. The interesting operational logic (retry/backoff, circuit-breaker on Rabbit, observability, leader election for the Tier 1 single-writer constraint per CSV #4) lives in this piece.
-- **Schema validation** — runtime validation of envelope construction against `event-envelope.schema.json`. Currently the caller is on the hook for constructing valid envelopes. Validation will move into the emitter in a focused follow-up.
-- **Tests** — unit tests for envelope construction, idempotency, and the relay (when added).
+- **Relay-side tests and tests for the emitter against a real Mongo Testcontainer** — currently blocked by issue #7 (Testcontainers MongoDB cleanup). `EnvelopeValidator` has direct unit coverage that exercises the bundled schema.
 
 ## Usage
 
