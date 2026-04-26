@@ -1,0 +1,131 @@
+asyncapi: 3.0.0
+info:
+  title: ig-central — Audit channels
+  version: 0.2.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    AsyncAPI 3.0 specification for the audit-event channels per
+    `version-2-architecture.md` §7.
+
+    **Status: stub.** This file declares the *shape* of the three audit
+    tier channels. The common envelope schema (`event-envelope.schema.json`)
+    and concrete payload bindings land in **Phase 0.7** alongside the
+    `gls-platform-audit` shared library and the `audit_outbox` MongoDB
+    collection.
+
+    The Tier 1 backend remains RECOMMENDED in CSV #3 (external WORM)
+    pending a final DECIDED. Per-resource hash chains (CSV #4),
+    failed-classification handling (CSV #5), right-to-erasure handling
+    (CSV #6), reclassification supersession (CSV #7), and MCP tool-call
+    auditing (CSV #8) are all RECOMMENDED — they shape the envelope
+    schema, so they must close before the channels here can be filled
+    in fully.
+
+servers:
+  rabbitmq:
+    host: 'rabbitmq:5672'
+    protocol: amqp
+    protocolVersion: '0.9.1'
+    description: |
+      Same broker as `messaging/asyncapi.yaml`. Audit channels live on
+      a separate exchange so retention, monitoring, and consumer
+      identity are clean from business-event traffic.
+
+channels:
+  auditTier1:
+    address: 'audit.tier1.{eventType}'
+    description: |
+      **Tier 1 — compliance.** Append-only, hash-chained per resource.
+      Routing key suffix `{eventType}` identifies the event family
+      (e.g. `DOCUMENT_INGESTED`, `DOCUMENT_CLASSIFIED`,
+      `GOVERNANCE_APPLIED`, `CLASSIFICATION_FAILED`,
+      `RECLASSIFICATION`).
+
+      **Consumer:** `gls-audit-collector` (Tier 1 leader, single
+      writer per CSV #4). **Backend:** RECOMMENDED external WORM
+      (CSV #3) — final destination DECIDED in Phase 0.7 / 1.12.
+
+      Payload uses the common audit envelope (lands in 0.7).
+    parameters:
+      eventType:
+        description: Event family identifier (uppercase snake-case).
+
+  auditTier2:
+    address: 'audit.tier2.{eventType}'
+    description: |
+      **Tier 2 — operations / debugging.** Hot-then-cold time-series
+      store (proposed: OpenSearch + S3 ILM). Routing key suffix
+      `{eventType}` identifies the event family
+      (e.g. `EXTRACTION_ATTEMPT`, `CLASSIFICATION_ATTEMPT_FAILED`,
+      `MCP_TOOL_CALLED` per CSV #8, `BLOCK_CACHE_REFRESH`).
+
+      **Consumer:** `gls-audit-collector` (Tier 2 horizontal scale).
+
+      Payload uses the common audit envelope (lands in 0.7).
+    parameters:
+      eventType:
+        description: Event family identifier (uppercase snake-case).
+
+  auditTier3:
+    address: 'audit.tier3.{eventType}'
+    description: |
+      **Tier 3 — distributed traces.** Reference-by-`traceparent` to
+      OpenTelemetry collector spans rather than carrying full trace
+      payloads on AMQP. Used to *publish events into the trace
+      pipeline* — typically thin envelopes pointing at the relevant
+      Tier 1 / Tier 2 record.
+
+      Payload shape settles in Phase 0.7 alongside the OpenTelemetry
+      collector wiring.
+    parameters:
+      eventType:
+        description: Event family identifier.
+
+operations:
+  publishAuditTier1:
+    action: send
+    channel:
+      $ref: '#/channels/auditTier1'
+    summary: |
+      Emit a Tier 1 (compliance) event. Producers in every service
+      write to `audit_outbox` first; the `gls-platform-audit` library
+      relays to this channel. Ordering is per-resource, not global.
+
+  consumeAuditTier1:
+    action: receive
+    channel:
+      $ref: '#/channels/auditTier1'
+    summary: |
+      `gls-audit-collector` (Tier 1 role, ShedLock-coordinated leader)
+      consumes, validates the per-resource hash chain, and writes to
+      the WORM backend.
+
+  publishAuditTier2:
+    action: send
+    channel:
+      $ref: '#/channels/auditTier2'
+    summary: |
+      Emit a Tier 2 (operational) event. Same outbox-and-relay pattern
+      as Tier 1 but without strict ordering.
+
+  consumeAuditTier2:
+    action: receive
+    channel:
+      $ref: '#/channels/auditTier2'
+    summary: |
+      `gls-audit-collector` (Tier 2 role, horizontally scaled) consumes
+      and writes to the time-series store.
+
+components:
+  schemas:
+    AuditEventEnvelope:
+      type: object
+      description: |
+        **Stub.** The full envelope schema (with `metadata` /
+        `content` partition for right-to-erasure per CSV #6, hash
+        fields per CSV #4, supersession links per CSV #7) is authored
+        in `event-envelope.schema.json` in Phase 0.7. Until then,
+        treat this object as opaque.
+      additionalProperties: true

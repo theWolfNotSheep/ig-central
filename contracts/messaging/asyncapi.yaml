@@ -1,0 +1,528 @@
+asyncapi: 3.0.0
+info:
+  title: ig-central — Messaging
+  version: 0.2.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    AsyncAPI 3.0 specification for the RabbitMQ topology used by
+    ig-central. Single source of truth for every exchange, queue,
+    routing key, and message envelope on the bus.
+
+    **Currently in production:**
+    - `gls.documents` topic exchange — document lifecycle events.
+    - `gls.pipeline` topic exchange — async LLM job dispatch and
+      completion.
+
+    **Forward-looking** (declared in `version-2-implementation-plan.md`
+    but not yet wired in code; will land in their respective phases):
+
+    - `gls.config.changed` — cache invalidation. Per CSV #30. Lands
+      with the Phase 0.8 `gls-platform-config` shared library.
+    - `gls.audit.*` — audit tier channels. Per CSV #3 / #4 / #5.
+      Declared (in stub form) in `contracts/audit/asyncapi.yaml`;
+      filled out in Phase 0.7 alongside the audit envelope schema.
+
+    **Listener-stub policy** (per `messaging/README.md`):
+    - This file is *validated* in pre-commit + CI (via `@asyncapi/cli`).
+    - Listener stubs are *not* generated — `@RabbitListener` annotations
+      are hand-written in each consumer.
+    - The contract → code mapping is documented in each consumer's
+      class-level Javadoc.
+
+servers:
+  rabbitmq:
+    host: 'rabbitmq:5672'
+    protocol: amqp
+    protocolVersion: '0.9.1'
+    description: |
+      RabbitMQ broker. In Docker Compose, addressable as
+      `rabbitmq:5672`. Auth flows via Spring AMQP credentials in
+      `spring.rabbitmq.*` (typically `guest:guest` in dev,
+      per-deployment in prod). Service-account JWTs (CSV #18) are
+      *not* used on AMQP connections — that scheme is HTTP-only.
+
+channels:
+  documentIngested:
+    address: 'document.ingested'
+    description: |
+      Routing key on exchange `gls.documents` (topic). Bound to queue
+      `gls.documents.ingested`. Failed messages are rejected (no
+      requeue) and routed to `gls.documents.dlx`.
+
+      **Producers:** `DocumentController`, `EmailIngestionService`,
+      `GoogleDriveFolderMonitor`, `StaleDocumentRecoveryTask`.
+      **Consumer:** `DocumentProcessingPipeline` (in
+      `gls-document-processing`).
+    messages:
+      documentIngestedMessage:
+        $ref: '#/components/messages/DocumentIngested'
+
+  documentProcessed:
+    address: 'document.processed'
+    description: |
+      Routing key on `gls.documents`. Bound to queue
+      `gls.documents.processed`.
+
+      **Producer:** `DocumentProcessingPipeline` after Tika extraction
+      and PII scan complete. **Consumer:** `ClassificationPipeline`
+      (in `gls-llm-orchestration`).
+    messages:
+      documentProcessedMessage:
+        $ref: '#/components/messages/DocumentProcessed'
+
+  documentClassified:
+    address: 'document.classified'
+    description: |
+      Routing key on `gls.documents`. Bound to queue
+      `gls.documents.classified`.
+
+      **Producer:** `ClassificationPipeline` after a classification
+      result is produced. **Consumers:**
+      `ClassificationEnforcementConsumer` (always);
+      `PipelineExecutionConsumer` (when the engine is running in the
+      pipeline-resume mode that uses this channel).
+    messages:
+      documentClassifiedMessage:
+        $ref: '#/components/messages/DocumentClassified'
+
+  documentClassificationFailed:
+    address: 'document.classification.failed'
+    description: |
+      Routing key on `gls.documents`. Bound to queue
+      `gls.documents.classification.failed`. Currently published on
+      terminal LLM-pipeline failure but not actively consumed by
+      application code — the DLX backstop catches it. A future
+      `gls-audit-collector` consumer will subscribe here for
+      Tier 1 / Tier 2 emission (per CSV #5).
+
+  llmJobRequested:
+    address: 'pipeline.llm.requested'
+    description: |
+      Routing key on exchange `gls.pipeline` (topic). Bound to queue
+      `gls.pipeline.llm.jobs`. DLX routes to `pipeline.dlq`. Consumer
+      prefetch is limited (2 on `gls-llm-orchestration`, 5 elsewhere)
+      to avoid overwhelming Anthropic / Ollama.
+
+      **Producer:** `PipelineExecutionEngine` when an async LLM node
+      is reached. **Consumer:** `ClassificationPipeline.onLlmJobRequested`.
+    messages:
+      llmJobRequestedMessage:
+        $ref: '#/components/messages/LlmJobRequested'
+
+  llmJobCompleted:
+    address: 'pipeline.llm.completed'
+    description: |
+      Routing key on `gls.pipeline`. Bound to queue
+      `gls.pipeline.llm.completed`.
+
+      **Producer:** `ClassificationPipeline.publishJobCompleted`
+      (success or failure). **Consumer:** `PipelineResumeConsumer`,
+      which resumes pipeline execution.
+    messages:
+      llmJobCompletedMessage:
+        $ref: '#/components/messages/LlmJobCompleted'
+
+  pipelineResume:
+    address: 'pipeline.resume'
+    description: |
+      Routing key on `gls.pipeline`. Declared but **not** actively
+      published or consumed in current code — the engine resumes via
+      `pipeline.llm.completed` directly. Kept for forward
+      compatibility with a future split between completion and resume.
+
+  documentsDeadLetter:
+    address: '#'
+    description: |
+      Fanout from `gls.documents.dlx` into queue `gls.documents.dlq`.
+      Catches rejected messages from any of the document-domain
+      queues. Not actively consumed by application code; inspected
+      via the admin monitoring page or RabbitMQ management UI.
+
+  pipelineDeadLetter:
+    address: 'pipeline.dlq'
+    description: |
+      Bound to queue `gls.pipeline.dlq` from `gls.pipeline`. Catches
+      rejected messages from the pipeline-domain queues. Not actively
+      consumed.
+
+operations:
+  publishDocumentIngested:
+    action: send
+    channel:
+      $ref: '#/channels/documentIngested'
+    summary: Publish a document-ingested event from any upload path.
+    messages:
+      - $ref: '#/channels/documentIngested/messages/documentIngestedMessage'
+
+  consumeDocumentIngested:
+    action: receive
+    channel:
+      $ref: '#/channels/documentIngested'
+    summary: |
+      `DocumentProcessingPipeline` consumes a document-ingested event,
+      runs Tika extraction and PII scan, then publishes
+      `document.processed`. Failures: rejected (no requeue) → DLX.
+    messages:
+      - $ref: '#/channels/documentIngested/messages/documentIngestedMessage'
+
+  publishDocumentProcessed:
+    action: send
+    channel:
+      $ref: '#/channels/documentProcessed'
+    summary: Publish a document-processed event after extraction.
+    messages:
+      - $ref: '#/channels/documentProcessed/messages/documentProcessedMessage'
+
+  consumeDocumentProcessed:
+    action: receive
+    channel:
+      $ref: '#/channels/documentProcessed'
+    summary: |
+      `ClassificationPipeline` consumes the processed event, runs the
+      LLM classification (or its async sibling via `pipeline.llm.requested`),
+      and publishes `document.classified`.
+    messages:
+      - $ref: '#/channels/documentProcessed/messages/documentProcessedMessage'
+
+  publishDocumentClassified:
+    action: send
+    channel:
+      $ref: '#/channels/documentClassified'
+    summary: Publish the final classification result.
+    messages:
+      - $ref: '#/channels/documentClassified/messages/documentClassifiedMessage'
+
+  consumeDocumentClassified:
+    action: receive
+    channel:
+      $ref: '#/channels/documentClassified'
+    summary: |
+      Consumed by `ClassificationEnforcementConsumer` for governance
+      enforcement and (in some pipeline modes) by
+      `PipelineExecutionConsumer`.
+    messages:
+      - $ref: '#/channels/documentClassified/messages/documentClassifiedMessage'
+
+  publishLlmJobRequested:
+    action: send
+    channel:
+      $ref: '#/channels/llmJobRequested'
+    summary: |
+      Published by `PipelineExecutionEngine` when reaching an async
+      LLM node.
+    messages:
+      - $ref: '#/channels/llmJobRequested/messages/llmJobRequestedMessage'
+
+  consumeLlmJobRequested:
+    action: receive
+    channel:
+      $ref: '#/channels/llmJobRequested'
+    summary: |
+      `ClassificationPipeline.onLlmJobRequested` performs the LLM call
+      (Anthropic or Ollama backend, selected by SLM block config)
+      and publishes `pipeline.llm.completed`.
+    messages:
+      - $ref: '#/channels/llmJobRequested/messages/llmJobRequestedMessage'
+
+  publishLlmJobCompleted:
+    action: send
+    channel:
+      $ref: '#/channels/llmJobCompleted'
+    summary: Published by the LLM worker when an async job finishes.
+    messages:
+      - $ref: '#/channels/llmJobCompleted/messages/llmJobCompletedMessage'
+
+  consumeLlmJobCompleted:
+    action: receive
+    channel:
+      $ref: '#/channels/llmJobCompleted'
+    summary: |
+      `PipelineResumeConsumer` resumes pipeline execution from the
+      pending node.
+    messages:
+      - $ref: '#/channels/llmJobCompleted/messages/llmJobCompletedMessage'
+
+components:
+  messages:
+    DocumentIngested:
+      name: DocumentIngestedEvent
+      title: Document ingested into the pipeline.
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/DocumentIngestedEvent'
+
+    DocumentProcessed:
+      name: DocumentProcessedEvent
+      title: Document text extraction + PII scan complete.
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/DocumentProcessedEvent'
+
+    DocumentClassified:
+      name: DocumentClassifiedEvent
+      title: Document classified by the LLM (or cascade tier).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/DocumentClassifiedEvent'
+
+    LlmJobRequested:
+      name: LlmJobRequestedEvent
+      title: Async LLM job requested by the pipeline engine.
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/LlmJobRequestedEvent'
+
+    LlmJobCompleted:
+      name: LlmJobCompletedEvent
+      title: Async LLM job completed (success or failure).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/LlmJobCompletedEvent'
+
+  schemas:
+    DocumentIngestedEvent:
+      type: object
+      description: |
+        Published when a document enters the pipeline. Java record:
+        `co.uk.wolfnotsheep.document.events.DocumentIngestedEvent`.
+      required: [documentId, fileName, mimeType, fileSizeBytes, ingestedAt, pipelineId]
+      properties:
+        documentId:
+          type: string
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        fileSizeBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        storageBucket:
+          type: string
+          description: MinIO bucket for the original upload.
+        storageKey:
+          type: string
+          description: Object key within the bucket.
+        uploadedBy:
+          type: string
+          description: Username (or service identity) of the uploader.
+        ingestedAt:
+          type: string
+          format: date-time
+        pipelineId:
+          type: string
+          description: |
+            Selected `PipelineDefinition` id for this document — chosen
+            at ingest time based on routing rules.
+
+    DocumentProcessedEvent:
+      type: object
+      description: |
+        Published after Tika extraction and PII scan. Java record:
+        `co.uk.wolfnotsheep.document.events.DocumentProcessedEvent`.
+      required: [documentId, fileName, mimeType, fileSizeBytes, processedAt]
+      properties:
+        documentId:
+          type: string
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        fileSizeBytes:
+          type: integer
+          format: int64
+        extractedText:
+          type: string
+          description: |
+            Plain text from Tika. Currently inline in the message
+            envelope. A future migration may switch to the
+            `_shared/text-payload` `oneOf` pattern (CSV #19) so large
+            extractions don't bloat AMQP frames.
+        storageLocation:
+          type: string
+          description: Original storage location (bucket + key encoded as a path).
+        uploadedBy:
+          type: string
+        processedAt:
+          type: string
+          format: date-time
+        piiFindings:
+          type: array
+          description: |
+            Lightweight PII summary for the LLM. Raw matched text is
+            never published — only the redacted form, the type, the
+            confidence, and the detection method.
+          items:
+            $ref: '#/components/schemas/PiiSummaryEntry'
+
+    PiiSummaryEntry:
+      type: object
+      required: [type, redactedText, confidence, method]
+      properties:
+        type:
+          type: string
+          description: PII type identifier (e.g. `EMAIL`, `NHS_NUMBER`).
+        redactedText:
+          type: string
+          description: Matched text with sensitive characters redacted.
+        confidence:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+        method:
+          type: string
+          description: Detection method (e.g. `REGEX`, `LLM`).
+
+    DocumentClassifiedEvent:
+      type: object
+      description: |
+        Published when classification produces a result. Java record:
+        `co.uk.wolfnotsheep.document.events.DocumentClassifiedEvent`.
+      required: [documentId, classificationResultId, classifiedAt]
+      properties:
+        documentId:
+          type: string
+        classificationResultId:
+          type: string
+        categoryId:
+          type: string
+        categoryName:
+          type: string
+        sensitivityLabel:
+          type: string
+          description: |
+            Sensitivity level. Mirrors `SensitivityLabel` enum in
+            `gls-governance` (e.g. `PUBLIC`, `INTERNAL`,
+            `CONFIDENTIAL`, `RESTRICTED`).
+        tags:
+          type: array
+          items:
+            type: string
+        applicablePolicyIds:
+          type: array
+          items:
+            type: string
+        retentionScheduleId:
+          type: string
+        confidence:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+        requiresHumanReview:
+          type: boolean
+          description: |
+            Whether the document was routed to the review queue.
+            Drives the `REVIEW_REQUIRED` status transition in
+            `ClassificationEnforcementConsumer`.
+        classifiedAt:
+          type: string
+          format: date-time
+
+    LlmJobRequestedEvent:
+      type: object
+      description: |
+        Published when the engine reaches an async LLM node. Java
+        record: `co.uk.wolfnotsheep.document.events.LlmJobRequestedEvent`.
+      required: [jobId, pipelineRunId, nodeRunId, documentId, mode]
+      properties:
+        jobId:
+          type: string
+        pipelineRunId:
+          type: string
+        nodeRunId:
+          type: string
+        documentId:
+          type: string
+        nodeKey:
+          type: string
+          description: Identifier of the pipeline node within its run.
+        mode:
+          type: string
+          enum: [CLASSIFICATION, CUSTOM_PROMPT]
+        blockId:
+          type: string
+        blockVersion:
+          type: integer
+          format: int32
+          description: |
+            Pinned block version (CSV #14). When null, the active
+            version of the named block is used at dispatch time.
+        pipelineId:
+          type: string
+        extractedText:
+          type: string
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        fileSizeBytes:
+          type: integer
+          format: int64
+        uploadedBy:
+          type: string
+        idempotencyKey:
+          type: string
+          description: |
+            Generated `nodeRun:<run-id>` token. Aligns with the HTTP
+            `Idempotency-Key` convention (CSV #16) so HTTP and AMQP
+            idempotency share one key space.
+
+    LlmJobCompletedEvent:
+      type: object
+      description: |
+        Published when an LLM job finishes. Carries either the
+        successful result or an `error` string. Java record:
+        `co.uk.wolfnotsheep.document.events.LlmJobCompletedEvent`.
+      required: [jobId, pipelineRunId, nodeRunId, success, completedAt]
+      properties:
+        jobId:
+          type: string
+        pipelineRunId:
+          type: string
+        nodeRunId:
+          type: string
+        success:
+          type: boolean
+        classificationResultId:
+          type: string
+        categoryId:
+          type: string
+        categoryName:
+          type: string
+        sensitivityLabel:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: number
+          format: double
+        requiresHumanReview:
+          type: boolean
+        retentionScheduleId:
+          type: string
+        applicablePolicyIds:
+          type: array
+          items:
+            type: string
+        extractedMetadata:
+          type: object
+          additionalProperties: true
+          description: |
+            Free-form per-schema metadata extracted by the LLM. Validated
+            against `MetadataSchema` records at dispatch time.
+        customResult:
+          type: object
+          additionalProperties: true
+          description: Free-form result for `CUSTOM_PROMPT` mode.
+        error:
+          type: string
+          description: Error message; present when `success=false`.
+        completedAt:
+          type: string
+          format: date-time
