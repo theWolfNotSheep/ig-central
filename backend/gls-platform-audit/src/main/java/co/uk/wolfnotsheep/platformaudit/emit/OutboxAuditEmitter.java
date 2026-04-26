@@ -5,7 +5,6 @@ import co.uk.wolfnotsheep.platformaudit.outbox.AuditOutboxRecord;
 import co.uk.wolfnotsheep.platformaudit.outbox.AuditOutboxRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 /**
  * Default {@link AuditEmitter} implementation. Writes the envelope to the
@@ -16,11 +15,11 @@ import org.springframework.stereotype.Component;
  * at-least-once delivery downstream uses the same eventId for dedup.
  *
  * <p>Schema validation against {@code event-envelope.schema.json} is not
- * enforced here yet; it lands in a follow-up PR alongside the
- * auto-configuration that turns this library into a Spring Boot starter.
- * Until then, callers must construct valid envelopes themselves.
+ * enforced here yet — caller is on the hook for valid envelopes until that
+ * follow-up lands. Bean registration is handled by
+ * {@code PlatformAuditAutoConfiguration}; consumers can override by
+ * declaring their own {@link AuditEmitter} bean.
  */
-@Component
 public class OutboxAuditEmitter implements AuditEmitter {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxAuditEmitter.class);

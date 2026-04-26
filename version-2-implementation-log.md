@@ -435,3 +435,30 @@ Local `./mvnw -pl gls-platform-audit compile` is clean.
 **Open issues:** None. The seam is intentionally inert until a deployable's release cadence diverges from the library set; the rule for "when to bump" is documented.
 
 **Next:** Phase 0.7 outstanding follow-ups (relay; envelope schema validation), Phase 0.8 (`gls-platform-config` cache + `gls.config.changed`), Phase 0.11 (perf baseline), Phase 0.12 (dev experience).
+
+## 2026-04-26 — Phase 0.7 (auto-config) — `gls-platform-audit` Spring Boot starter
+
+**Done:** Turned the `gls-platform-audit` module into a self-contained Spring Boot starter. Consumers no longer need to component-scan `co.uk.wolfnotsheep.platformaudit` or declare the emitter bean themselves — adding the dependency is enough.
+
+**Decisions logged:** None new. Implements the auto-config follow-up flagged in the closing entry of the Phase 0.7 library skeleton above.
+
+**What's wired:**
+
+- `PlatformAuditAutoConfiguration` — `@AutoConfiguration` gated on `MongoTemplate` being present on the classpath. Registers the outbox repository via `@EnableMongoRepositories(basePackageClasses = AuditOutboxRepository.class)` and exposes `AuditEmitter` (default `OutboxAuditEmitter`) as a bean with `@ConditionalOnMissingBean`, so consumers can override.
+- `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` — Spring Boot 3+ auto-configuration registration manifest.
+- `OutboxAuditEmitter` — `@Component` removed; the bean is now declared by the auto-config and is therefore single-source.
+
+**Files changed:**
+
+- `backend/gls-platform-audit/src/main/java/co/uk/wolfnotsheep/platformaudit/autoconfigure/PlatformAuditAutoConfiguration.java` (new).
+- `backend/gls-platform-audit/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` (new).
+- `backend/gls-platform-audit/src/main/java/co/uk/wolfnotsheep/platformaudit/emit/OutboxAuditEmitter.java` — drop `@Component`, update Javadoc.
+- `backend/gls-platform-audit/README.md` — Status section reframed (skeleton → auto-configured starter); auto-config bullet removed from follow-ups.
+- `version-2-implementation-log.md` — this entry.
+
+**Open issues:**
+
+- Two `@EnableMongoRepositories` annotations now exist in the same Spring context (`GlsApplication` + `PlatformAuditAutoConfiguration`). Spring Data Mongo handles this by creating one `RepositoryFactoryBean` per declaration; the basePackages are disjoint here, so no duplicate registration. Compile is clean against both `gls-platform-audit` and `gls-app-assembly`.
+- Schema validation against `event-envelope.schema.json` at emit time is still deferred — separate follow-up.
+
+**Next:** The remaining Phase 0.7 follow-ups (outbox-to-Rabbit relay; envelope schema validation), then Phase 0.8 / 0.11 / 0.12.
