@@ -53,7 +53,7 @@ Cross-cutting tracks:
 |---|---|---|
 | A — Hub-side | Not started | |
 | B — Migration / cutover | Not started | Strangler-fig approach planned |
-| C — Performance baseline | Not started | First action of Phase 0 |
+| C — Performance baseline | Scaffolded | Methodology + CSV format + capture script in place; load driver still stub. Real captures land once a representative workload exists. |
 | D — Minimum admin UI | Not started | Activates with Phase 1 |
 
 ---
@@ -377,3 +377,34 @@ Local `./mvnw -pl gls-platform-audit compile` is clean.
 - Consider tightening the smoke into an automated test once issue #7 (Testcontainers MongoDB cleanup) unblocks. Until then, the runtime check is a manual `docker compose up` exercise.
 
 **Next:** Phase 0.7 follow-ups (outbox-to-Rabbit relay; Spring Boot starter auto-config for `gls-platform-audit`; envelope schema validation at emit time), or Phase 0.9 (Maven BOM decoupling) for a small parallel win.
+
+## 2026-04-26 — Phase 0.11 (scaffold) — performance baseline scaffolding
+
+**Done:** Stood up the scaffolding for Track C / Phase 0.11. Methodology, CSV format, and a runnable capture script all live in the repo. **No real numbers captured yet** — the load driver is intentionally a stub because there's no representative workload to push through the pipeline. The seed CSV row reflects this.
+
+**Decisions logged:** None new — implements the Phase 0.11 work item from `version-2-implementation-plan.md`.
+
+**Why scaffold-only:** This is a solo dev project on local Docker Compose. There's no production traffic and no representative document corpus in the repo. Capturing perf numbers without a known workload produces noise that's worse than no numbers at all. The honest move is to land the methodology + format + script now (so the first real capture is just `git pull && drive load && ./capture.sh`) and defer the load-driver wiring to a later PR alongside the document corpus.
+
+**What's wired:**
+
+- `baselines/README.md` — methodology: why baseline, what each metric means, where each metric comes from, capture cadence (before/after every pipeline-touching phase), how to read historical CSVs, and a clear "Driving load (deferred until workload exists)" section that names the gap.
+- `baselines/2026-04-baseline.csv` — header row + one structural row marked "scaffold" so the CSV is parseable by anything that opens it (Pandas, Excel, eyeballs).
+- `scripts/baselines/capture.sh` — runnable shell script. Today: checks the api + Prometheus are up, runs a no-op `drive_load`, samples placeholder PromQL queries, emits a CSV row to stdout. The PromQL queries reference metric names that the api may or may not currently emit (Micrometer + Spring Boot pipeline timers — verify against the live `/actuator/prometheus` registry before trusting any numbers).
+
+**Files changed:**
+
+- `baselines/README.md` (new).
+- `baselines/2026-04-baseline.csv` (new).
+- `scripts/baselines/capture.sh` (new, executable).
+- `version-2-implementation-log.md` — Track C status changed from `Not started` → `Scaffolded` + this entry.
+
+**Verification:** `bash -n scripts/baselines/capture.sh` clean. The script's `check_stack` function will refuse to emit a row if the api or Prometheus aren't reachable, so it can't accidentally produce zero-filled garbage data.
+
+**Open issues:**
+
+- **No load driver.** The single biggest gap. `drive_load` does nothing today. A representative document corpus + a small loader (likely `scripts/baselines/load.sh`) is the unblocker for real captures.
+- **PromQL queries are unverified.** The metric names in `capture.sh` (`pipeline_classification_duration_seconds`, `pipeline_classification_total`, `mcp_cache_hits_total`, etc.) are best-guess names matching Micrometer conventions. Run `curl -s localhost:9090/api/v1/label/__name__/values` once the api has been driven for ~5 min and align names before relying on the queries.
+- **Phase 0.11 acceptance gate (`Performance baseline captured and committed`) is not satisfied yet** — only the scaffolding is. Mark 0.11 fully done in a follow-up PR after the first non-stub capture.
+
+**Next:** A follow-up PR that wires the load driver and produces the first real baseline row. Independently: Phase 0.12 (dev experience), Phase 0.8 (`gls-platform-config`), or the outstanding Phase 0.7 outbox-to-Rabbit relay.
