@@ -1337,3 +1337,46 @@ Free-form tag values (full mime strings, error messages, document ids) are delib
 - 0.5.5 — Dockerfile + Compose ✓; K8s + CI/CD outstanding
 
 **Next:** Tracing (spans + traceparent forwarding via Micrometer Tracing + OTel), JWT validation middleware, K8s manifests, CI/CD wiring, integration tests once issue #7 unblocks.
+
+## 2026-04-27 — Phase 0.5.3 (tracing) — `@Observed` on `tika.parse` + `minio.fetch`
+
+**Done:** Tracing infrastructure for `gls-extraction-tika`. `traceparent` propagation works out of the box via Spring Boot's `ServerHttpObservationFilter` (request span) + the controller's existing audit-envelope traceparent passthrough. This PR adds nested spans for the two boundaries the plan called out: `tika.parse` and `minio.fetch`.
+
+**What's wired:**
+
+- `micrometer-tracing-bridge-otel` dep — wires Micrometer Observation to OpenTelemetry's `SpanContext` + `traceparent` propagation. The OTLP exporter (which actually pushes spans to a collector) is deployment-side; not bundled.
+- `spring-aop` + `aspectjweaver` deps — required for `@Observed` annotation processing. Spring Boot 4's BOM doesn't manage `spring-boot-starter-aop` directly (renamed / merged), so the raw coords come in instead.
+- `@Observed(name = "tika.parse", contextualName = "tika-parse", lowCardinalityKeyValues = {"component", "tika"})` on `TikaExtractionService.extract`.
+- `@Observed(name = "minio.fetch", contextualName = "minio-fetch", lowCardinalityKeyValues = {"component", "minio"})` on `MinioDocumentSource.open`.
+
+When deployments wire an OTLP collector (set `OTEL_EXPORTER_OTLP_ENDPOINT` and add the exporter dep), every `/v1/extract` call shows up as a request span containing nested `tika.parse` + `minio.fetch` spans. Without an exporter, the spans still get created (visible via `/actuator/metrics` and any local span exporter); they just aren't shipped.
+
+**Spring Boot 4 gotcha (logged for future services):** `spring-boot-starter-aop` is no longer version-managed by the Boot 4 starter parent. Either pull `spring-aop` + `aspectjweaver` directly (this PR's choice) or specify a version. Documented in `docs/service-template.md` as part of the Boot 4 gotchas section.
+
+**Decisions logged:** None new.
+
+**Tests:** 41/41 still pass — `@Observed` is reflective annotation processing, doesn't change behaviour for unit tests that bypass the AOP layer.
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/pom.xml` — `micrometer-tracing-bridge-otel`, `spring-aop`, `aspectjweaver` deps.
+- `backend/gls-extraction-tika/src/main/java/.../parse/TikaExtractionService.java` — `@Observed` on `extract(...)`.
+- `backend/gls-extraction-tika/src/main/java/.../source/MinioDocumentSource.java` — `@Observed` on `open(...)`.
+- `version-2-implementation-plan.md` — 0.5.3 tracing flipped `[x]`.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 41/41 pass. End-to-end span visibility requires an OTLP collector (deployment-side).
+
+**Phase 0.5.3 status after this PR:**
+
+- error returns ✓, audit ✓, basic + readiness health ✓, metrics ✓, tracing ✓
+- **JWT validation outstanding** — defers until a JWKS issuer infrastructure exists (separate phase).
+
+**Phase 0.5 status:**
+
+- 0.5.1, 0.5.2, 0.5.6 ✓
+- 0.5.3 — only JWT outstanding
+- 0.5.4 — unit-level only (41 tests in extraction module; integration deferred to issue #7)
+- 0.5.5 — Dockerfile + Compose ✓; K8s + CI/CD outstanding
+
+**Next:** JWT validation (when JWKS infra is in place), K8s manifests, CI/CD wiring, integration tests, or pivot to Phase 1.

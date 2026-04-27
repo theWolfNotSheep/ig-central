@@ -1,5 +1,6 @@
 package co.uk.wolfnotsheep.extraction.tika.parse;
 
+import io.micrometer.observation.annotation.Observed;
 import org.apache.tika.Tika;
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.exception.ZeroByteFileException;
@@ -65,6 +66,9 @@ public class TikaExtractionService {
      *                 May be null.
      * @return populated {@link ExtractedText}.
      */
+    @Observed(name = "tika.parse",
+            contextualName = "tika-parse",
+            lowCardinalityKeyValues = {"component", "tika"})
     public ExtractedText extract(InputStream input, String fileName) {
         Metadata metadata = new Metadata();
         if (fileName != null && !fileName.isBlank()) {
