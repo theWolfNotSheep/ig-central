@@ -199,8 +199,8 @@ Why this service: it's the simplest member of the extraction family, has a small
 - [ ] CI/CD: builds image on PR, pushes to `ghcr.io/.../gls-extraction-tika:${VERSION}` on tag.
 
 #### 0.5.6 Documentation: the cloneable pattern
-- [ ] `gls-extraction-tika/README.md` — points at the contract, describes the pattern.
-- [ ] `docs/service-template.md` — generic version of the above; explains how to clone for the next service.
+- [x] `gls-extraction-tika/README.md` — points at the contract, describes the pattern.
+- [x] `docs/service-template.md` — generic version of the above; explains how to clone for the next service. (Bring-up checklist, substrate use (`gls-platform-audit`, `gls-platform-config`, generator), conventions (RFC 7807, idempotency, capabilities), repo-root Docker build context, generator + Mockito gotchas accumulated across 0.5.1–0.5.5.)
 
 ### Acceptance gate
 
