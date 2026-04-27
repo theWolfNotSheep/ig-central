@@ -1549,3 +1549,27 @@ Several PR descriptions in this session said "Hub-side publishers still pending"
 - `version-2-implementation-log.md` — status board + tracks table + this entry.
 
 **Next:** Genuinely outstanding remaining items: JWT (blocked on JWKS), integration tests (blocked on issue #7), Phase 0.11 load driver (blocked on representative content), Python audit module sketch (deferred), Rabbit circuit-breaker (small follow-up to PR #45). Or pivot to Phase 1 (per-service splits beyond `gls-extraction-tika`).
+
+## 2026-04-27 — Phase 1.1 (mime detection) — CSV #42 DECIDED
+
+**Done:** Locked the mime-detection decision to DECIDED per the plan's call-out. Mime detection happens at ingest in `gls-app-assembly` (and the future `gls-connectors`) using Apache Tika's `Tika.detect(...)`. Per-extractor services may re-detect for their own dispatch but the canonical mime is set at ingest and is what the orchestrator routes on.
+
+**Decisions logged:** CSV #42 (Domain Model, §Plan-1.1).
+
+**Why:**
+
+- Tika's detector is already on the api's classpath (`gls-extraction-tika` and `gls-document-processing` both pull `tika-core`); putting detection at ingest makes routing decisions deterministic from the very first event, before any extractor runs.
+- Alternatives — extractors detecting and bubbling up — leak ordering between services (router can't pick the right extractor without already running one) and complicate retries.
+- Centralising at ingest keeps the api as the single source of truth for the canonical mime, which the audit trail and admin UI both read.
+
+**Acceptance pattern:** the existing `DocumentModel.mimeType` field carries the detected value. New ingest paths (Hub-driven imports, future connectors) MUST run Tika.detect at the boundary; existing paths (file upload, email ingest, Drive monitor) already do.
+
+**Files changed:**
+
+- `version-2-decision-tree.csv` — row #42 (DECIDED).
+- `version-2-implementation-plan.md` — Phase 1.1 mime-detection bullet flipped `[x]`.
+- `version-2-implementation-log.md` — this entry.
+
+**Decision lock pattern note:** this is the 23rd decision accepted-as-written across the project (per the audit-decisions log entry). Reviewable + reversible per the standard CSV decision rules in `CLAUDE.md`. Phase 1.1 begins proper now that the routing prerequisite is locked.
+
+**Next:** Phase 1.1 sub-services proper — `gls-extraction-archive`, `gls-extraction-ocr`, `gls-extraction-audio`. Each is its own clone of the `gls-extraction-tika` pattern (now codified in `docs/service-template.md`).

@@ -236,7 +236,7 @@ Clone the Tika pattern.
 - [ ] **`gls-extraction-archive`** — handles `.zip`, `.mbox`, `.pst`. On encountering archives, fans out child documents back to step ① ingest. Recursive ingest pattern documented.
 - [ ] **`gls-extraction-ocr`** — Tesseract or Document AI (decide and log in CSV); GPU-tolerant if needed.
 - [ ] **`gls-extraction-audio`** — Whisper or Deepgram (decide and log); long-running, requires `Prefer: respond-async` (per A1 decision).
-- [ ] Mime-detection logic — where does it live? Decision: at ingest in `gls-api` / `gls-connectors` using Tika's detector. Log in CSV.
+- [x] Mime-detection logic — where does it live? Decision: at ingest in `gls-api` / `gls-connectors` using Tika's detector. Log in CSV. (CSV #42 — DECIDED.)
 
 ### 1.2 `gls-classifier-router` (mock implementation)
 
