@@ -678,3 +678,50 @@ This is the first consumer on the new pattern — proves the API holds up agains
 - **End-to-end runtime smoke** — boot the api, mutate a config entry, observe the `gls.config.changed` message land on the broker. Best done after a peer replica is wired (otherwise nothing's listening).
 
 **Next:** MCP cache migration to close the second 0.8 follow-up, then pivot to Phase 0.12 (dev experience), the 0.11 load driver, or relay hardening.
+
+## 2026-04-27 — Phase 0.8 (MCP cache migration) — TTL replaced with change-driven invalidation
+
+**Done:** Migrated the MCP server's nine governance Caffeine caches off wall-clock TTL onto change-driven invalidation per CSV #30. The Caffeine substrate stays as the storage detail; the staleness model flips. Five tests cover the dispatcher mapping.
+
+**Approach:** A surgical change rather than a wholesale rewrite. The previous `@Cacheable` annotations on the MCP tools (`ClassificationTaxonomyTool`, `SensitivityDefinitionsTool`, `TraitDetectionTool`, `GovernancePolicyTool`, `RetentionScheduleTool`, `StorageCapabilitiesTool`, `MetadataSchemasTool`, `CorrectionHistoryTool`, `OrgPiiPatternsTool`) are unchanged. The cutover happens at two points:
+
+1. **`CacheConfig`** drops `expireAfterWrite(5, TimeUnit.MINUTES)`. The maxSize ceiling stays (memory bound, not staleness). New `ENTITY_TYPE_TO_CACHE` map exports the entity-type → cache-name routing as a public constant.
+2. **`McpConfigInvalidator`** is a new `ConfigChangeListener` (auto-discovered by the dispatcher in `gls-platform-config`'s auto-config). On every `gls.config.changed` event whose `entityType` is in the routing table, it evicts: bulk events → `cache.clear()`, targeted events → per-id `cache.evict()`. Events for unmapped types are silently ignored.
+
+**Why this approach over a full ConfigCache adapter:** CSV #30 specifies the *pattern* (per-replica in-memory + change-driven invalidation), not the storage substrate. Caffeine + Spring's `@Cacheable` is a well-understood combo and untangling it from the tools' `@Cacheable` annotations would mean a much larger blast radius for no behavioural gain. The unification of substrate (everything on `ConfigCache`) is a separate concern — re-evaluate after the MCP `@Cacheable` patterns are exercised under load and we know whether composite keys (e.g. `"<arg0>:<arg1>"`) really pull their weight.
+
+**Decisions logged:** None new. CSV #30 already covers this.
+
+**Entity-type → cache mapping:**
+
+| `entityType` | MCP cache name |
+|---|---|
+| `TAXONOMY` | `taxonomy` |
+| `SENSITIVITY` | `sensitivities` |
+| `TRAIT` | `traits` |
+| `POLICY` | `policies` |
+| `RETENTION_SCHEDULE` | `retention` |
+| `STORAGE_TIER` | `storage` |
+| `METADATA_SCHEMA` | `schemas` |
+| `CORRECTION` | `corrections` |
+| `PII_PATTERN_SET` | `piiPatterns` |
+
+This is the contract the **publisher** must honour. Any service mutating one of these collections needs to fire `ConfigChangedEvent.entityType` matching the table above; otherwise the MCP cache won't drop. Track this as part of the per-entity migrations on `gls-app-assembly` (separate follow-up — most governance writes happen there today).
+
+**Files changed:**
+
+- `backend/gls-mcp-server/pom.xml` — added `gls-platform-config` dep so the listener interface is on the classpath. The auto-config beans (`ConfigCacheRegistry`, `ConfigChangeDispatcher`, etc.) come along for the ride.
+- `backend/gls-mcp-server/src/main/java/.../config/CacheConfig.java` — TTL removed; `ENTITY_TYPE_TO_CACHE` map added.
+- `backend/gls-mcp-server/src/main/java/.../config/McpConfigInvalidator.java` (new) — `ConfigChangeListener` `@Component`.
+- `backend/gls-mcp-server/src/test/java/.../config/McpConfigInvalidatorTest.java` (new) — 5 tests covering bulk clear, targeted evict, unmapped type ignore, mapping coverage, and missing-cache resilience.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-mcp-server -am test -Dtest=McpConfigInvalidatorTest` — 5/5 pass. Full module compile clean.
+
+**Open issues (deferred to follow-ups):**
+
+- **Per-entity write-side publish** — `GovernanceService` (and friends in `gls-app-assembly`) need to fire `ConfigChangedEvent` on writes to taxonomy / policies / sensitivities / traits / retention schedules / storage tiers / metadata schemas / corrections / PII pattern sets. Without that, the MCP cache will only invalidate when an admin manually triggers a `refresh()`-equivalent. Track as the next 0.8 follow-up.
+- **Composite-key targeted evictions are best-effort.** Several MCP `@Cacheable` methods derive composite keys from method args (e.g. `policies` keyed `"<categoryId>:<sensitivity>"`). A targeted event with raw entity ids won't match these composite keys, so the eviction silently misses. The pragmatic fallback today: write-side handlers send a bulk event for affected entity types where composite keys are in play. Document and revisit if perf shows an issue.
+- **Hub-side publishers** still pending — Track A.
+
+**Next:** Wire write-side publishes in `GovernanceService` (closes the round-trip for the MCP migration), pivot to Phase 0.12 (dev experience), the 0.11 load driver, or relay hardening.
