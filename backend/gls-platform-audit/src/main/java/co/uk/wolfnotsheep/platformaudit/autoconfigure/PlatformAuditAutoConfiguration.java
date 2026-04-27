@@ -4,7 +4,9 @@ import co.uk.wolfnotsheep.platformaudit.emit.AuditEmitter;
 import co.uk.wolfnotsheep.platformaudit.emit.OutboxAuditEmitter;
 import co.uk.wolfnotsheep.platformaudit.outbox.AuditOutboxRepository;
 import co.uk.wolfnotsheep.platformaudit.relay.OutboxRelay;
+import co.uk.wolfnotsheep.platformaudit.relay.OutboxRelayMetrics;
 import co.uk.wolfnotsheep.platformaudit.relay.OutboxRelayProperties;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -58,12 +60,21 @@ public class PlatformAuditAutoConfiguration {
 
     @Bean
     @ConditionalOnClass(RabbitTemplate.class)
+    @ConditionalOnMissingBean(OutboxRelayMetrics.class)
+    public OutboxRelayMetrics outboxRelayMetrics(
+            MeterRegistry registry, AuditOutboxRepository repository) {
+        return new OutboxRelayMetrics(registry, repository);
+    }
+
+    @Bean
+    @ConditionalOnClass(RabbitTemplate.class)
     @ConditionalOnProperty(prefix = "gls.platform.audit.relay", name = "enabled", havingValue = "true", matchIfMissing = true)
     @ConditionalOnMissingBean(OutboxRelay.class)
     public OutboxRelay outboxRelay(
             AuditOutboxRepository repository,
             RabbitTemplate rabbitTemplate,
-            OutboxRelayProperties properties) {
-        return new OutboxRelay(repository, rabbitTemplate, properties);
+            OutboxRelayProperties properties,
+            OutboxRelayMetrics metrics) {
+        return new OutboxRelay(repository, rabbitTemplate, properties, metrics);
     }
 }

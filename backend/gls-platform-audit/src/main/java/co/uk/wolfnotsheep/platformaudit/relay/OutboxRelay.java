@@ -67,15 +67,18 @@ public class OutboxRelay {
     private final AuditOutboxRepository repository;
     private final RabbitTemplate rabbitTemplate;
     private final OutboxRelayProperties properties;
+    private final OutboxRelayMetrics metrics;
     private final ObjectMapper mapper;
 
     public OutboxRelay(
             AuditOutboxRepository repository,
             RabbitTemplate rabbitTemplate,
-            OutboxRelayProperties properties) {
+            OutboxRelayProperties properties,
+            OutboxRelayMetrics metrics) {
         this.repository = repository;
         this.rabbitTemplate = rabbitTemplate;
         this.properties = properties;
+        this.metrics = metrics;
         this.mapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
@@ -100,10 +103,12 @@ public class OutboxRelay {
         }
         log.debug("audit relay: polling — {} PENDING rows up to {}", batch.size(), now);
         for (AuditOutboxRecord row : batch) {
+            io.micrometer.core.instrument.Timer.Sample timer = metrics.startTimer();
             try {
                 publish(row);
+                metrics.recordPublished(timer, row.tier());
             } catch (RuntimeException e) {
-                handleFailure(row, e);
+                handleFailure(row, e, timer);
             }
         }
     }
@@ -119,9 +124,11 @@ public class OutboxRelay {
         } catch (JsonProcessingException e) {
             // Serialisation failure is not retryable — the envelope is
             // structurally broken. Mark FAILED immediately so a human looks
-            // at it; do not bump attempts uselessly.
+            // at it; do not bump attempts uselessly. Throw so the
+            // pollOnce loop's failure handler records the FAILED metric.
             markFailed(row, "envelope serialisation failed: " + e.getOriginalMessage());
-            return;
+            throw new SerialisationFailureException(
+                    "envelope serialisation failed: " + e.getOriginalMessage(), e);
         }
 
         org.springframework.amqp.core.Message message = org.springframework.amqp.core.MessageBuilder
@@ -137,12 +144,32 @@ public class OutboxRelay {
                 envelope.eventId(), properties.exchange(), routingKey);
     }
 
-    private void handleFailure(AuditOutboxRecord row, Exception cause) {
+    /**
+     * Serialisation failure isn't retryable, but the
+     * {@link #pollOnce()} loop still needs to record a FAILED metric
+     * for it. Throwing this signals "row already marked FAILED, just
+     * stamp the metric and move on" to the catch site.
+     */
+    private static final class SerialisationFailureException extends RuntimeException {
+        SerialisationFailureException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
+    private void handleFailure(AuditOutboxRecord row, Exception cause, io.micrometer.core.instrument.Timer.Sample timer) {
+        if (cause instanceof SerialisationFailureException) {
+            // Row was already marked FAILED inside publish() — just
+            // stamp the metric and move on.
+            metrics.recordFailed(timer, row.tier());
+            log.warn("audit relay: eventId={} marked FAILED due to serialisation error", row.eventId());
+            return;
+        }
         int attempts = row.attempts() + 1;
         String error = (cause instanceof AmqpException ? "AMQP: " : "")
                 + cause.getClass().getSimpleName() + ": " + cause.getMessage();
         if (attempts >= properties.maxAttempts()) {
             markFailed(row, error + " (gave up after " + attempts + " attempts)");
+            metrics.recordFailed(timer, row.tier());
             log.warn("audit relay: eventId={} marked FAILED after {} attempts ({})",
                     row.eventId(), attempts, error);
             return;
@@ -150,6 +177,7 @@ public class OutboxRelay {
         Instant nextRetry = Instant.now().plus(backoffFor(attempts));
         AuditOutboxRecord retried = withRetry(row, attempts, error, nextRetry);
         repository.save(retried);
+        metrics.recordRetry(timer, row.tier());
         log.warn("audit relay: eventId={} attempt {} failed, retrying after {} ({})",
                 row.eventId(), attempts, nextRetry, error);
     }
