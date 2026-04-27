@@ -757,3 +757,16 @@ This is the contract the **publisher** must honour. Any service mutating one of 
 - **Composite-key MCP caches** (`policies`, `corrections`, `schemas` keyed e.g. `"<categoryId>:<sensitivity>"`) — a targeted single-id event won't match. Currently a harmless miss; if perf requires it, switch the bridge mapping for those types to publish bulk instead.
 
 **Next:** Hub-side bridge (Track A), Phase 0.12 (dev experience), the 0.11 load driver, or relay hardening (ShedLock + observability).
+
+## 2026-04-27 — Plan checkboxes synced again (Phase 0.8 + 0.7 relay)
+
+**Done:** Flipped four more `[ ]` → `[x]` in `version-2-implementation-plan.md` to reflect what landed in PRs #21–#25:
+
+- 0.8: AsyncAPI declaration, library skeleton, AppConfigService migration, MCP cache replacement — all checked. Hub-side publishers note added inline (Track A).
+- 0.7 library item updated inline: relay landed; ShedLock + metrics + circuit-breaker still outstanding.
+
+Now 33 checked / 152 unchecked across the plan (was 29 / 156).
+
+**Files changed:** `version-2-implementation-plan.md`, `version-2-implementation-log.md`.
+
+**Next:** Hub-side bridge (Track A), Phase 0.12 (dev experience), Phase 0.11 load driver, or relay hardening.

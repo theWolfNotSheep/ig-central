@@ -108,15 +108,15 @@ Single decision: do new services deploy to K8s or stay on Docker Compose for v1?
 #### 0.7 Audit infrastructure (foundation, not unhappy path)
 - [x] `contracts/audit/event-envelope.schema.json` — JSON Schema 2020-12 for the common envelope (per §7.4).
 - [x] `audit_outbox` MongoDB collection schema + indexes.
-- [ ] **`gls-platform-audit` shared library** (JVM): envelope construction, outbox writer, relay-to-Rabbit, retry/backoff. Single dependency every service imports. (Envelope, outbox writer, schema validation, and Spring Boot starter auto-config all landed; **outbox-to-Rabbit relay + retry/backoff still outstanding**.)
+- [ ] **`gls-platform-audit` shared library** (JVM): envelope construction, outbox writer, relay-to-Rabbit, retry/backoff. Single dependency every service imports. (Envelope, outbox writer, schema validation, Spring Boot starter auto-config, and the outbox-to-Rabbit relay all landed; **leader election (ShedLock for Tier 1 single-writer) + comprehensive metrics + circuit breaker still outstanding**.)
 - [ ] Equivalent Python module sketch (for `gls-bert-trainer` later) — design doc only at this phase.
 - [x] Audit relay pattern documented in CLAUDE.md.
 
 #### 0.8 `gls.config.changed` cache-invalidation infrastructure (per CSV #30)
-- [ ] AsyncAPI for the `gls.config.changed` channel.
-- [ ] `gls-platform-config` shared library: cache-with-invalidation primitive, event publisher, event subscriber.
-- [ ] Existing `AppConfigService` migrated to use it (replaces Caffeine TTL).
-- [ ] MCP server's Caffeine cache for governance entities replaced with the new pattern.
+- [x] AsyncAPI for the `gls.config.changed` channel.
+- [x] `gls-platform-config` shared library: cache-with-invalidation primitive, event publisher, event subscriber.
+- [x] Existing `AppConfigService` migrated to use it (replaces Caffeine TTL).
+- [x] MCP server's Caffeine cache for governance entities replaced with the new pattern. (Substrate intentionally stays Caffeine — TTL replaced with change-driven; CSV #30 specifies the pattern, not the storage. Hub-side publishers tracked under Track A.)
 
 #### 0.9 Maven BOM decoupling
 - [x] Introduce per-deployable version properties in `backend/bom/pom.xml`: `gls.api.version`, `gls.orchestrator.version`, etc. All initially set to the current SNAPSHOT — values don't change yet, just the seam exists.
