@@ -40,9 +40,14 @@ jobs:
           java-version: 21
           distribution: temurin
           cache: maven
-      - name: Run unit tests
+      # Runs surefire across the whole reactor (unit tests only — *Test.java).
+      # Integration tests (*IT.java) run via failsafe and are gated on
+      # issue #7 (Testcontainers MongoDB cleanup); not included here.
+      # Adding a new module + tests is automatically picked up — no
+      # edit needed when a service joins the reactor.
+      - name: Run unit tests across the reactor
         working-directory: backend
-        run: ./mvnw verify -pl gls-app-assembly -am
+        run: ./mvnw test
 
   frontend-lint:
     runs-on: ubuntu-latest
