@@ -1,0 +1,221 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Extraction (Tika)
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    Synchronous text extraction. Pulls bytes from MinIO, runs Apache
+    Tika, returns text inline (≤ 256 KB) or by reference (`textRef`)
+    per CSV #19.
+
+    First per-service spec (Phase 0.5 reference implementation). Sets
+    the cloneable pattern documented in `docs/service-template.md`
+    (lands with the implementation, 0.5.2+).
+
+    **Conventions referenced from `_shared/`:**
+    - Error envelope (RFC 7807 + extensions) — CSV #17.
+    - Service-account JWT — CSV #18.
+    - `traceparent` + `Idempotency-Key` headers — CSV #16 / #20.
+    - `TextPayload` (inline-vs-`textRef`) — CSV #19.
+    - `Capabilities` shape — CSV #21.
+
+servers:
+  - url: http://gls-extraction-tika:8080
+    description: Internal Docker Compose hostname.
+  - url: http://localhost:8080
+    description: Local dev (override).
+
+tags:
+  - name: extraction
+    description: Document text extraction operations.
+  - name: meta
+    description: Capabilities + health.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/extract:
+    post:
+      operationId: extractDocument
+      tags: [extraction]
+      summary: Extract text from a document by MinIO reference.
+      description: |
+        Synchronous endpoint. Caller supplies a `documentRef` pointing at
+        a MinIO object plus the `nodeRunId` that owns this extraction.
+        Service streams the bytes, runs Tika, and returns either:
+
+        - `kind=inline` with the extracted text in `text` (≤ 256 KB), or
+        - `kind=ref` with a `textRef` pointing at a MinIO object holding
+          the extracted text (> 256 KB).
+
+        **Idempotency:** repeated requests with the same `nodeRunId`
+        within the 24h TTL window return the same extraction result
+        without re-running Tika (CSV #16).
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractRequest'
+      responses:
+        '200':
+          description: Extraction succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractResponse'
+        '409':
+          $ref: '../_shared/idempotency.yaml#/components/responses/InFlight'
+        '413':
+          description: Document exceeds the configured size ceiling.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '422':
+          description: Document is corrupt or unparseable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '../_shared/retry.yaml#/components/responses/TooManyRequests'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Service capability advertisement.
+      description: |
+        Per CSV #21, every service exposes `/v1/capabilities` so callers
+        can negotiate features before calling. Returns the supported
+        mime-type families, the inline-vs-ref threshold, and any
+        feature flags set on this build.
+      responses:
+        '200':
+          description: Capabilities for this build.
+          content:
+            application/json:
+              schema:
+                $ref: '../_shared/capabilities.yaml#/components/schemas/Capabilities'
+
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [meta]
+      summary: Liveness + readiness probe.
+      description: |
+        Spring Boot Actuator health endpoint. Liveness reflects process
+        state; readiness checks Tika initialised + MinIO reachable.
+        Detailed component health is exposed under
+        `/actuator/health/{component}` when `show-components: always`.
+      security: []
+      responses:
+        '200':
+          description: Up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Down — readiness component failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    ExtractRequest:
+      type: object
+      required: [documentRef, nodeRunId]
+      additionalProperties: false
+      properties:
+        documentRef:
+          type: object
+          required: [bucket, objectKey]
+          additionalProperties: false
+          description: MinIO pointer to the source document.
+          properties:
+            bucket:
+              type: string
+              minLength: 1
+              maxLength: 64
+            objectKey:
+              type: string
+              minLength: 1
+              maxLength: 1024
+            etag:
+              type: string
+              description: Optional MinIO ETag — when present, the service verifies it before extraction.
+        nodeRunId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            Pipeline-node run id per architecture §6.11. Idempotency key
+            for repeated extraction of the same node run (CSV #16).
+        mimeType:
+          type: string
+          description: |
+            Caller's hint at the source mime type. The service will
+            re-detect via Tika regardless and use whichever is more
+            specific.
+
+    ExtractResponse:
+      type: object
+      required: [nodeRunId, text, detectedMimeType, costUnits]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+          description: Echo of the request's nodeRunId.
+        text:
+          $ref: '../_shared/text-payload.yaml#/components/schemas/TextPayload'
+        detectedMimeType:
+          type: string
+          description: Tika's detected mime type. Authoritative.
+          examples:
+            - application/pdf
+            - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+        pageCount:
+          type: integer
+          minimum: 0
+          description: Pages parsed (PDFs / Office docs); null for non-paginated inputs.
+        durationMs:
+          type: integer
+          minimum: 0
+          description: End-to-end extraction time, milliseconds.
+        costUnits:
+          type: integer
+          minimum: 0
+          description: |
+            Cost-attribution unit per CSV #22. For Tika this is the
+            byte-count of source data parsed, divided by 1024. Zero for
+            cache hits (idempotent re-emission).
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties: true
+          description: Per-component health breakdown when `show-components: always`.
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'

@@ -169,9 +169,9 @@ Why this service: it's the simplest member of the extraction family, has a small
 ### Scope
 
 #### 0.5.1 Module + contract
-- [ ] New Maven module `gls-extraction-tika` with its own `pom.xml`, version property, Dockerfile.
-- [ ] `contracts/extraction/openapi.yaml` — `POST /v1/extract`, `GET /v1/capabilities`, `GET /actuator/health`. References `_shared/` for error envelope, security, headers.
-- [ ] `VERSION` 0.1.0, `CHANGELOG.md` initial entry.
+- [x] New Maven module `gls-extraction-tika` with its own `pom.xml`, version property, Dockerfile. (Module + `gls.extraction.version` BOM property landed; **Dockerfile deferred to 0.5.2** — needs the actual implementation.)
+- [x] `contracts/extraction/openapi.yaml` — `POST /v1/extract`, `GET /v1/capabilities`, `GET /actuator/health`. References `_shared/` for error envelope, security, headers.
+- [x] `VERSION` 0.1.0, `CHANGELOG.md` initial entry.
 
 #### 0.5.2 Implementation
 - [ ] Generated server stub from contract.

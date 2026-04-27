@@ -807,3 +807,33 @@ Now 33 checked / 152 unchecked across the plan (was 29 / 156).
 Phase 0.5 (reference implementation `gls-extraction-tika`) is the natural next phase.
 
 **Next:** Phase 0.5 — pick the first per-service contract + scaffolding. Or relay hardening / load driver wiring.
+
+## 2026-04-27 — Phase 0.5.1 — `gls-extraction-tika` module + contract
+
+**Done:** First per-service spec lands. `contracts/extraction/openapi.yaml` declares the three operations — `POST /v1/extract`, `GET /v1/capabilities`, `GET /actuator/health` — referencing `_shared/` for the error envelope (CSV #17), service JWT (CSV #18), `traceparent` + `Idempotency-Key` headers (CSV #16 / #20), `TextPayload` (CSV #19), `Capabilities` (CSV #21), in-flight 409, 429 retry. The `gls-extraction-tika` Maven module is wired into the reactor and the BOM has a fresh `gls.extraction.version` per-deployable property.
+
+**Decisions logged:** None new. First adoption of every relevant `_shared/` `$ref` pattern — proves the substrate authored across 0.3 / 0.4 actually composes.
+
+**What's wired:**
+
+- `contracts/extraction/openapi.yaml` (new) — three operations. Idempotency on `nodeRunId` per CSV #16; cost-attribution `costUnits` per CSV #22; `TextPayload` inline-vs-`textRef` per CSV #19. 4XX / 5XX catch-alls keep the spec lint-clean while concrete codes (413 / 422 / 429 / 409) document the unhappy paths the implementation must recognise.
+- `contracts/extraction/VERSION` (new) — 0.1.0.
+- `contracts/extraction/CHANGELOG.md` (new) — initial entry.
+- `contracts/extraction/README.md` (new) — operation summary + cross-references.
+- `backend/gls-extraction-tika/pom.xml` (new) — declares deps on `gls-platform-audit` (audit emission for `EXTRACTION_COMPLETED` / `EXTRACTION_FAILED` lands in 0.5.3), spring-boot-starter-webmvc / actuator / data-mongodb / amqp, Tika 3.1.0.
+- `backend/gls-extraction-tika/README.md` (new) — points at the contract; lists what's deferred to 0.5.2+.
+- `backend/pom.xml` — added `gls-extraction-tika` to `<modules>`.
+- `backend/bom/pom.xml` — added `gls.extraction.version` property (defaulting to `${gls.version}`) and the dependency entry referencing it.
+- `version-2-implementation-plan.md` — three 0.5.1 items checked. Inline note: **Dockerfile deferred to 0.5.2** since it needs the actual implementation.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am compile` clean. The contract has no automated lint exercise yet (this PR; runs locally via the `pre-commit` hook authored in 0.5).
+
+**Files changed:** 6 new files under `contracts/extraction/` + `backend/gls-extraction-tika/`; 2 modified poms; plan + log.
+
+**Open issues:** None blocking 0.5.2 (which is "generated server stub from contract"). Things tracked elsewhere:
+
+- **Dockerfile** — lands with 0.5.2 alongside the implementation; the placeholder block in `docker-compose.yml` activates then.
+- **Generated server stub** — `openapi-generator-maven-plugin` already wired in `contracts-smoke`; the per-service config follows that pattern.
+- **`_shared/` `$ref` resolution lint pass** — Spectral lint on PR was set up in 0.5; this is the first non-smoke spec to exercise it. Watch for breakage on the next CI run.
+
+**Next:** Phase 0.5.2 — generated server stub + Tika integration + MinIO source/target wiring. Or in parallel: relay hardening (ShedLock + metrics) for 0.7, or wiring the 0.11 load driver.
