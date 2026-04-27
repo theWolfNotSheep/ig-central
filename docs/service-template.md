@@ -128,6 +128,20 @@ If a docstring in your spec contains `` `key: value` ``-style snippets, prefer t
 
 If the spec's `oneOf` has a `kind` discriminator on the union, the **interface** carries the schema info but the **concrete branch classes don't have a `setKind(...)`**. The discriminator is implicit in the implementing class identity. Don't try to set it; use `instanceof` (or the deduction mixin above) when reading.
 
+## Spring Boot 4 gotchas
+
+### `HealthIndicator` moved out of `org.springframework.boot.actuate.health`
+
+Spring Boot 4 split actuator into multiple jars and relocated the health primitives:
+
+| Boot 3 | Boot 4 |
+|---|---|
+| `org.springframework.boot.actuate.health.Health` | `org.springframework.boot.health.contributor.Health` |
+| `org.springframework.boot.actuate.health.HealthIndicator` | `org.springframework.boot.health.contributor.HealthIndicator` |
+| `org.springframework.boot.actuate.health.Status` | `org.springframework.boot.health.contributor.Status` |
+
+Symptom: compile error `package org.springframework.boot.actuate.health does not exist` on a fresh module that follows Boot 3 documentation. The `spring-boot-starter-actuator` dep transitively pulls in `spring-boot-health` (4.0.x) — the classes are there, just at a different path. Same pattern likely applies to other actuator surfaces (`info`, `metrics`); check the new home before importing.
+
 ## Mockito gotchas
 
 ### `mock()` inside an outer `when()` chain
