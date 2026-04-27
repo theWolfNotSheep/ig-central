@@ -90,6 +90,36 @@
             <version>8.5.14</version>
         </dependency>
 
+        <!--
+          Tracing. Spring Boot Actuator + Micrometer Observation are
+          already on the classpath via spring-boot-starter-actuator;
+          the bridge wires Micrometer's Observation API to OpenTelemetry
+          (the SpanContext propagation that traceparent rides on). The
+          OTLP exporter is added separately when a deployment wants
+          spans pushed to a collector — keep it deployment-side rather
+          than baking a connection into the build.
+        -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+
+        <!--
+          @Observed annotation processing requires spring-aop. Spring
+          Boot 4's BOM doesn't manage `spring-boot-starter-aop` directly
+          (renamed / merged), so pull spring-aop in by its raw coords —
+          version comes from the Spring Boot parent's transitive
+          spring-context-aop alignment.
+        -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aop</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>

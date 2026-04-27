@@ -1,5 +1,6 @@
 package co.uk.wolfnotsheep.extraction.tika.source;
 
+import io.micrometer.observation.annotation.Observed;
 import io.minio.GetObjectArgs;
 import io.minio.MinioClient;
 import io.minio.StatObjectArgs;
@@ -33,6 +34,9 @@ public class MinioDocumentSource implements DocumentSource {
     }
 
     @Override
+    @Observed(name = "minio.fetch",
+            contextualName = "minio-fetch",
+            lowCardinalityKeyValues = {"component", "minio"})
     public InputStream open(DocumentRef ref) {
         if (ref.etag() != null && !ref.etag().isBlank()) {
             verifyEtag(ref);
