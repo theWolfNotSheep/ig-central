@@ -914,3 +914,41 @@ Phase 0.5 (reference implementation `gls-extraction-tika`) is the natural next p
 - **Audit emission** — `EXTRACTION_COMPLETED` / `EXTRACTION_FAILED` (Tier 2) via `gls-platform-audit`.
 
 **Next:** MinIO source + controller + inline-only response shaping (the next vertical slice). Or in parallel: relay hardening, Hub-side publishers, 0.11 load driver.
+
+## 2026-04-27 — Phase 0.5.2 (c) — MinIO source layer
+
+**Done:** Source-side I/O layer for `gls-extraction-tika`. `DocumentSource` interface (decoupled from the SDK so the controller is unit-testable against fakes) plus a MinIO-backed implementation with ETag verification, NotFound mapping, size lookup, and Spring config for the bean. 8 new unit tests (14 total in the module).
+
+**Decisions logged:** None new. Implements the source-side I/O the controller needs in 0.5.2 (d).
+
+**What's wired:**
+
+- `DocumentRef` (record) — bucket / objectKey / optional etag. Validates non-blank inputs at construction.
+- `DocumentSource` (interface) — `open(ref)` returns `InputStream`; `sizeOf(ref)` returns bytes-or-`-1L`. Decouples the controller from MinIO SDK types.
+- `MinioDocumentSource` — wraps `io.minio:minio:8.5.14` (matching `gls-document`'s `ObjectStorageService`). When `ref.etag()` is set, verifies via `statObject` first and throws `DocumentEtagMismatchException` on mismatch. Maps `ErrorResponseException` with code `NoSuchKey` to `DocumentNotFoundException`. Other I/O failures wrap as `UncheckedIOException`.
+- `DocumentNotFoundException` / `DocumentEtagMismatchException` — semantic exceptions the controller maps to RFC 7807 in 0.5.3 (`DOCUMENT_NOT_FOUND` / 404 and `DOCUMENT_ETAG_MISMATCH` / 409).
+- `MinioSourceConfig` — `@Configuration` with `@ConditionalOnMissingBean` factories for `MinioClient` (`minio.endpoint` / `minio.access-key` / `minio.secret-key` properties; same shape as `gls-app-assembly`'s `ObjectStorageService`) and `DocumentSource`. Both overrideable in tests.
+
+**Tests (8 new + 6 existing = 14 total):**
+
+- `MinioDocumentSourceTest` (new, 8) — open streams object bytes, missing → `DocumentNotFoundException`, other I/O → `UncheckedIOException`, etag pass / fail / mismatch detail, `sizeOf` returns storage size, `sizeOf` returns `-1L` for missing object, `DocumentRef` validation. Mocks the `MinioClient`; the helper-mock pattern was hit by Mockito's `UnfinishedStubbing` lint when a `mock(...)` call landed inside an outer `when(...)` chain — fixed by binding the helper mock to a local first.
+- `TikaExtractionServiceTest` (6 existing).
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/pom.xml` — added `io.minio:minio:8.5.14`.
+- `backend/gls-extraction-tika/src/main/java/.../source/{DocumentRef,DocumentSource,MinioDocumentSource,MinioSourceConfig,DocumentNotFoundException,DocumentEtagMismatchException}.java` (6 new files).
+- `backend/gls-extraction-tika/src/test/java/.../source/MinioDocumentSourceTest.java` (new).
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 14/14 pass.
+
+**Open issues (continuing into 0.5.2 follow-ups):**
+
+- **Controller** implementing the generated `ExtractApi` — orchestrates source.open → tika.extract → response shaping (inline ≤ 256 KB else `textRef`).
+- **MinIO sink** for the >256 KB overflow path — uploads extracted text to a `gls-extracted-text` bucket, returns the `textRef`.
+- **`nodeRunId` idempotency** — 24h TTL via Mongo.
+- **Dockerfile + Spring main class**.
+- **Audit emission** via `gls-platform-audit`.
+
+**Next:** Controller + inline-only response shaping (no MinIO sink yet — fail with 413 on overflow until the sink lands). Or pivot to relay hardening / Hub-side / load driver.
