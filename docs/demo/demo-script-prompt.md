@@ -1,63 +1,121 @@
-# Demo Script Authoring — Standing Instructions
+# Demo Script Authoring Prompt
 
-**Load this document whenever the user asks you to "build a demo script", "write a demo for feature X", "add a new demo video", or anything equivalent.**
+**When the user asks to build a demo script for a feature, load this file first and follow it.**
 
-The user has curated the master feature inventory in `documentation/DEMO/FEATURE_LIST.md`. The existing 12-video master script is `documentation/DEMO_SCRIPT.md`. New standalone scripts live in `documentation/DEMO/scripts/`.
+This is a reminder-to-future-Claude on how IG Central demo scripts are structured, so every new script matches the house style established in `docs/demo/demo-script.md`.
 
-## Before writing anything
+---
 
-1. **Open `documentation/DEMO/FEATURE_LIST.md`.** Find the feature the user is asking about. If it isn't listed, ask whether to add it before writing a script.
-2. **Check its status:**
-   - ✅ **Covered** — the feature is already in `DEMO_SCRIPT.md`. Ask the user if they want a deeper standalone script or if the existing video is sufficient before duplicating work.
-   - 🟡 **Partial** — a standalone deep-dive is appropriate. Reference the parent video and focus on the depth the master script skips.
-   - ⬜ **Not covered** — write a new standalone script from scratch.
-   - 🔒 **Planned / not shipped** — stop and confirm with the user. Do not script features that do not exist in the code yet.
-3. **Read the relevant code before writing.** Check the actual frontend route, backend controller, and any recent commits. Do NOT invent UI elements, button labels, or flows. The script must match the real product.
-4. **Read `documentation/DEMO_SCRIPT.md`** to match tone, pacing, and format — this is the reference style.
+## Trigger phrases
 
-## Writing the script
+Treat any of the following as a request to author a demo script using this template:
+- "build a demo script for {feature}"
+- "write the demo for {page/feature}"
+- "script the {feature} video"
+- "add demo video N for {feature}" / "next demo"
+- "demo this" (when referring to a specific page or feature just discussed)
 
-Follow the structure used in `DEMO_SCRIPT.md`:
+Before writing anything, open:
+1. `docs/demo/feature-list.md` — confirm the feature is on the list; check if it's already marked ✅.
+2. `docs/demo/demo-script.md` — read the two or three videos closest in topic to match tone and pacing.
+3. The actual page/controller in the codebase — **never invent UI elements**. Only narrate what is really on screen.
+
+If the feature is marked ✅ already, ask the user whether they want a replacement, an extension, or a different framing before writing.
+
+---
+
+## Output format (must match the house style)
+
+Each demo is a self-contained section with this exact shape:
 
 ```markdown
-# <Feature Name> — Demo Script
+## Video N: {Title} ({M:SS})
 
-**Duration: X:XX**
+**Goal:** {One sentence — what the viewer walks away knowing.}
 
-**Goal:** <one sentence: what the viewer should walk away understanding>
+### Script
 
-## Script
+1. **{Action in bold}**. {What they see}. *"{Verbatim narration in italics and quotes.}"*
 
-1. **<Action>** — <description>. *"<spoken narration in italics>"*
-2. **<Action>** — <description>. *"<spoken narration>"*
-   - Sub-steps where a screen has multiple points to call out
+2. **{Next action}**. {Observation}. *"{Narration.}"*
+
+   - {Sub-bullet for UI elements to point at}
+   - {Sub-bullet}
+
 ...
 
-**Key message:** *"<the one-line pitch for this feature>"*
+**Key message:** *"{One-line takeaway, quoted.}"*
 ```
 
-### Rules
+Rules:
+- **Target 2:30–3:00 per video.** Never longer than 3:00.
+- **Numbered steps** for the presenter's actions, in order.
+- **Bold for the clickable / visible action**; plain prose for what they observe; **italic + quotes** for words the presenter actually says.
+- **Sub-bullets** for lists of UI fields to call out within one step.
+- **End with a "Key message"** in italic quotes — the one sentence that should stick.
+- Always reference the **real page path** (e.g. `/governance/hub`, `/admin/users`) so recording is unambiguous.
+- Name **real button labels and field names** — verify them in `web/app/**` before writing.
 
-- **Duration target: 2:30–3:00.** Only go longer if the feature genuinely needs it and flag the excess to the user.
-- **Every step should be executable in the real UI.** If you are unsure whether a button or page exists, grep the frontend code before writing.
-- **Spoken narration in italics.** Keep it conversational, second person ("you can…"), and explain the *why* not just the *what*.
-- **Include the unhappy path where relevant** — CLAUDE.md requires that both happy and failure paths are visible. For any workflow script, show at least one failure-and-recovery moment (e.g. a failed classification being retried).
-- **Configuration-driven reminders.** CLAUDE.md is clear that labels, menus, and statuses come from MongoDB config. Don't script UI text as fixed — say "<label shown in your config>" when the exact wording is tenant-dependent.
-- **Reference slugs not IDs.** The system is slug-based; narration and example URLs should use slugs (`/documents?doc=maternity-leave-confirmation-a3f2b1`) not raw ObjectIds.
-- **Use admin creds from CLAUDE.md** for any login step: `admin@governanceledstore.co.uk` / `ChangeMe123!`.
+---
 
-### File & naming
+## Pre-flight checklist before writing
 
-- Path: `documentation/DEMO/scripts/<feature-slug>.md`
-  - Slug example: `block-versioning.md`, `pack-update-observer.md`, `bert-training.md`
-- If the script is a deep-dive companion to a master-script video, name it so the relationship is clear: `video-08-deepdive-block-feedback.md`.
+For each new demo script, confirm the following and mention any that aren't yet true so the user can seed state:
+
+- [ ] The page exists and the route is correct.
+- [ ] Required demo data is seeded (e.g. some documents classified, a pack installed, a user with low-clearance).
+- [ ] The narrated actions are actually possible in the current UI.
+- [ ] Any referenced thresholds / numbers (e.g. "0.7", "30 days", "5 services") match production config.
+- [ ] The video fits in ≤3 minutes at a conversational pace — cut if overstuffed.
+
+If any check fails, flag it in the response before the script rather than writing fiction.
+
+---
+
+## Tone and voice
+
+Match `docs/demo/demo-script.md` exactly:
+- **Second person, present tense.** "You can see…", "Click here…".
+- **Confident, not salesy.** No marketing adjectives ("amazing", "revolutionary"). Describe what it does, let the feature sell itself.
+- **Explain the why, not just the what.** Every step should connect to a business outcome (compliance, cost, speed, risk).
+- **No jargon without glossing it.** "MCP tools (the way the AI asks our system for relevant context)" — once, then reuse.
+- **UK English spelling** throughout (colour, behaviour, organisation, programme).
+
+---
+
+## Default narrative beats per video
+
+Most good IG Central demos hit these beats. Use them as a mental checklist, not a rigid outline:
+
+1. **Where are we and why.** One sentence framing the persona and the task.
+2. **What they see on landing.** Orient the viewer before any clicks.
+3. **The primary action.** The one thing this feature is for.
+4. **One non-obvious capability.** The thing that differentiates IG Central.
+5. **The feedback / audit / ops consequence.** Where does this action show up elsewhere in the system?
+6. **Key message.** Tie it back to the business outcome.
+
+---
 
 ## After writing
 
-1. **Update `documentation/DEMO/FEATURE_LIST.md`** — flip the status from ⬜ or 🟡 to ✅ (or keep 🟡 if it is still only partial) and link to the new script file.
-2. **Do not touch `DEMO_SCRIPT.md`** unless the user explicitly asks. That is the master 12-video script and should stay the canonical overview.
-3. **Report back** with: feature covered, script path, duration, and any code details you verified (or could not verify) along the way.
+When you finish a script:
 
-## When the user asks to build scripts "for each feature"
+1. Append it to `docs/demo/demo-script.md` (or create a new file under `docs/demo/scripts/` if the user prefers separate files).
+2. Update `docs/demo/feature-list.md`:
+   - Flip the relevant row from 🆕 to ✅.
+   - Add the video number in the Status column (e.g. `✅ Video 13`).
+3. Update the Video Index table at the bottom of `docs/demo/demo-script.md`.
+4. Keep the running **Total runtime** figure at the top of `docs/demo/demo-script.md` correct.
+5. Tell the user **what was added and what state the system needs** for clean recording.
 
-If the user asks for multiple scripts in one go, work through `FEATURE_LIST.md` in order, prioritising ⬜ (not covered) over 🟡 (partial). Confirm scope first — 20+ scripts is a lot — and ask whether they want them all in one session or batched.
+---
+
+## Anti-patterns to avoid
+
+- ❌ Inventing UI that doesn't exist ("click the Magic Wand icon"). Check the code.
+- ❌ Multi-paragraph narration — viewers will skip. One or two sentences per step.
+- ❌ Scripts longer than 3 minutes — split into two videos instead.
+- ❌ Abstract feature descriptions with no on-screen action.
+- ❌ Duplicating a key message across videos — each should earn its own.
+- ❌ Forgetting the "Key message" line at the end.
+- ❌ Using emojis in the script output (house style avoids them; the checklist icons in `feature-list.md` are the only exception).
