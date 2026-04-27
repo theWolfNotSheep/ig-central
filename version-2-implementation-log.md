@@ -41,8 +41,8 @@ Update this table when a phase's status changes. The detailed entries below are 
 
 | Phase | Status | Started | Completed | Notes |
 |---|---|---|---|---|
-| 0   | In progress | 2026-04-26 | — | 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.9, 0.10 done; audit decisions #3–#8 DECIDED; 0.7 envelope + outbox indexes + library skeleton landed; relay/auto-config/validation deferred as 0.7 follow-ups; 0.8 / 0.11 / 0.12 still open |
-| 0.5 | Not started | — | — | |
+| 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
+| 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
 | 1   | Not started | — | — | |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
@@ -51,7 +51,7 @@ Cross-cutting tracks:
 
 | Track | Status | Notes |
 |---|---|---|
-| A — Hub-side | Not started | |
+| A — Hub-side | Implicitly covered | `GovernanceConfigChangeBridge` (PR #25) listens on Spring Data Mongo `AfterSaveEvent` / `AfterDeleteEvent` for governance entities, so Hub-driven `PackImportService` writes (which use the same `repo.save(...)` path) automatically publish `gls.config.changed` events. No separate Hub-side publisher is needed unless the Hub deploys a separate database from the api. |
 | B — Migration / cutover | Not started | Strangler-fig approach planned |
 | C — Performance baseline | Scaffolded | Methodology + CSV format + capture script in place; load driver still stub. Real captures land once a representative workload exists. |
 | D — Minimum admin UI | Not started | Activates with Phase 1 |
@@ -1527,3 +1527,25 @@ Operators can graph: `rate(gls_audit_relay_publish_total{outcome="published"}[5m
 
 - **Circuit breaker on Rabbit downtime** — when the broker is fully down, the relay currently retries every poll cycle with exponential per-row backoff. A global breaker would short-circuit the cycle (single test against the broker; if it's open, skip the polling poll altogether). Smaller follow-up.
 - **`shedLock` Mongo collection** — created lazily by ShedLock; future schema-management policy may want a Mongock change unit to own its indexes explicitly.
+
+## 2026-04-27 — Status board sync (bookkeeping)
+
+**Done:** Updated the per-phase status board and the cross-cutting tracks table at the top of this log to reflect the current state. Both had been stale since early in the session — the board said `0.8 / 0.11 / 0.12 still open` and Phase 0.5 `Not started` even after PRs #22, #19, #27, #28–#41 landed.
+
+**Decisions logged:** None — pure bookkeeping.
+
+**What changed:**
+
+- Phase 0: `In progress` → `Substrate complete; minor follow-ups outstanding`. Notes rewritten to reflect what's actually done and what's truly outstanding (Python audit sketch, Rabbit circuit-breaker, 0.11 load driver).
+- Phase 0.5: `Not started` → `Substantially complete`. Notes break down per sub-phase (0.5.1 / 0.5.2 / 0.5.3 / 0.5.4 / 0.5.5 / 0.5.6) and call out what's blocked on what (JWT on JWKS infra; integration tests on issue #7; K8s manifests on a real K8s decision).
+- Track A (Hub-side): `Not started` → `Implicitly covered`. Realisation: `GovernanceConfigChangeBridge` (PR #25) listens on Spring Data Mongo lifecycle events for governance entities, so Hub-driven `PackImportService` writes automatically fire `gls.config.changed` events. No separate Hub-side publisher is needed unless the Hub eventually deploys against a different Mongo from the api.
+
+**Why this matters:**
+
+Several PR descriptions in this session said "Hub-side publishers still pending" when in fact PR #25's bridge already covers it — the bridge fires on every `repo.save(...)` regardless of whether the caller is admin UI, API mutation, or Hub-driven import. The status sync makes this discoverable from the top of the log.
+
+**Files changed:**
+
+- `version-2-implementation-log.md` — status board + tracks table + this entry.
+
+**Next:** Genuinely outstanding remaining items: JWT (blocked on JWKS), integration tests (blocked on issue #7), Phase 0.11 load driver (blocked on representative content), Python audit module sketch (deferred), Rabbit circuit-breaker (small follow-up to PR #45). Or pivot to Phase 1 (per-service splits beyond `gls-extraction-tika`).
