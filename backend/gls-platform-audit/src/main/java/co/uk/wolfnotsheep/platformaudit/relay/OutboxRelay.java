@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -82,6 +83,9 @@ public class OutboxRelay {
     }
 
     @Scheduled(fixedDelayString = "${gls.platform.audit.relay.poll-interval:PT5S}")
+    @SchedulerLock(name = "gls-audit-outbox-relay",
+            lockAtMostFor = "${gls.platform.audit.relay.lock-at-most-for:PT5M}",
+            lockAtLeastFor = "${gls.platform.audit.relay.lock-at-least-for:PT0S}")
     public void pollOnce() {
         if (!properties.enabled()) {
             return;

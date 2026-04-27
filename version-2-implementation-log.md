@@ -1439,3 +1439,45 @@ Every PR I shipped this session that added tests was passing locally but **not a
 The audit envelope's runtime validator inside `gls-platform-audit`'s `OutboxAuditEmitter` calls `EnvelopeValidator.fromBundledSchema()`, which reads `/schemas/event-envelope.schema.json` off the classpath. Pre-fix: in deployed containers that resource didn't exist, so `EnvelopeValidator` constructor threw `IllegalStateException` with a "Bundled audit envelope schema not found" message. Post-fix: the schema is bundled into every jar that depends on `gls-platform-audit`.
 
 I noticed this gap during the `gls-extraction-tika` Dockerfile work in PR #33 and logged it as outstanding; this PR closes it.
+
+## 2026-04-27 — Phase 0.7 (relay hardening) — ShedLock leader election
+
+**Done:** Wired ShedLock leader election for the `OutboxRelay` per CSV #4 ("Tier 1 single-writer per resource"). Multi-replica deployments no longer risk double-publishing the same envelope — only one replica's relay holds the Mongo lock and runs `pollOnce` at a time.
+
+**What's wired:**
+
+- `gls-platform-audit/pom.xml` — added `shedlock-spring` and `shedlock-provider-mongo` 5.16.0 as **optional** deps. Consumers that don't need leader election (single-replica deployments, tests) don't pay for ShedLock.
+- `OutboxRelay.pollOnce` — annotated with `@SchedulerLock(name = "gls-audit-outbox-relay", lockAtMostFor = "${gls.platform.audit.relay.lock-at-most-for:PT5M}", lockAtLeastFor = "${gls.platform.audit.relay.lock-at-least-for:PT0S}")`.
+- `AuditRelayLockConfig` (new `@AutoConfiguration`) — registers a Mongo-backed `LockProvider` on a separate auto-config class so `@EnableSchedulerLock` (which is class-level) doesn't pollute the main `PlatformAuditAutoConfiguration` surface. Conditional on `MongoLockProvider` being on the classpath; conditional on `gls.platform.audit.relay.leader-election-enabled` (default `true`).
+- `gls-app-assembly/pom.xml` — opts in to ShedLock by depending on the two libraries directly, so the api container has leader election active by default in production.
+- `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` — added the new lock config class.
+- BOM property `shedlock.version=5.16.0` in the parent pom.
+
+**Decisions logged:** None new — implements the deferred CSV #4 hardening flagged in the relay's original PR (#21).
+
+**Tests:** No changes — `@SchedulerLock` is reflective AOP, transparent to unit tests against the `OutboxRelay` constructor. 41 module tests still pass.
+
+**Failure modes covered:**
+
+- **One replica running**: lock acquires immediately every poll; nothing changes vs. the unlocked behaviour.
+- **Two replicas running**: one acquires the lock, runs `pollOnce`, releases. The other's poll cycle finds the lock held and returns immediately — `@SchedulerLock` skips the method body when the lock can't be acquired.
+- **Replica crashes mid-publish**: `lockAtMostFor` (5min default) caps how long the lock survives a crashed holder. After that ceiling, another replica can claim. Tradeoff: if a real publish takes >5min something else is wrong; the cap is a safety net, not a normal operating assumption.
+- **Network partition between replicas**: each may think it holds the lock; both publish; the at-least-once delivery guarantee + downstream `eventId` deduplication on the `gls-audit-collector` keep correctness intact. The lock is best-effort.
+
+**Files changed:**
+
+- `backend/pom.xml` — `shedlock.version` property.
+- `backend/gls-platform-audit/pom.xml` — optional shedlock deps.
+- `backend/gls-platform-audit/src/main/java/.../relay/OutboxRelay.java` — `@SchedulerLock` annotation.
+- `backend/gls-platform-audit/src/main/java/.../autoconfigure/AuditRelayLockConfig.java` (new).
+- `backend/gls-platform-audit/src/main/resources/META-INF/spring/...AutoConfiguration.imports` — new entry.
+- `backend/gls-app-assembly/pom.xml` — opts in to ShedLock.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw test` — 41 tests still pass. End-to-end leader election needs a real multi-replica deployment to verify; the ShedLock library is widely deployed and well-tested.
+
+**Open issues:**
+
+- **Comprehensive metrics** — relay-side Micrometer counters for queue depth, publish rate, lock-contention rate. Smaller now that ShedLock is in (lock-acquisition events are the natural signal). Lift in a follow-up.
+- **Circuit breaker on Rabbit** — when the broker is down, the relay currently retries every poll cycle with exponential per-row backoff. A global circuit breaker would short-circuit the cycle. Smaller follow-up.
+- **`shedLock` Mongo collection** — created lazily by ShedLock on first lock attempt. No Mongock change unit needed; documented in case future schema-management policy requires explicit ownership.
