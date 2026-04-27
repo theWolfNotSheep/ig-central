@@ -866,3 +866,51 @@ Phase 0.5 (reference implementation `gls-extraction-tika`) is the natural next p
 - **Dockerfile** — needs the implementation; the placeholder block in `docker-compose.yml` activates with that PR.
 
 **Next:** Tika integration (the meat of 0.5.2). Or in parallel: relay hardening, Hub-side publishers, 0.11 load driver.
+
+## 2026-04-27 — Phase 0.5.2 (b) — `TikaExtractionService` (extractor only)
+
+**Done:** First focused slice of the Tika integration. Single `TikaExtractionService` class wrapping `org.apache.tika.Tika`, returning a typed `ExtractedText` record with mime-type detection, page count for paginated formats, byte-count for `costUnits` (CSV #22), and a `truncated` flag when the character ceiling fires. Six unit tests covering the wrapper logic — format-specific tests (PDFs, Office docs, .eml) live in 0.5.4's integration suite once the controller + MinIO source are wired.
+
+**Decisions logged:** None new. Implements the "Tika-based text extraction" bullet of 0.5.2 in isolation.
+
+**What's wired:**
+
+- `TikaExtractionService` — stateless, thread-safe wrapper. Configurable character ceiling via `gls.extraction.tika.max-characters` (default 500_000, mirrors `gls-document-processing`'s `TextExtractionService` for parity). `Tika.parseToString` is the workhorse; metadata extraction handles three different page-count keys (`xmpTPg:NPages`, `meta:page-count`, `Page-Count`).
+- `ExtractedText` (record) — text, detected mime type, page count, byte count, truncated flag.
+- `UnparseableDocumentException` — semantic wrapper around Tika's `TikaException`. The controller will map this to RFC 7807 `EXTRACTION_CORRUPT` / 422 in 0.5.3.
+- `CountingInputStream` (private nested class) — counts bytes pulled even when Tika short-circuits at the character ceiling. Drives the contract's `costUnits` math without holding the source in memory.
+
+**Failure semantics:**
+
+- `TikaException` → `UnparseableDocumentException` (will become 422 with `EXTRACTION_CORRUPT`).
+- `IOException` → `UncheckedIOException` (will become 5xx).
+- `ZeroByteFileException` → empty result (semantically valid — caller asked us to extract a zero-byte document; we return zero bytes of text).
+- OOM during parse → not caught here; the controller / process observability is the right boundary.
+
+**Tests (6, all green):**
+
+- Plain text passes through with byte count + mime detection.
+- Empty input returns empty text (Tika throws `ZeroByteFileException`; we treat it as success).
+- Character ceiling truncates and flags `truncated=true`.
+- Null filename hint is tolerated.
+- Corrupt bytes with a misleading `.pdf` extension trip `UnparseableDocumentException`.
+- Zero / negative `maxCharacters` rejected at construction.
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/src/main/java/.../parse/TikaExtractionService.java` (new).
+- `backend/gls-extraction-tika/src/main/java/.../parse/ExtractedText.java` (new).
+- `backend/gls-extraction-tika/src/main/java/.../parse/UnparseableDocumentException.java` (new).
+- `backend/gls-extraction-tika/src/test/java/.../parse/TikaExtractionServiceTest.java` (new — 6 tests).
+- `version-2-implementation-log.md` — this entry.
+
+**Open issues (continuing into 0.5.2 follow-ups):**
+
+- **MinIO source service** — fetch a `documentRef.{bucket, objectKey}` to InputStream. Wires into `MinioClient` via Spring config.
+- **Controller implementing `ExtractApi`** (the generated interface) — orchestrates source fetch → Tika extraction → response shaping (inline ≤ 256 KB else `textRef`).
+- **MinIO sink** — when the extracted text exceeds 256 KB, upload it to a `gls-extracted-text` bucket and return `textRef`.
+- **`nodeRunId` idempotency** — 24h TTL via Mongo.
+- **Dockerfile** — needs the controller + Spring main class.
+- **Audit emission** — `EXTRACTION_COMPLETED` / `EXTRACTION_FAILED` (Tier 2) via `gls-platform-audit`.
+
+**Next:** MinIO source + controller + inline-only response shaping (the next vertical slice). Or in parallel: relay hardening, Hub-side publishers, 0.11 load driver.
