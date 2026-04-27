@@ -24,6 +24,7 @@
         <openapi-generator-maven-plugin.version>7.10.0</openapi-generator-maven-plugin.version>
         <mongock.version>5.4.4</mongock.version>
         <json-schema-validator.version>1.5.7</json-schema-validator.version>
+        <shedlock.version>5.16.0</shedlock.version>
     </properties>
 
     <modules>

@@ -1,1 +1,2 @@
 co.uk.wolfnotsheep.platformaudit.autoconfigure.PlatformAuditAutoConfiguration
+co.uk.wolfnotsheep.platformaudit.autoconfigure.AuditRelayLockConfig
