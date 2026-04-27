@@ -73,6 +73,22 @@ public class ExtractController implements ExtractionApi {
             String traceparent,
             ExtractRequest request,
             String idempotencyKey) {
+        try {
+            return doExtract(traceparent, request, idempotencyKey);
+        } catch (RuntimeException failure) {
+            // Failure-path audit. Emitted from the controller (rather
+            // than from ExtractionExceptionHandler) so traceparent +
+            // nodeRunId are still in scope without a request-scoped
+            // bean. The handler still owns the RFC 7807 mapping.
+            emitFailed(request, traceparent, failure);
+            throw failure;
+        }
+    }
+
+    private ResponseEntity<ExtractResponse> doExtract(
+            String traceparent,
+            ExtractRequest request,
+            String idempotencyKey) {
 
         DocumentRef ref = toInternalRef(request);
         Instant started = Instant.now();
@@ -109,6 +125,43 @@ public class ExtractController implements ExtractionApi {
         emitCompleted(request, traceparent, extracted, durationMs);
         ExtractResponse response = buildInlineResponse(request, extracted, durationMs);
         return ResponseEntity.ok(response);
+    }
+
+    private void emitFailed(ExtractRequest request, String traceparent, Throwable cause) {
+        AuditEmitter emitter = auditEmitterProvider.getIfAvailable();
+        if (emitter == null) {
+            return;
+        }
+        String errorCode = errorCodeFor(cause);
+        String nodeRunId = request != null ? request.getNodeRunId() : null;
+        try {
+            emitter.emit(ExtractionEvents.failed(
+                    serviceName, serviceVersion, instanceId,
+                    nodeRunId, traceparent,
+                    errorCode, cause.getMessage()));
+        } catch (RuntimeException e) {
+            log.warn("audit emit (EXTRACTION_FAILED) failed for nodeRunId={}: {}",
+                    nodeRunId, e.getMessage());
+        }
+    }
+
+    private static String errorCodeFor(Throwable cause) {
+        if (cause instanceof co.uk.wolfnotsheep.extraction.tika.source.DocumentNotFoundException) {
+            return "DOCUMENT_NOT_FOUND";
+        }
+        if (cause instanceof co.uk.wolfnotsheep.extraction.tika.source.DocumentEtagMismatchException) {
+            return "DOCUMENT_ETAG_MISMATCH";
+        }
+        if (cause instanceof co.uk.wolfnotsheep.extraction.tika.parse.UnparseableDocumentException) {
+            return "EXTRACTION_CORRUPT";
+        }
+        if (cause instanceof DocumentTooLargeException) {
+            return "EXTRACTION_TOO_LARGE";
+        }
+        if (cause instanceof UncheckedIOException) {
+            return "EXTRACTION_SOURCE_UNAVAILABLE";
+        }
+        return "EXTRACTION_UNEXPECTED";
     }
 
     private void emitCompleted(ExtractRequest request, String traceparent, ExtractedText extracted, long durationMs) {

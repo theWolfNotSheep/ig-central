@@ -90,13 +90,19 @@ class ExtractControllerTest {
     }
 
     @Test
-    void document_not_found_propagates() {
+    void document_not_found_propagates_and_emits_FAILED_event() {
         when(source.open(any(DocumentRef.class)))
                 .thenThrow(new DocumentNotFoundException(DocumentRef.of("b", "missing")));
 
         assertThatThrownBy(() ->
-                controller.extractDocument(validTraceparent(), request("b", "missing", "n"), null))
+                controller.extractDocument(validTraceparent(), request("b", "missing", "node-nf"), null))
                 .isInstanceOf(DocumentNotFoundException.class);
+
+        ArgumentCaptor<AuditEvent> captor = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditEmitter, times(1)).emit(captor.capture());
+        assertThat(captor.getValue().details().metadata())
+                .containsEntry("errorCode", "DOCUMENT_NOT_FOUND");
+        assertThat(captor.getValue().nodeRunId()).isEqualTo("node-nf");
     }
 
     @Test
@@ -130,7 +136,7 @@ class ExtractControllerTest {
     }
 
     @Test
-    void payload_above_ceiling_raises_too_large() {
+    void payload_above_ceiling_raises_too_large_and_emits_FAILED_event() {
         // Construct a controller with a tiny ceiling so any non-empty text
         // overflows. Source returns enough bytes to extract past the limit.
         ExtractController tinyController = new ExtractController(
@@ -146,9 +152,13 @@ class ExtractControllerTest {
                 tinyController.extractDocument(validTraceparent(),
                         request("b", "k", "n"), null))
                 .isInstanceOf(DocumentTooLargeException.class);
-        // No audit event for failure paths in this PR — handler-side
-        // emission is a follow-up.
-        verify(auditEmitter, never()).emit(any());
+
+        ArgumentCaptor<AuditEvent> captor = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(auditEmitter, times(1)).emit(captor.capture());
+        AuditEvent emitted = captor.getValue();
+        assertThat(emitted.eventType()).isEqualTo("EXTRACTION_FAILED");
+        assertThat(emitted.outcome()).isEqualTo(Outcome.FAILURE);
+        assertThat(emitted.details().metadata()).containsEntry("errorCode", "EXTRACTION_TOO_LARGE");
     }
 
     @Test
