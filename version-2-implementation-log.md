@@ -837,3 +837,32 @@ Phase 0.5 (reference implementation `gls-extraction-tika`) is the natural next p
 - **`_shared/` `$ref` resolution lint pass** — Spectral lint on PR was set up in 0.5; this is the first non-smoke spec to exercise it. Watch for breakage on the next CI run.
 
 **Next:** Phase 0.5.2 — generated server stub + Tika integration + MinIO source/target wiring. Or in parallel: relay hardening (ShedLock + metrics) for 0.7, or wiring the 0.11 load driver.
+
+## 2026-04-27 — Phase 0.5.2 (a) — generated server stub for `gls-extraction-tika`
+
+**Done:** First piece of 0.5.2 — wired `openapi-generator-maven-plugin` into `gls-extraction-tika`'s pom against the contract authored in 0.5.1. The generator emits ~13 model records + the Spring Boot API interface on every Maven build under `target/generated-sources/openapi`. Implementations will live in this module and implement the generated interfaces (Tika integration, MinIO source/target, idempotency — separate follow-ups).
+
+**What's wired:**
+
+- `backend/gls-extraction-tika/pom.xml` — added `swagger-annotations` dep (required by generated `@Operation` / `@Schema` annotations) and an `openapi-generator-maven-plugin` execution. Same config options as `contracts-smoke` (`interfaceOnly=true`, `useSpringBoot3=true`, `useJakartaEe=true`, `skipDefaultInterface=true`, `openApiNullable=false`, `hideGenerationTimestamp=true`, `useTags=true`). Output package: `co.uk.wolfnotsheep.extraction.tika.api` (interface) + `.model` (records).
+- `contracts/extraction/openapi.yaml` (0.1.0 → 0.1.1) — `HealthResponse.components.description` reformatted as a folded scalar. The previous inline form contained the snippet `` `show-components: always` `` — snakeyaml (used by the generator) misread the colon as a YAML mapping key and aborted. Pure docstring change; no surface-area shift.
+- `contracts/extraction/VERSION` (0.1.1).
+- `contracts/extraction/CHANGELOG.md` (0.1.1 entry).
+
+**Decisions logged:** None new. Implements 0.5.2 first-bullet ("generated server stub from contract"); the rest of 0.5.2 (Tika integration, MinIO wiring, idempotency) lands in follow-up PRs.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am compile` clean. Generated sources include `ExtractApi` (interface), `ExtractRequest` / `ExtractResponse` / `HealthResponse` records, plus the inline-vs-ref `oneOf` types for `TextPayload` and the various 4xx response payloads.
+
+**Gotcha logged for the cloneable pattern:** when a docstring contains `` `key: value` ``-style snippets, prefer the folded-scalar form (`description: |`) over the single-line form. Inline backticked-colon strings can pass `asyncapi` / Spectral lint but break `openapi-generator-maven-plugin`'s snakeyaml parser. Add to `docs/service-template.md` once that file lands (0.5.6).
+
+**Files changed:** `backend/gls-extraction-tika/pom.xml`, `contracts/extraction/openapi.yaml`, `contracts/extraction/VERSION`, `contracts/extraction/CHANGELOG.md`, `version-2-implementation-log.md`.
+
+**Open issues (continuing into 0.5.2 follow-ups):**
+
+- **Tika integration** — port from `gls-document-processing`. Returns text inline ≤ 256 KB else `textRef` to MinIO per CSV #19.
+- **`nodeRunId` idempotency** — 24h TTL per CSV #16. Mongo collection + dedup on the in-flight key.
+- **Audit emission** — `EXTRACTION_COMPLETED` / `EXTRACTION_FAILED` Tier 2 events via `gls-platform-audit` (the relay handles the rest).
+- **Health probes** — readiness checks Tika init + MinIO reach.
+- **Dockerfile** — needs the implementation; the placeholder block in `docker-compose.yml` activates with that PR.
+
+**Next:** Tika integration (the meat of 0.5.2). Or in parallel: relay hardening, Hub-side publishers, 0.11 load driver.

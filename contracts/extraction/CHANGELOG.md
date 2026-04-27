@@ -4,6 +4,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-04-27
+
+### Changed
+
+- `HealthResponse.components.description` reformatted as a folded scalar. The previous inline form contained an embedded backticked snippet ending in a colon, which the snakeyaml parser used by `openapi-generator-maven-plugin` interpreted as a YAML mapping key. Pure docstring change; no semantic shift.
+
 ## [0.1.0] — 2026-04-27
 
 ### Added

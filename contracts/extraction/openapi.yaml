@@ -1,7 +1,7 @@
 openapi: 3.1.1
 info:
   title: ig-central — Extraction (Tika)
-  version: 0.1.0
+  version: 0.1.1
   contact:
     name: ig-central engineering
     url: https://github.com/theWolfNotSheep/ig-central
@@ -214,7 +214,8 @@ components:
         components:
           type: object
           additionalProperties: true
-          description: Per-component health breakdown when `show-components: always`.
+          description: |
+            Per-component health breakdown when `show-components` is set to `always`.
 
   securitySchemes:
     serviceJwt:
