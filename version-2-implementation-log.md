@@ -770,3 +770,40 @@ Now 33 checked / 152 unchecked across the plan (was 29 / 156).
 **Files changed:** `version-2-implementation-plan.md`, `version-2-implementation-log.md`.
 
 **Next:** Hub-side bridge (Track A), Phase 0.12 (dev experience), Phase 0.11 load driver, or relay hardening.
+
+## 2026-04-27 — Phase 0.12 — local dev experience
+
+**Done:** Closed out Phase 0.12. One-command bring-up script, commented-out placeholders for the v2 service containers in `docker-compose.yml`, and a refreshed `README.md` Quick Start that matches the post-rename / post-bundling state of the world.
+
+**What's wired:**
+
+- `scripts/dev-up.sh` (new, executable). Pre-flight checks: Docker daemon up, `.env` exists, required keys (`MONGO_PASSWORD`, `ADMIN_PASSWORD`, `JWT_SECRET`) populated. Then `docker compose up --build -d` with optional service-name args + `--no-build` flag, polls `docker compose ps` until every running service reports `healthy`, prints a useful URL summary at the end. Distinct exit codes for pre-flight (1) / compose (2) / health timeout (3).
+- `docker-compose.yml` — added a commented "v2 Phase 1+ services" block at the bottom with placeholder definitions for `gls-extraction-tika` (Phase 0.5), `gls-classifier-router` (Phase 1), `gls-audit-collector` (Phase 1.12 / 0.7 follow-up). Each block follows the same shape; uncomment + tailor when the corresponding Maven module + Dockerfile lands.
+- `README.md` — Quick Start now points at `scripts/dev-up.sh` first (raw `docker compose up` is the fall-back); the obsolete `doc-processor`/`governance-enforcer` invocation is gone (those are bundled into `api` now); access URLs include actuator, Prometheus, Grafana, RabbitMQ admin, MinIO. New "Substrate libraries" subsection points at `gls-platform-audit` and `gls-platform-config`. New "v2 progress" subsection points at the four canonical doc files.
+- `Makefile` — deferred. The plan listed it as an alternative to the script; `dev-up.sh` covers the use case without adding another tool to the build chain. Lift if a maintainer specifically wants it.
+
+**Decisions logged:** None new.
+
+**Verification:** `bash -n scripts/dev-up.sh` clean. The script's pre-flight checks short-circuit before any compose call, so a misconfigured env never produces a half-up stack.
+
+**Files changed:**
+
+- `scripts/dev-up.sh` (new, executable).
+- `docker-compose.yml` — commented placeholder block for v2 services.
+- `README.md` — Quick Start, Local Development, Substrate libraries, v2 progress sections rewritten / added.
+- `version-2-implementation-plan.md` — three 0.12 items checked.
+- `version-2-implementation-log.md` — this entry.
+
+**Open issues:** None blocking. The placeholders are intentionally commented; they activate per-phase as the underlying Maven modules land.
+
+**With this PR, Phase 0 substrate is substantively closed.** Outstanding items remaining anywhere in Phase 0:
+
+- 0.7 library hardening: ShedLock leader election, comprehensive Micrometer metrics, circuit breaker on Rabbit. Operational hardening; lift before multi-replica deployment.
+- 0.7 Python module sketch (for `gls-bert-trainer`) — design doc only, deferred.
+- 0.11 baseline capture: load driver + first real CSV row. Blocked on representative document corpus.
+- Hub-side `gls.config.changed` publishers — Track A.
+- Issue #7 (Testcontainers Mongo cleanup) — blocks integration-test coverage across the substrate.
+
+Phase 0.5 (reference implementation `gls-extraction-tika`) is the natural next phase.
+
+**Next:** Phase 0.5 — pick the first per-service contract + scaffolding. Or relay hardening / load driver wiring.
