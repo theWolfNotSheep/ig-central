@@ -10,6 +10,8 @@ import co.uk.wolfnotsheep.extraction.tika.parse.TikaExtractionService;
 import co.uk.wolfnotsheep.extraction.tika.parse.UnparseableDocumentException;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentEtagMismatchException;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentNotFoundException;
+import co.uk.wolfnotsheep.extraction.tika.sink.DocumentSink;
+import co.uk.wolfnotsheep.extraction.tika.sink.ExtractedTextRef;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentRef;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentSource;
 import co.uk.wolfnotsheep.platformaudit.emit.AuditEmitter;
@@ -30,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -45,16 +48,19 @@ import static org.mockito.Mockito.when;
 class ExtractControllerTest {
 
     private DocumentSource source;
+    private DocumentSink sink;
     private AuditEmitter auditEmitter;
     private ExtractController controller;
 
     @BeforeEach
     void setUp() {
         source = mock(DocumentSource.class);
+        sink = mock(DocumentSink.class);
         auditEmitter = mock(AuditEmitter.class);
         controller = new ExtractController(
                 source,
                 new TikaExtractionService(),
+                sink,
                 providerOf(auditEmitter),
                 /* inlineByteCeiling */ 262_144L,
                 "gls-extraction-tika",
@@ -136,29 +142,51 @@ class ExtractControllerTest {
     }
 
     @Test
-    void payload_above_ceiling_raises_too_large_and_emits_FAILED_event() {
+    void payload_above_ceiling_uploads_via_sink_and_returns_textRef_branch() {
         // Construct a controller with a tiny ceiling so any non-empty text
         // overflows. Source returns enough bytes to extract past the limit.
         ExtractController tinyController = new ExtractController(
-                source, new TikaExtractionService(),
+                source, new TikaExtractionService(), sink,
                 providerOf(auditEmitter),
                 /* inlineByteCeiling */ 4L,
                 "gls-extraction-tika", "0.0.1-SNAPSHOT", "test-instance");
         InputStream payload = new ByteArrayInputStream(
                 "way more than four bytes".getBytes(StandardCharsets.UTF_8));
         when(source.open(any(DocumentRef.class))).thenReturn(payload);
+        when(sink.upload(any(), any())).thenReturn(new ExtractedTextRef(
+                java.net.URI.create("minio://gls-extracted-text/extracted/n.txt"),
+                42L, "text/plain;charset=utf-8"));
 
-        assertThatThrownBy(() ->
+        ResponseEntity<co.uk.wolfnotsheep.extraction.tika.model.ExtractResponse> resp =
                 tinyController.extractDocument(validTraceparent(),
-                        request("b", "k", "n"), null))
-                .isInstanceOf(DocumentTooLargeException.class);
+                        request("b", "k", "n"), null);
 
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var body = resp.getBody();
+        assertThat(body).isNotNull();
+        assertThat(body.getText())
+                .isInstanceOf(co.uk.wolfnotsheep.extraction.tika.model.ExtractResponseTextOneOf1.class);
+        var byRef = (co.uk.wolfnotsheep.extraction.tika.model.ExtractResponseTextOneOf1) body.getText();
+        assertThat(byRef.getTextRef().toString()).isEqualTo("minio://gls-extracted-text/extracted/n.txt");
+        assertThat(byRef.getContentLength()).isEqualTo(42L);
+
+        // Sink-path is a SUCCESS — emits EXTRACTION_COMPLETED, not FAILED.
         ArgumentCaptor<AuditEvent> captor = ArgumentCaptor.forClass(AuditEvent.class);
         verify(auditEmitter, times(1)).emit(captor.capture());
-        AuditEvent emitted = captor.getValue();
-        assertThat(emitted.eventType()).isEqualTo("EXTRACTION_FAILED");
-        assertThat(emitted.outcome()).isEqualTo(Outcome.FAILURE);
-        assertThat(emitted.details().metadata()).containsEntry("errorCode", "EXTRACTION_TOO_LARGE");
+        assertThat(captor.getValue().eventType()).isEqualTo("EXTRACTION_COMPLETED");
+        assertThat(captor.getValue().outcome()).isEqualTo(Outcome.SUCCESS);
+        verify(sink, times(1)).upload(eq("n"), any());
+    }
+
+    @Test
+    void inline_path_does_not_call_the_sink() {
+        InputStream payload = new ByteArrayInputStream("small".getBytes(StandardCharsets.UTF_8));
+        when(source.open(any(DocumentRef.class))).thenReturn(payload);
+
+        controller.extractDocument(validTraceparent(),
+                request("bucket", "doc.txt", "node-inline"), null);
+
+        verify(sink, never()).upload(any(), any());
     }
 
     @Test

@@ -1124,3 +1124,41 @@ The codes match the RFC 7807 mapping in `ExtractionExceptionHandler` so a downst
 - **MinIO sink + idempotency + readiness** still outstanding (next focused PRs).
 
 **Next:** MinIO sink (replaces the `EXTRACTION_TOO_LARGE` 413 with a real `textRef`) or `nodeRunId` idempotency. Or pivot to other Phase 0 follow-ups.
+
+## 2026-04-27 — Phase 0.5.2 (sink) — `textRef` overflow path lands
+
+**Done:** MinIO sink for the >256 KB overflow path. The controller no longer 413s on big extractions — extracted text is uploaded to a MinIO bucket and surfaced on the contract's `textRef` response branch per CSV #19. Inline-vs-ref behaviour is now the full vertical-slice from the spec.
+
+**What's wired:**
+
+- `DocumentSink` (interface) — abstracts the upload so the controller is unit-testable against a fake.
+- `MinioDocumentSink` — uploads UTF-8-encoded extracted text to a configured bucket. Object key is derived from `nodeRunId` (`extracted/<nodeRunId>.txt`) so retries are idempotent at the storage level — a re-extracted document overwrites the same object rather than orphaning the old one. Bucket creation is best-effort on first write.
+- `ExtractedTextRef` (record) — pure return type (`URI`, `contentLength`, `contentType`).
+- `MinioSinkConfig` — `@Configuration` with `@ConditionalOnMissingBean DocumentSink` factory. Reuses the shared `MinioClient` bean from `MinioSourceConfig`. Bucket name is configurable via `gls.extraction.tika.sink.bucket` (default `gls-extracted-text`).
+- `ExtractController` — `DocumentSink` injected; new `buildRefResponse` path uploads via `sink.upload(...)` then constructs the `ExtractResponseTextOneOf1` branch. The 413 exception throw is gone; `DocumentTooLargeException` and the handler entry are retained for future sink-side capacity caps but no longer raised by the controller. Common response building factored into `commonResponse(...)` so inline + ref share the metadata mapping.
+
+**Decisions logged:** None new.
+
+**Tests (1 new + 1 rewritten + 28 existing = 30 total, all green):**
+
+- `payload_above_ceiling_uploads_via_sink_and_returns_textRef_branch` (rewrite of the previous `_raises_too_large_and_emits_FAILED` test) — over-ceiling now succeeds, calls the sink with the right `nodeRunId`, returns the `textRef` branch with the URI/length/contentType from the upload, emits `EXTRACTION_COMPLETED` not FAILED.
+- `inline_path_does_not_call_the_sink` (new) — small extractions don't touch the sink.
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/src/main/java/.../sink/{DocumentSink,MinioDocumentSink,ExtractedTextRef,MinioSinkConfig}.java` (4 new).
+- `backend/gls-extraction-tika/src/main/java/.../web/ExtractController.java` — `DocumentSink` constructor param; over-ceiling path swapped to `buildRefResponse`; helper factoring.
+- `backend/gls-extraction-tika/src/test/java/.../web/ExtractControllerTest.java` — wires the `DocumentSink` mock; replaces the throws-413 test; adds an inline-doesn't-touch-sink guard.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 30/30 pass.
+
+**Open issues (continuing into 0.5.2 follow-ups):**
+
+- **`nodeRunId` idempotency** (CSV #16) — 24h TTL via Mongo. Today the header is still logged only.
+- **Tika + MinIO `HealthIndicator` beans** for actuator readiness.
+- **Metrics** (Micrometer counters, latency histogram, error rate).
+- **JWT validation middleware**.
+- **`MinioDocumentSink` real-MinIO test** — blocked by issue #7's Testcontainers debt; the unit test against mocks covers the orchestration but not the wire-level upload.
+
+**Next:** `nodeRunId` idempotency, or readiness `HealthIndicator`s, or metrics, or pivot to other Phase 0 follow-ups.

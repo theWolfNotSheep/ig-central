@@ -6,8 +6,11 @@ import co.uk.wolfnotsheep.extraction.tika.model.ExtractRequest;
 import co.uk.wolfnotsheep.extraction.tika.model.ExtractResponse;
 import co.uk.wolfnotsheep.extraction.tika.model.ExtractResponseText;
 import co.uk.wolfnotsheep.extraction.tika.model.ExtractResponseTextOneOf;
+import co.uk.wolfnotsheep.extraction.tika.model.ExtractResponseTextOneOf1;
 import co.uk.wolfnotsheep.extraction.tika.parse.ExtractedText;
 import co.uk.wolfnotsheep.extraction.tika.parse.TikaExtractionService;
+import co.uk.wolfnotsheep.extraction.tika.sink.DocumentSink;
+import co.uk.wolfnotsheep.extraction.tika.sink.ExtractedTextRef;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentRef;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentSource;
 import co.uk.wolfnotsheep.platformaudit.emit.AuditEmitter;
@@ -28,14 +31,15 @@ import java.time.Instant;
  * Implements the generated {@link ExtractionApi} interface from
  * {@code contracts/extraction/openapi.yaml}.
  *
- * <p>Pipeline: source.open → tika.extract → response shape. Inline-only
- * for now — payloads above the configured byte ceiling raise
- * {@link DocumentTooLargeException} (mapped to 413 by the exception
- * handler). The MinIO sink for the {@code textRef} path lands in a
- * follow-up PR.
+ * <p>Pipeline: {@code source.open} → {@code tika.extract} → response
+ * shape. Payloads above {@code inlineByteCeiling} are uploaded to a
+ * MinIO sink and surfaced on the contract's {@code textRef} branch
+ * per CSV #19; smaller payloads land inline. {@link DocumentTooLargeException}
+ * is retained for future sink-side capacity caps but is not raised by
+ * this controller today.
  *
- * <p>{@code nodeRunId} idempotency (CSV #16) is also a follow-up; until
- * then the {@code Idempotency-Key} header is logged but not consulted.
+ * <p>{@code nodeRunId} idempotency (CSV #16) is a follow-up — until then
+ * the {@code Idempotency-Key} header is logged but not consulted.
  */
 @RestController
 public class ExtractController implements ExtractionApi {
@@ -45,6 +49,7 @@ public class ExtractController implements ExtractionApi {
 
     private final DocumentSource source;
     private final TikaExtractionService tika;
+    private final DocumentSink sink;
     private final ObjectProvider<AuditEmitter> auditEmitterProvider;
     private final long inlineByteCeiling;
     private final String serviceName;
@@ -54,6 +59,7 @@ public class ExtractController implements ExtractionApi {
     public ExtractController(
             DocumentSource source,
             TikaExtractionService tika,
+            DocumentSink sink,
             ObjectProvider<AuditEmitter> auditEmitterProvider,
             @Value("${gls.extraction.tika.inline-byte-ceiling:262144}") long inlineByteCeiling,
             @Value("${spring.application.name:gls-extraction-tika}") String serviceName,
@@ -61,6 +67,7 @@ public class ExtractController implements ExtractionApi {
             @Value("${HOSTNAME:unknown}") String instanceId) {
         this.source = source;
         this.tika = tika;
+        this.sink = sink;
         this.auditEmitterProvider = auditEmitterProvider;
         this.inlineByteCeiling = inlineByteCeiling;
         this.serviceName = serviceName;
@@ -111,19 +118,12 @@ public class ExtractController implements ExtractionApi {
         }
 
         long textBytes = extracted.text().getBytes(StandardCharsets.UTF_8).length;
-        if (textBytes > inlineByteCeiling) {
-            // Sink lands in a follow-up; for now we surface this honestly
-            // rather than silently overflowing into an unbounded inline
-            // payload. See PR description for the textRef plan.
-            throw new DocumentTooLargeException(
-                    "extracted text is " + textBytes
-                            + " bytes; inline ceiling is " + inlineByteCeiling
-                            + ". MinIO sink (textRef) lands in a follow-up PR.");
-        }
-
         long durationMs = Duration.between(started, Instant.now()).toMillis();
         emitCompleted(request, traceparent, extracted, durationMs);
-        ExtractResponse response = buildInlineResponse(request, extracted, durationMs);
+
+        ExtractResponse response = textBytes > inlineByteCeiling
+                ? buildRefResponse(request, extracted, durationMs)
+                : buildInlineResponse(request, extracted, durationMs);
         return ResponseEntity.ok(response);
     }
 
@@ -200,10 +200,24 @@ public class ExtractController implements ExtractionApi {
         ExtractResponseTextOneOf inline = new ExtractResponseTextOneOf();
         inline.setText(extracted.text());
         inline.setEncoding(ExtractResponseTextOneOf.EncodingEnum.UTF_8);
+        return commonResponse(request, extracted, durationMs, inline);
+    }
 
+    private ExtractResponse buildRefResponse(
+            ExtractRequest request, ExtractedText extracted, long durationMs) {
+        ExtractedTextRef ref = sink.upload(request.getNodeRunId(), extracted.text());
+        ExtractResponseTextOneOf1 byRef = new ExtractResponseTextOneOf1();
+        byRef.setTextRef(ref.uri());
+        byRef.setContentLength(ref.contentLength());
+        byRef.setContentType(ref.contentType());
+        return commonResponse(request, extracted, durationMs, byRef);
+    }
+
+    private static ExtractResponse commonResponse(
+            ExtractRequest request, ExtractedText extracted, long durationMs, ExtractResponseText text) {
         ExtractResponse response = new ExtractResponse();
         response.setNodeRunId(request.getNodeRunId());
-        response.setText((ExtractResponseText) inline);
+        response.setText(text);
         response.setDetectedMimeType(extracted.detectedMimeType());
         response.setPageCount(extracted.pageCount());
         response.setDurationMs((int) Math.min(Integer.MAX_VALUE, durationMs));
