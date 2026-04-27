@@ -17,6 +17,13 @@
 
     <dependencies>
 
+        <!-- ==================== Internal Modules ==================== -->
+
+        <dependency>
+            <groupId>co.uk.wolfnotsheep.platformconfig</groupId>
+            <artifactId>gls-platform-config</artifactId>
+        </dependency>
+
         <!-- ==================== Spring Boot Starters ==================== -->
 
         <dependency>
@@ -85,6 +92,21 @@
         <dependency>
             <groupId>commons-logging</groupId>
             <artifactId>commons-logging</artifactId>
+        </dependency>
+
+        <!-- ==================== Test ==================== -->
+
+        <!--
+          ConfigChangePublisher (in gls-platform-config) references
+          spring-amqp types via an optional dep. Pulling spring-amqp into
+          the gls-platform test classpath lets Mockito instrument the
+          publisher class for AppConfigServiceTest. Not needed at runtime
+          — gls-app-assembly brings it via its own deps.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+            <scope>test</scope>
         </dependency>
 
     </dependencies>

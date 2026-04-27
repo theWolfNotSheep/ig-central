@@ -638,3 +638,43 @@ Local `./mvnw -pl gls-platform-audit compile` is clean.
 - **Real-broker integration tests** — blocked by issue #7 (Testcontainers MongoDB cleanup, but RabbitMQ Testcontainer should also be exercised once we have a working test harness).
 
 **Next:** AppConfigService migration (closes the easiest 0.8 follow-up), MCP cache migration, or pivot to Phase 0.12 (dev experience), the 0.11 load driver, or relay hardening.
+
+## 2026-04-27 — Phase 0.8 (AppConfigService migration) — first consumer on the new pattern
+
+**Done:** Migrated `AppConfigService` from its hand-rolled `ConcurrentHashMap` to the `gls-platform-config` `ConfigCache` + `ConfigChangePublisher` pair. The cache now registers with the global `ConfigCacheRegistry` under `entityType=APP_CONFIG`; mutations publish a `ConfigChangedEvent` so peer replicas drop their stale entries the moment a write commits, regardless of which replica took it.
+
+This is the first consumer on the new pattern — proves the API holds up against a real call site.
+
+**Decisions logged:** None new. Implements CSV #30.
+
+**What changed:**
+
+- `AppConfigService` constructor now takes `ConfigCacheRegistry` (always present, registered by the auto-config) and `ObjectProvider<ConfigChangePublisher>` (optional — the `getIfAvailable()` pattern lets the service work in test contexts and broker-less environments without forcing every consumer to depend on Rabbit).
+- `cache` is a `ConfigCache<AppConfig>` registered with the registry on construction.
+- `get(key)` is the canonical read-through call: `cache.get(k, loader)`. First miss hits Mongo; second hit serves from the in-memory cache.
+- `save(key, ...)` distinguishes CREATED vs UPDATED based on whether the existing record had an id, then invalidates the local cache + publishes a single-entity event. The dispatcher on this replica also receives its own message and re-invalidates — a slight redundancy that makes the code paths uniform across replicas.
+- `refresh()` flushes the local cache + publishes a bulk event so peers do the same. Matches the prior admin-refresh semantic.
+- `loadAll()` removed — it was a build-up step the new lazy cache makes redundant. The single caller (`refresh`) used it as an alias.
+
+**Tests:** 8 new tests in `AppConfigServiceTest` covering registry registration, cache hit/miss, CREATED vs UPDATED on save, post-save re-load, bulk refresh, and the offline-publisher path (no broker → no publish, save still succeeds).
+
+**Implementation note worth flagging:**
+
+- `ConfigChangePublisher` references `org.springframework.amqp.AmqpException` via the optional `spring-boot-starter-amqp` dep that `gls-platform-config` ships. Mockito needs the class on the classpath to instrument it, so `gls-platform/pom.xml` now declares spring-amqp at test scope. Runtime is unchanged: `gls-app-assembly` already brings the broker dep transitively.
+
+**Files changed:**
+
+- `backend/gls-platform/pom.xml` — added `gls-platform-config` (compile) + `spring-boot-starter-amqp` (test scope).
+- `backend/gls-platform/src/main/java/.../config/services/AppConfigService.java` — full rewrite onto the new primitives. Public API unchanged for callers (`get`, `getValue`, `getByCategory`, `getAll`, `save`, `refresh`).
+- `backend/gls-platform/src/test/java/.../config/services/AppConfigServiceTest.java` (new) — 8 tests.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-platform-config,gls-platform,gls-platform-audit -am test` — 61/61 pass across the three platform modules. Consumer compile (`gls-app-assembly`) clean.
+
+**Open issues (deferred to follow-ups):**
+
+- **MCP server's Caffeine cache replacement.** Original target of CSV #30. Same pattern as this PR — different consumer.
+- **Hub-side publisher wiring.** Track A.
+- **End-to-end runtime smoke** — boot the api, mutate a config entry, observe the `gls.config.changed` message land on the broker. Best done after a peer replica is wired (otherwise nothing's listening).
+
+**Next:** MCP cache migration to close the second 0.8 follow-up, then pivot to Phase 0.12 (dev experience), the 0.11 load driver, or relay hardening.
