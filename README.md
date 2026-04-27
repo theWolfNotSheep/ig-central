@@ -101,14 +101,24 @@ Mark documents with a legal hold to prevent deletion or archival, regardless of 
 ## Quick Start
 
 ```bash
-# Clone and start all services
-docker compose up --build mongo elasticsearch api web nginx mcp-server llm-worker doc-processor governance-enforcer -d
+# One-command bring-up: validates .env, builds images, waits for healthy.
+scripts/dev-up.sh
+
+# Or, if you prefer raw compose:
+docker compose up --build -d
 
 # Access
-http://localhost          # Homepage
-http://localhost/login    # Login
-http://localhost/dashboard # Dashboard (auth required)
+http://localhost              # Homepage
+http://localhost/login        # Login
+http://localhost/dashboard    # Dashboard (auth required)
+http://localhost:8080/actuator/health   # API health
+http://localhost:9090         # Prometheus
+http://localhost:3003         # Grafana (admin / admin)
+http://localhost:15672        # RabbitMQ admin (guest / guest)
+http://localhost:9001         # MinIO console
 ```
+
+The doc-processor and governance-enforcer modules used to ship as separate containers; they are now bundled into the `api` container (per `gls-app-assembly`'s startup wiring). New v2 services arrive as commented-out placeholders in `docker-compose.yml` — uncomment per phase.
 
 ## Local Development
 
@@ -116,9 +126,29 @@ http://localhost/dashboard # Dashboard (auth required)
 # Backend
 cd backend && ./mvnw compile -DskipTests -pl gls-app-assembly -am
 
+# Backend tests (per module, fast)
+cd backend && ./mvnw -pl gls-platform-audit,gls-platform-config -am test
+
 # Frontend
 cd web && npm install && npm run dev
+
+# OpenAPI / AsyncAPI contract lint (Spectral)
+pre-commit run --all-files     # or: spectral lint contracts/**/*.yaml
 ```
+
+The architecture is contract-first: every service-to-service interface is declared under `contracts/` (OpenAPI 3.1.1 for sync, AsyncAPI 3.0 for async, JSON Schema 2020-12 for shared envelopes) before any code lands. See `CLAUDE.md` for the rules.
+
+### Substrate libraries
+
+- **`gls-platform-audit`** — outbox-pattern audit emitter, schema-validating, with the outbox-to-Rabbit relay. Single dependency every JVM service imports for audit traffic. See `backend/gls-platform-audit/README.md`.
+- **`gls-platform-config`** — change-driven config-cache primitive. Replaces the previous Caffeine TTL pattern; per-replica in-memory cache, invalidated via the `gls.config.changed` Rabbit channel. See `backend/gls-platform-config/README.md`.
+
+### v2 progress
+
+- `version-2-architecture.md` — how the system works.
+- `version-2-decision-tree.csv` — every architectural decision (DECIDED / RECOMMENDED / OPEN / DEFERRED).
+- `version-2-implementation-plan.md` — phased plan with acceptance gates and `[x]` / `[ ]` checkboxes.
+- `version-2-implementation-log.md` — append-only record of what's actually shipped.
 
 ## Tech Stack
 

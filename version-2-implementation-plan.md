@@ -134,9 +134,9 @@ Single decision: do new services deploy to K8s or stay on Docker Compose for v1?
 - [x] Document the measurement methodology so it's repeatable each phase. (`baselines/README.md`.)
 
 #### 0.12 Local dev experience updates
-- [ ] Update `docker-compose.yml` with placeholder service definitions (commented out) for the new containers.
-- [ ] `make dev-up` / `scripts/dev-up.sh` — one-command bring-up for the new architecture.
-- [ ] Updated `README.md` with the v2 dev instructions.
+- [x] Update `docker-compose.yml` with placeholder service definitions (commented out) for the new containers.
+- [x] `make dev-up` / `scripts/dev-up.sh` — one-command bring-up for the new architecture. (`scripts/dev-up.sh`; `Makefile` deferred — no need yet.)
+- [x] Updated `README.md` with the v2 dev instructions.
 
 ### Acceptance gate
 

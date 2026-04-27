@@ -348,6 +348,68 @@ services:
     networks:
       - gls
 
+  # ====================================================================
+  # v2 Phase 1+ services — placeholders.
+  #
+  # These are the services that land as the v2 cutover progresses. Each
+  # block stays commented out until its phase begins; uncomment + fill in
+  # when the corresponding `gls-<service>/` Maven module + Dockerfile
+  # exists. The shape below is the cloneable pattern from
+  # `docs/service-template.md` (lands with Phase 0.5 reference impl).
+  # See `version-2-implementation-plan.md` for phase ownership.
+  # ====================================================================
+
+  # gls-extraction-tika:                                  # Phase 0.5
+  #   container_name: ${COMPOSE_PROJECT_NAME:-gls}-extraction-tika
+  #   restart: unless-stopped
+  #   build:
+  #     context: ./backend
+  #     dockerfile: gls-extraction-tika/Dockerfile
+  #   environment:
+  #     SPRING_PROFILES_ACTIVE: docker
+  #     SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+  #     RABBITMQ_HOST: rabbitmq
+  #     MINIO_ENDPOINT: http://minio:9000
+  #   depends_on:
+  #     mongo: { condition: service_healthy }
+  #     rabbitmq: { condition: service_healthy }
+  #     minio: { condition: service_healthy }
+  #   logging: *default-logging
+  #   networks: [gls]
+
+  # gls-classifier-router:                                # Phase 1
+  #   container_name: ${COMPOSE_PROJECT_NAME:-gls}-classifier-router
+  #   restart: unless-stopped
+  #   build:
+  #     context: ./backend
+  #     dockerfile: gls-classifier-router/Dockerfile
+  #   environment:
+  #     SPRING_PROFILES_ACTIVE: docker
+  #     SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+  #     RABBITMQ_HOST: rabbitmq
+  #   depends_on:
+  #     mongo: { condition: service_healthy }
+  #     rabbitmq: { condition: service_healthy }
+  #   logging: *default-logging
+  #   networks: [gls]
+
+  # gls-audit-collector:                                  # Phase 1.12 / 0.7 follow-up
+  #   container_name: ${COMPOSE_PROJECT_NAME:-gls}-audit-collector
+  #   restart: unless-stopped
+  #   build:
+  #     context: ./backend
+  #     dockerfile: gls-audit-collector/Dockerfile
+  #   environment:
+  #     SPRING_PROFILES_ACTIVE: docker
+  #     SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+  #     RABBITMQ_HOST: rabbitmq
+  #     # Tier 1 / Tier 2 backends are wired here when 0.7 / 1.12 land.
+  #   depends_on:
+  #     mongo: { condition: service_healthy }
+  #     rabbitmq: { condition: service_healthy }
+  #   logging: *default-logging
+  #   networks: [gls]
+
 volumes:
   grafana_data:
 
