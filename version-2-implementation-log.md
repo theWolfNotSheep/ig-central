@@ -952,3 +952,51 @@ Phase 0.5 (reference implementation `gls-extraction-tika`) is the natural next p
 - **Audit emission** via `gls-platform-audit`.
 
 **Next:** Controller + inline-only response shaping (no MinIO sink yet — fail with 413 on overflow until the sink lands). Or pivot to relay hardening / Hub-side / load driver.
+
+## 2026-04-27 — Phase 0.5.2 (d) — controller + RFC 7807 handler + Spring main
+
+**Done:** End of the inline-only vertical slice for `gls-extraction-tika`. The generated `ExtractionApi` interface now has a real implementation: `ExtractController` orchestrates `DocumentSource.open` → `TikaExtractionService.extract` → `ExtractResponse`. `ExtractionExceptionHandler` maps the four domain exception types to RFC 7807 (CSV #17). Spring main class + `application.yaml` make the module bootable. **20 tests across the module, all green.**
+
+**What's wired:**
+
+- `GlsExtractionTikaApplication` — `@SpringBootApplication` main class.
+- `application.yaml` — server port 8080, MinIO endpoint defaults, Tika `max-characters` (500_000) + `inline-byte-ceiling` (262_144 = 256 KB per CSV #19), Actuator `health` / `info` / `prometheus`.
+- `ExtractController` (`@RestController implements ExtractionApi`) — happy path: open the source, run Tika, build inline `ExtractResponse` with `costUnits = byteCount / 1024` (CSV #22). Above the byte ceiling raises `DocumentTooLargeException` → 413 (the MinIO sink → `textRef` path lands in a follow-up). Idempotency-Key header is logged but not consulted yet (cache layer → follow-up).
+- `DocumentTooLargeException` — semantic exception for the inline overflow. Goes away when the sink lands.
+- `ExtractionExceptionHandler` (`@RestControllerAdvice`) — maps:
+  - `DocumentNotFoundException` → 404 `DOCUMENT_NOT_FOUND`
+  - `DocumentEtagMismatchException` → 409 `DOCUMENT_ETAG_MISMATCH`
+  - `UnparseableDocumentException` → 422 `EXTRACTION_CORRUPT`
+  - `DocumentTooLargeException` → 413 `EXTRACTION_TOO_LARGE`
+  - `UncheckedIOException` → 503 `EXTRACTION_SOURCE_UNAVAILABLE`
+  Adds `code`, `retryable`, `timestamp` extension fields; sets `type` to `https://gls.local/errors/<CODE>`.
+
+**Implementation note worth flagging:**
+
+The OpenAPI spec uses a `oneOf` discriminator-by-`kind` for `TextPayload`, but the generator's emitted `ExtractResponseTextOneOf` doesn't carry a `kind` field — the discriminator is implicit in *which* branch is instantiated. Caught by a compile error after the controller blindly called `setKind(...)`; fix was to drop the call. **Add to `docs/service-template.md` (0.5.6):** with `openapi-generator-maven-plugin` 7.10.0, `oneOf` schemas don't materialise the discriminator field — rely on the implementing class identity instead.
+
+**Tests (6 new + 14 existing = 20 total, all green):**
+
+- `ExtractControllerTest` (new, 6) — happy path returns 200 with inline text + correct `nodeRunId` / `detectedMimeType` / `costUnits`; `DocumentNotFoundException` propagates; `DocumentEtagMismatchException` propagates with etag carried through; `UnparseableDocumentException` propagates on misleading-extension corrupt bytes; over-ceiling payload raises `DocumentTooLargeException`; controller still implements `ExtractionApi` (compile-time invariant + runtime guard).
+- Wires a real `TikaExtractionService` against a mocked `DocumentSource` — Tika is the substrate we want to exercise; the source is the boundary we want to mock.
+- No MockMvc — direct method calls. The exception handler isn't exercised at this level (it's the MVC pipeline's job to invoke it); a wider-scoped test follows when we have a real broker / Mongo Testcontainer.
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/src/main/java/.../GlsExtractionTikaApplication.java` (new).
+- `backend/gls-extraction-tika/src/main/resources/application.yaml` (new).
+- `backend/gls-extraction-tika/src/main/java/.../web/{ExtractController,DocumentTooLargeException,ExtractionExceptionHandler}.java` (3 new).
+- `backend/gls-extraction-tika/src/test/java/.../web/ExtractControllerTest.java` (new).
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 20/20 pass.
+
+**Open issues (continuing into 0.5.2 follow-ups):**
+
+- **MinIO sink** — uploads extracted text > 256 KB to `gls-extracted-text` bucket; controller switches to `textRef` branch instead of 413.
+- **`nodeRunId` idempotency** (CSV #16) — 24h TTL via Mongo. Today the header is logged only.
+- **Audit emission** — `EXTRACTION_COMPLETED` / `EXTRACTION_FAILED` Tier 2 events via `gls-platform-audit` (the relay handles the publishing; emitter is a one-liner).
+- **Dockerfile** — module is now bootable; the placeholder block in `docker-compose.yml` activates with the Dockerfile PR.
+- **Capabilities + Health endpoints** — `getCapabilities` and `getHealth` are still abstract on `ExtractionApi`. Implementing them is mechanical; punted to keep this PR focused on the extract path.
+
+**Next:** MinIO sink + `getCapabilities` + `getHealth` implementations + Dockerfile (the next vertical slice). Or pivot to the relay hardening, Hub-side, or load driver.
