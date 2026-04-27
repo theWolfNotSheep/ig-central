@@ -1,6 +1,7 @@
 package co.uk.wolfnotsheep.extraction.tika.web;
 
 import co.uk.wolfnotsheep.extraction.tika.api.ExtractionApi;
+import co.uk.wolfnotsheep.extraction.tika.audit.ExtractionEvents;
 import co.uk.wolfnotsheep.extraction.tika.model.ExtractRequest;
 import co.uk.wolfnotsheep.extraction.tika.model.ExtractResponse;
 import co.uk.wolfnotsheep.extraction.tika.model.ExtractResponseText;
@@ -9,8 +10,10 @@ import co.uk.wolfnotsheep.extraction.tika.parse.ExtractedText;
 import co.uk.wolfnotsheep.extraction.tika.parse.TikaExtractionService;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentRef;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentSource;
+import co.uk.wolfnotsheep.platformaudit.emit.AuditEmitter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
@@ -42,15 +45,27 @@ public class ExtractController implements ExtractionApi {
 
     private final DocumentSource source;
     private final TikaExtractionService tika;
+    private final ObjectProvider<AuditEmitter> auditEmitterProvider;
     private final long inlineByteCeiling;
+    private final String serviceName;
+    private final String serviceVersion;
+    private final String instanceId;
 
     public ExtractController(
             DocumentSource source,
             TikaExtractionService tika,
-            @Value("${gls.extraction.tika.inline-byte-ceiling:262144}") long inlineByteCeiling) {
+            ObjectProvider<AuditEmitter> auditEmitterProvider,
+            @Value("${gls.extraction.tika.inline-byte-ceiling:262144}") long inlineByteCeiling,
+            @Value("${spring.application.name:gls-extraction-tika}") String serviceName,
+            @Value("${gls.extraction.build.version:0.0.1-SNAPSHOT}") String serviceVersion,
+            @Value("${HOSTNAME:unknown}") String instanceId) {
         this.source = source;
         this.tika = tika;
+        this.auditEmitterProvider = auditEmitterProvider;
         this.inlineByteCeiling = inlineByteCeiling;
+        this.serviceName = serviceName;
+        this.serviceVersion = serviceVersion;
+        this.instanceId = instanceId;
     }
 
     @Override
@@ -91,8 +106,30 @@ public class ExtractController implements ExtractionApi {
         }
 
         long durationMs = Duration.between(started, Instant.now()).toMillis();
+        emitCompleted(request, traceparent, extracted, durationMs);
         ExtractResponse response = buildInlineResponse(request, extracted, durationMs);
         return ResponseEntity.ok(response);
+    }
+
+    private void emitCompleted(ExtractRequest request, String traceparent, ExtractedText extracted, long durationMs) {
+        AuditEmitter emitter = auditEmitterProvider.getIfAvailable();
+        if (emitter == null) {
+            return;
+        }
+        try {
+            emitter.emit(ExtractionEvents.completed(
+                    serviceName, serviceVersion, instanceId,
+                    request.getNodeRunId(), traceparent,
+                    extracted.detectedMimeType(), extracted.pageCount(),
+                    extracted.byteCount(), durationMs, extracted.truncated()));
+        } catch (RuntimeException e) {
+            // Audit emission must never sink the response. The outbox
+            // is durable; if the write itself fails the cause is the
+            // emitter / Mongo, and the user-facing extract result is
+            // still correct.
+            log.warn("audit emit (EXTRACTION_COMPLETED) failed for nodeRunId={}: {}",
+                    request.getNodeRunId(), e.getMessage());
+        }
     }
 
     // ---- helpers -----------------------------------------------------

@@ -1048,3 +1048,40 @@ The OpenAPI spec uses a `oneOf` discriminator-by-`kind` for `TextPayload`, but t
 - **Existing `backend/Dockerfile` and `Dockerfile.mcp`** quietly miss the `contracts/` tree at build time. The api jar's bundled audit schema is therefore likely not present in deployed containers — separate fix, possibly the cause of subtly-different runtime behaviour.
 
 **Next:** Sink + idempotency + audit emission (the remaining 0.5.2 items). Or pivot to fixing `backend/Dockerfile`'s contracts-context issue, relay hardening, or load driver.
+
+## 2026-04-27 — Phase 0.5.3 (audit success path) — `EXTRACTION_COMPLETED` emission
+
+**Done:** First per-service split actually using the `gls-platform-audit` substrate. The success path of `POST /v1/extract` now emits an `EXTRACTION_COMPLETED` Tier 2 audit event via `AuditEmitter`. The failure-path emission (from the exception handler) is the next focused PR.
+
+**What's wired:**
+
+- `ExtractionEvents` (factory) — pure (no Spring, no Mongo), unit-testable. Builds Tier 2 envelopes for `EXTRACTION_COMPLETED` (success) and `EXTRACTION_FAILED` (failure). `eventId` is 26 uppercase hex chars from a `UUID.randomUUID()` — satisfies the envelope schema's Crockford-base32 pattern (which excludes `I L O U`; hex digits + A–F use none of those). Sortability is sacrificed compared to a real ULID — flagged for the deferred `gls-platform-audit` ULID utility.
+- `ExtractController` — `@Autowired` `ObjectProvider<AuditEmitter>` (graceful when the bean is absent — broker-less test contexts and partial-stack runs both work). After successful extract, builds the envelope from `ExtractionEvents.completed(...)` and calls `emitter.emit(...)`. Audit failures are logged, never re-raised — the outbox is durable; if the write itself fails the cause is the emitter / Mongo, and the user-facing extract result is still correct.
+- Service identity (`spring.application.name`, `gls.extraction.build.version`, `HOSTNAME`) is sourced from configuration so the actor block is accurate per deployment.
+
+**Decisions logged:** None new.
+
+**Tests (6 new + 23 existing = 29 total, all green):**
+
+- `ExtractionEventsTest` (4) — completed event passes the bundled schema (`EnvelopeValidator.fromBundledSchema()`); null mime / pageCount fields omitted; failed event passes schema with errorMessage on `details.content`; eventId format satisfies the Crockford-base32 pattern at runtime (belt-and-braces beyond the validator-driven check).
+- `ExtractControllerTest` (2 added) — successful extract emits the right envelope (eventType / tier / outcome / action / nodeRunId / traceparent / actor.service / metadata); audit emit failure does NOT sink the response.
+- `payload_above_ceiling_raises_too_large` — added a `verify(auditEmitter, never()).emit(any())` assertion (failure path doesn't emit yet).
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/src/main/java/.../audit/ExtractionEvents.java` (new).
+- `backend/gls-extraction-tika/src/main/java/.../web/ExtractController.java` — `ObjectProvider<AuditEmitter>` + `serviceName` / `serviceVersion` / `instanceId` constructor params; `emitCompleted(...)` invocation on the success path; failure-tolerant.
+- `backend/gls-extraction-tika/src/test/java/.../audit/ExtractionEventsTest.java` (new — 4 tests).
+- `backend/gls-extraction-tika/src/test/java/.../web/ExtractControllerTest.java` — wires the `AuditEmitter` mock; adds 2 audit-specific tests.
+- `version-2-implementation-plan.md` — 0.5.3 audit bullet inline-noted: success-path landed; failure-path still outstanding.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 29/29 pass.
+
+**Open issues:**
+
+- **Failure-path audit emission** — `ExtractionExceptionHandler` should emit `EXTRACTION_FAILED` for the relevant exception types. Need traceparent + nodeRunId in scope at handler time (request-scoped bean or `RequestAttributes`). Next focused PR.
+- **ULID utility** in `gls-platform-audit` — replace the UUID-hex stand-in with a proper ULID once the utility lands.
+- **Per-service Mongock wiring** — currently the audit_outbox indexes only exist if `gls-app-assembly` has booted at least once against the same Mongo. If `gls-extraction-tika` is the first writer, the unique index on `eventId` will be missing. Either Mongock is wired into every service (preferred) or the indexes are bootstrapped lazily.
+
+**Next:** Failure-path audit emission, MinIO sink for `textRef`, `nodeRunId` idempotency, or other follow-ups.
