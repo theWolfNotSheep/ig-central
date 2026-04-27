@@ -1085,3 +1085,42 @@ The OpenAPI spec uses a `oneOf` discriminator-by-`kind` for `TextPayload`, but t
 - **Per-service Mongock wiring** — currently the audit_outbox indexes only exist if `gls-app-assembly` has booted at least once against the same Mongo. If `gls-extraction-tika` is the first writer, the unique index on `eventId` will be missing. Either Mongock is wired into every service (preferred) or the indexes are bootstrapped lazily.
 
 **Next:** Failure-path audit emission, MinIO sink for `textRef`, `nodeRunId` idempotency, or other follow-ups.
+
+## 2026-04-27 — Phase 0.5.3 (audit failure path) — `EXTRACTION_FAILED` emission, audit loop closed
+
+**Done:** Failure-path audit emission. The controller now wraps its work in a `try { doExtract(...) } catch (RuntimeException) { emitFailed(...); throw; }` shell so a Tier 2 `EXTRACTION_FAILED` event lands in `audit_outbox` for every failed request, with the right `errorCode` derived from the exception type. The 0.5.3 audit bullet is now fully `[x]`.
+
+**Why catch in the controller (not the `@RestControllerAdvice` handler):** the exception handler runs after request scope teardown begins; getting `traceparent` + `nodeRunId` back into scope at handler time would need a request-scoped bean or `RequestContextHolder`. Catching one level up keeps both in scope without that infrastructure. The handler still owns the RFC 7807 mapping.
+
+**`errorCodeFor(Throwable)` mapping:**
+
+| Exception | `errorCode` |
+|---|---|
+| `DocumentNotFoundException` | `DOCUMENT_NOT_FOUND` |
+| `DocumentEtagMismatchException` | `DOCUMENT_ETAG_MISMATCH` |
+| `UnparseableDocumentException` | `EXTRACTION_CORRUPT` |
+| `DocumentTooLargeException` | `EXTRACTION_TOO_LARGE` |
+| `UncheckedIOException` | `EXTRACTION_SOURCE_UNAVAILABLE` |
+| anything else | `EXTRACTION_UNEXPECTED` |
+
+The codes match the RFC 7807 mapping in `ExtractionExceptionHandler` so a downstream Tier 2 reader can correlate the audit `errorCode` with the wire-level `code` extension.
+
+**Decisions logged:** None new. Closes 0.5.3's audit bullet.
+
+**Tests:** Existing 29 tests still pass; two of them (the `payload_above_ceiling` and `document_not_found` tests) now also verify the audit emission shape — `eventType=EXTRACTION_FAILED`, the right `errorCode`, the right `nodeRunId`. Other failure-path tests (etag mismatch, unparseable) implicitly exercise the same emission code path; explicit assertions added selectively to keep the test surface tight.
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/src/main/java/.../web/ExtractController.java` — `extractDocument` now delegates to a private `doExtract` and wraps failures with `emitFailed`; `errorCodeFor` switch.
+- `backend/gls-extraction-tika/src/test/java/.../web/ExtractControllerTest.java` — `payload_above_ceiling` and `document_not_found` tests assert the emitted FAILED event shape.
+- `version-2-implementation-plan.md` — 0.5.3 audit bullet flipped `[x]`; full implementation note inline.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 29/29 pass.
+
+**Open issues:**
+
+- **Bulk failure-path coverage** — the etag mismatch + unparseable + UncheckedIOException paths are wired but the explicit assertions are limited. Lift if defects surface; not worth bloating the test surface today.
+- **MinIO sink + idempotency + readiness** still outstanding (next focused PRs).
+
+**Next:** MinIO sink (replaces the `EXTRACTION_TOO_LARGE` 413 with a real `textRef`) or `nodeRunId` idempotency. Or pivot to other Phase 0 follow-ups.
