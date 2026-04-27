@@ -180,7 +180,7 @@ Why this service: it's the simplest member of the extraction family, has a small
 - [ ] Idempotency on `nodeRunId` with 24h TTL (per CSV #16).
 
 #### 0.5.3 Cross-cutting concerns (the template)
-- [ ] **Audit:** writes to `audit_outbox` for `EXTRACTION_COMPLETED` (Tier 2) and `EXTRACTION_FAILED` (Tier 2). No Tier 1 events for extraction.
+- [ ] **Audit:** writes to `audit_outbox` for `EXTRACTION_COMPLETED` (Tier 2) and `EXTRACTION_FAILED` (Tier 2). No Tier 1 events for extraction. (Success-path emission landed via `ExtractionEvents.completed` + the `AuditEmitter` bean injected into the controller; **failure-path emission from the exception handler still outstanding**.)
 - [ ] **Tracing:** `traceparent` propagation; spans for `tika.parse`, `minio.fetch`.
 - [ ] **Health probes:** liveness (process alive), readiness (MinIO reachable, Tika initialised). (Basic `getHealth` + Spring Actuator `health` endpoint landed; **dedicated readiness `HealthIndicator` beans for Tika + MinIO still outstanding**.)
 - [x] **Error returns:** RFC 7807 with `EXTRACTION_OOM`, `EXTRACTION_CORRUPT`, `EXTRACTION_TIMEOUT` codes. (`ExtractionExceptionHandler` maps `DocumentNotFoundException` → 404 `DOCUMENT_NOT_FOUND`, `DocumentEtagMismatchException` → 409 `DOCUMENT_ETAG_MISMATCH`, `UnparseableDocumentException` → 422 `EXTRACTION_CORRUPT`, `DocumentTooLargeException` → 413 `EXTRACTION_TOO_LARGE`, `UncheckedIOException` → 503 `EXTRACTION_SOURCE_UNAVAILABLE`. `EXTRACTION_OOM` / `EXTRACTION_TIMEOUT` not yet thrown — they apply once async parsing / circuit breakers land.)
