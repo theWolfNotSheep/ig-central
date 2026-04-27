@@ -30,6 +30,7 @@
         <gls.mcp.version>${gls.version}</gls.mcp.version>
         <gls.orchestrator.version>${gls.version}</gls.orchestrator.version>
         <gls.hub.version>${gls.version}</gls.hub.version>
+        <gls.extraction.version>${gls.version}</gls.extraction.version>
     </properties>
 
     <dependencyManagement>
@@ -53,6 +54,12 @@
                 <groupId>co.uk.wolfnotsheep.platformconfig</groupId>
                 <artifactId>gls-platform-config</artifactId>
                 <version>${gls.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.extraction</groupId>
+                <artifactId>gls-extraction-tika</artifactId>
+                <version>${gls.extraction.version}</version>
             </dependency>
 
             <!-- ==================== Governance ==================== -->

@@ -41,6 +41,7 @@
         <module>contracts-smoke</module>
         <module>gls-platform-audit</module>
         <module>gls-platform-config</module>
+        <module>gls-extraction-tika</module>
     </modules>
 
     <dependencyManagement>

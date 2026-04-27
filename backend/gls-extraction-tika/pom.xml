@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>co.uk.wolfnotsheep</groupId>
+        <artifactId>gls-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <groupId>co.uk.wolfnotsheep.extraction</groupId>
+    <artifactId>gls-extraction-tika</artifactId>
+    <name>GLS Extraction (Tika)</name>
+    <description>
+        Phase 0.5 reference service. Synchronous text extraction via
+        Apache Tika, contract-first per
+        contracts/extraction/openapi.yaml. Skeleton module — generated
+        server stub, implementation, and Dockerfile land in 0.5.2+.
+    </description>
+
+    <dependencies>
+
+        <!-- ==================== Internal ==================== -->
+
+        <dependency>
+            <groupId>co.uk.wolfnotsheep.platformaudit</groupId>
+            <artifactId>gls-platform-audit</artifactId>
+        </dependency>
+
+        <!-- ==================== Spring Boot ==================== -->
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-mongodb</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
+        <!-- ==================== Tika ==================== -->
+
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-core</artifactId>
+            <version>3.1.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parsers-standard-package</artifactId>
+            <version>3.1.0</version>
+        </dependency>
+
+        <!-- ==================== Validation ==================== -->
+
+        <dependency>
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+        </dependency>
+
+    </dependencies>
+
+</project>
