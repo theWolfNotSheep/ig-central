@@ -1,28 +1,46 @@
+# Multi-stage build for gls-mcp-server (the mcp-server container).
+#
+# Build context: repo root, NOT ./backend/. See backend/Dockerfile for
+# the rationale (gls-platform-audit's bundled schema; per-service
+# OpenAPI generator runs).
 FROM eclipse-temurin:25-jdk AS build
-WORKDIR /app
+WORKDIR /workspace
 
-COPY .mvn .mvn
-COPY mvnw .
-COPY pom.xml .
-COPY bom/pom.xml bom/
-COPY gls-platform/pom.xml gls-platform/
-COPY gls-governance/pom.xml gls-governance/
-COPY gls-document/pom.xml gls-document/
-COPY gls-document-processing/pom.xml gls-document-processing/
-COPY gls-mcp-server/pom.xml gls-mcp-server/
-COPY gls-llm-orchestration/pom.xml gls-llm-orchestration/
-COPY gls-governance-enforcement/pom.xml gls-governance-enforcement/
-COPY gls-app-assembly/pom.xml gls-app-assembly/
+COPY backend/.mvn backend/.mvn
+COPY backend/mvnw backend/mvnw
+COPY backend/pom.xml backend/pom.xml
+COPY backend/bom/pom.xml backend/bom/pom.xml
+COPY backend/contracts-smoke/pom.xml backend/contracts-smoke/pom.xml
+COPY backend/gls-platform/pom.xml backend/gls-platform/pom.xml
+COPY backend/gls-platform-audit/pom.xml backend/gls-platform-audit/pom.xml
+COPY backend/gls-platform-config/pom.xml backend/gls-platform-config/pom.xml
+COPY backend/gls-governance/pom.xml backend/gls-governance/pom.xml
+COPY backend/gls-document/pom.xml backend/gls-document/pom.xml
+COPY backend/gls-document-processing/pom.xml backend/gls-document-processing/pom.xml
+COPY backend/gls-mcp-server/pom.xml backend/gls-mcp-server/pom.xml
+COPY backend/gls-llm-orchestration/pom.xml backend/gls-llm-orchestration/pom.xml
+COPY backend/gls-governance-enforcement/pom.xml backend/gls-governance-enforcement/pom.xml
+COPY backend/gls-app-assembly/pom.xml backend/gls-app-assembly/pom.xml
+COPY backend/gls-governance-hub/pom.xml backend/gls-governance-hub/pom.xml
+COPY backend/gls-governance-hub-app/pom.xml backend/gls-governance-hub-app/pom.xml
+COPY backend/gls-extraction-tika/pom.xml backend/gls-extraction-tika/pom.xml
 
+WORKDIR /workspace/backend
 RUN ./mvnw dependency:go-offline -DskipTests -B -pl gls-mcp-server -am || true
 
-COPY . .
+WORKDIR /workspace
+COPY backend backend
+COPY contracts contracts
 
-RUN ./mvnw -DskipTests package -pl gls-mcp-server -am -o || ./mvnw -DskipTests package -pl gls-mcp-server -am
+WORKDIR /workspace/backend
+RUN ./mvnw -DskipTests package -pl gls-mcp-server -am -o \
+    || ./mvnw -DskipTests package -pl gls-mcp-server -am
 
 FROM eclipse-temurin:25-jre
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=build /app/gls-mcp-server/target/*.jar /app/app.jar
+COPY --from=build /workspace/backend/gls-mcp-server/target/*.jar /app/app.jar
 EXPOSE 8081
 CMD ["java","-jar","/app/app.jar"]

@@ -140,8 +140,12 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME:-gls}-api
     restart: unless-stopped
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      # Repo-root context so the build can reach contracts/ —
+      # gls-platform-audit bundles the audit envelope schema from
+      # contracts/audit/ at build time, and that resource path goes up
+      # two levels from the module's pom.
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
       SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
@@ -203,8 +207,8 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME:-gls}-mcp-server
     restart: unless-stopped
     build:
-      context: ./backend
-      dockerfile: Dockerfile.mcp
+      context: .
+      dockerfile: backend/Dockerfile.mcp
     environment:
       SPRING_PROFILES_ACTIVE: docker
       SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
@@ -227,8 +231,8 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME:-gls}-llm-worker
     restart: unless-stopped
     build:
-      context: ./backend
-      dockerfile: Dockerfile.llm
+      context: .
+      dockerfile: backend/Dockerfile.llm
     environment:
       SPRING_PROFILES_ACTIVE: docker
       SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin

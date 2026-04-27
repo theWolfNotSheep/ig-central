@@ -1411,3 +1411,31 @@ Every PR I shipped this session that added tests was passing locally but **not a
 
 - **Integration tests still don't run in CI.** Issue #7 needs to be fixed before re-enabling failsafe. When that lands, `mvn verify` becomes the right phase and ITs join the gate.
 - **Frontend lint debt** (issue #8 — 151 warnings, downgraded to warn) is unaffected by this PR.
+
+## 2026-04-27 — Backend Dockerfiles — repo-root context (silent-bug fix)
+
+**Done:** Fixed a silent bug flagged in PR #33's open-issues. `backend/Dockerfile`, `Dockerfile.mcp`, and `Dockerfile.llm` all built with `context: ./backend` — that meant `../../contracts/audit/event-envelope.schema.json` (referenced by `gls-platform-audit`'s build-time resource directive) was unreachable at Docker build time. Maven's resource copy silently produced jars without the bundled schema; the runtime envelope validator presumably failed on first emit in any deployed container, but the failure surface (logged warnings) was easy to miss.
+
+**What changed:**
+
+- `backend/Dockerfile`, `backend/Dockerfile.mcp`, `backend/Dockerfile.llm` — rewritten to use repo-root context. Same shape as `backend/gls-extraction-tika/Dockerfile` (which got it right from the start). Multi-stage Eclipse Temurin 25 builder + JRE runtime; `WORKDIR /workspace`; copy `backend/` and `contracts/`; `cd /workspace/backend && ./mvnw -pl <module> -am package`. Pom-copy step extended to include the new modules (`gls-platform-audit`, `gls-platform-config`, `gls-extraction-tika`, `gls-governance-hub`, `gls-governance-hub-app`, `contracts-smoke`) so the dependency-cache layer hits.
+- `docker-compose.yml` — three services updated (`api`, `mcp-server`, `llm-worker`): `context: .` + `dockerfile: backend/Dockerfile{,.mcp,.llm}`.
+
+**Decisions logged:** None new. Aligns with the same context choice used in `backend/gls-extraction-tika/Dockerfile`.
+
+**Verification:**
+
+- `docker compose config` parses cleanly with the new paths.
+- The actual `docker compose build` is exercised by the CI `docker-build` job; locally, the `gls-extraction-tika` build (using the same pattern) is known-good.
+
+**Files changed:**
+
+- `backend/Dockerfile`, `backend/Dockerfile.mcp`, `backend/Dockerfile.llm`.
+- `docker-compose.yml`.
+- `version-2-implementation-log.md` — this entry.
+
+**Why this matters:**
+
+The audit envelope's runtime validator inside `gls-platform-audit`'s `OutboxAuditEmitter` calls `EnvelopeValidator.fromBundledSchema()`, which reads `/schemas/event-envelope.schema.json` off the classpath. Pre-fix: in deployed containers that resource didn't exist, so `EnvelopeValidator` constructor threw `IllegalStateException` with a "Bundled audit envelope schema not found" message. Post-fix: the schema is bundled into every jar that depends on `gls-platform-audit`.
+
+I noticed this gap during the `gls-extraction-tika` Dockerfile work in PR #33 and logged it as outstanding; this PR closes it.
