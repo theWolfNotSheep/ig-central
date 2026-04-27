@@ -27,6 +27,22 @@
             <artifactId>jakarta.validation-api</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>co.uk.wolfnotsheep.platformconfig</groupId>
+            <artifactId>gls-platform-config</artifactId>
+        </dependency>
+
+        <!--
+          Test scope: ConfigChangePublisher in gls-platform-config touches
+          spring-amqp via an optional dep. Mockito needs the class on the
+          test classpath to instrument it.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
 </project>

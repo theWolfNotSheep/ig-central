@@ -725,3 +725,35 @@ This is the contract the **publisher** must honour. Any service mutating one of 
 - **Hub-side publishers** still pending — Track A.
 
 **Next:** Wire write-side publishes in `GovernanceService` (closes the round-trip for the MCP migration), pivot to Phase 0.12 (dev experience), the 0.11 load driver, or relay hardening.
+
+## 2026-04-27 — Phase 0.8 (governance write-side bridge) — closes the MCP cache loop
+
+**Done:** Wired write-side publishes for the nine governance entity types so the MCP cache invalidator (`McpConfigInvalidator`, landed in #24) actually has events to react to. Single Mongo lifecycle listener — no controller-by-controller refactor.
+
+**Approach:** `GovernanceConfigChangeBridge` is a `@Component` with two `@EventListener`s on Spring Data Mongo's `AfterSaveEvent` / `AfterDeleteEvent`. A `Map<Class<?>, String>` of governance model class → wire-protocol entity type filters out non-governance writes. Saves publish single-entity events; deletes publish bulk events for the affected entity type.
+
+**Why a lifecycle listener rather than service-method instrumentation:** centralised (one class, one mapping table); coverage by default (catches admin REST writes, Hub-pack imports, seeders, batch `saveAll`, ad-hoc `MongoTemplate` calls); tiny blast radius (no controller / repository edits).
+
+**Trade-offs documented inline in the bridge javadoc:**
+
+- CREATED vs UPDATED collapsed to UPDATED — distinguishing requires a pre-save event with prior state, fragile.
+- Deletes always go bulk — `AfterDeleteEvent` doesn't reliably carry the deleted id; bulk forces peers to re-read on next access.
+- Save with null id falls back to bulk — defensive; rare in practice.
+
+**Decisions logged:** None new. Closes the implementation gap CSV #30 implied.
+
+**Files changed:**
+
+- `backend/gls-governance/pom.xml` — added `gls-platform-config` (compile) + `spring-boot-starter-amqp` (test scope, same Mockito instrumentation reason as `gls-platform`).
+- `backend/gls-governance/src/main/java/.../events/GovernanceConfigChangeBridge.java` (new) — ~110 LOC. Mapping table covers `ClassificationCategory`, `SensitivityDefinition`, `TraitDefinition`, `GovernancePolicy`, `RetentionSchedule`, `StorageTier`, `MetadataSchema`, `ClassificationCorrection`, `PiiTypeDefinition`. Reflection on `getId()` to extract the id; absence of the method logs and falls back to bulk.
+- `backend/gls-governance/src/test/java/.../events/GovernanceConfigChangeBridgeTest.java` (new) — 6 tests covering known-type save → single, unknown-type save ignored, null-id save → bulk, delete → bulk, unknown-type delete ignored, publisher-absence non-fatal.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-governance -am test` 6/6 pass; `./mvnw -pl gls-app-assembly,gls-mcp-server -am compile` clean.
+
+**Open issues:**
+
+- **Hub-side publishers** — Track A. `gls-governance-hub` writes to a separate Mongo. Either it deploys this same bridge against its own Mongo + Rabbit connection, or its `PackImportService` publishes explicitly. Lift in a Track A PR.
+- **Composite-key MCP caches** (`policies`, `corrections`, `schemas` keyed e.g. `"<categoryId>:<sensitivity>"`) — a targeted single-id event won't match. Currently a harmless miss; if perf requires it, switch the bridge mapping for those types to publish bulk instead.
+
+**Next:** Hub-side bridge (Track A), Phase 0.12 (dev experience), the 0.11 load driver, or relay hardening (ShedLock + observability).
