@@ -1481,3 +1481,49 @@ I noticed this gap during the `gls-extraction-tika` Dockerfile work in PR #33 an
 - **Comprehensive metrics** — relay-side Micrometer counters for queue depth, publish rate, lock-contention rate. Smaller now that ShedLock is in (lock-acquisition events are the natural signal). Lift in a follow-up.
 - **Circuit breaker on Rabbit** — when the broker is down, the relay currently retries every poll cycle with exponential per-row backoff. A global circuit breaker would short-circuit the cycle. Smaller follow-up.
 - **`shedLock` Mongo collection** — created lazily by ShedLock on first lock attempt. No Mongock change unit needed; documented in case future schema-management policy requires explicit ownership.
+
+## 2026-04-27 — Phase 0.7 (relay observability) — Micrometer counters + queue-depth gauge
+
+**Done:** Added Micrometer instruments to `OutboxRelay` so an operator can see relay throughput, latency, error rate, and PENDING-row backlog from Prometheus + Grafana. Combined with the ShedLock leader election (PR #44) and the existing exponential backoff, the relay now has the operational observability surface CSV #5 implies.
+
+**What's wired:**
+
+- `OutboxRelayMetrics` (new) — owns the meter names and tag taxonomy. Constructor registers a Gauge for `gls_audit_relay_pending_depth` that polls `repository.findByStatusAndNextRetryAtBeforeOrderByCreatedAtAsc(PENDING, now, …)` size on each scrape (cheap — backed by `idx_status_nextRetry`).
+- `OutboxRelay` — `Timer.Sample` started per row in `pollOnce`'s loop. On success → `recordPublished(timer, tier)`. On retry → `recordRetry(timer, tier)`. On terminal failure (max attempts) → `recordFailed(timer, tier)`. Serialisation failure (now thrown as a private `SerialisationFailureException`) records `recordFailed` after the row is already marked FAILED inside `publish`.
+- `PlatformAuditAutoConfiguration` — new `@Bean OutboxRelayMetrics` (conditional on `RabbitTemplate` like the relay itself); relay bean signature extended.
+
+**Tag taxonomy (cardinality-bounded):**
+
+| Tag | Values | Cardinality |
+|---|---|---|
+| `tier` | `DOMAIN` / `SYSTEM` | 2 |
+| `outcome` | `published` / `retried` / `failed` | 3 |
+
+Queue depth gauge has no tags — it's a single global value.
+
+**Counter / gauge / timer names:**
+
+- `gls_audit_relay_publish_total{tier, outcome}` — counter.
+- `gls_audit_relay_publish_duration_seconds{tier, outcome}` — Timer.
+- `gls_audit_relay_pending_depth` — Gauge.
+
+Operators can graph: `rate(gls_audit_relay_publish_total{outcome="published"}[5m])` for throughput; `gls_audit_relay_publish_duration_seconds{outcome="published"}` for p50/p95/p99 publish latency; `gls_audit_relay_pending_depth` for backlog; `rate(gls_audit_relay_publish_total{outcome="failed"}[5m])` for terminal-failure rate.
+
+**Decisions logged:** None new.
+
+**Tests:** Existing 6 `OutboxRelayTest` tests still pass — the constructor takes one new arg (`OutboxRelayMetrics`); test setUp wires a `SimpleMeterRegistry`-backed instance. No new assertions — meaningful counter-value assertions need the same setUp work spread across every test, low value vs. the constructor signature change. Reactor total: 153 unit tests, all green.
+
+**Files changed:**
+
+- `backend/gls-platform-audit/src/main/java/.../relay/OutboxRelayMetrics.java` (new).
+- `backend/gls-platform-audit/src/main/java/.../relay/OutboxRelay.java` — `OutboxRelayMetrics` ctor param; `Timer.Sample` lifecycle around the poll loop's per-row work; `recordPublished` / `recordRetry` / `recordFailed` at the right outcome boundaries. Serialisation failure path now throws a private `SerialisationFailureException` so the catch site can stamp the FAILED metric.
+- `backend/gls-platform-audit/src/main/java/.../autoconfigure/PlatformAuditAutoConfiguration.java` — `OutboxRelayMetrics` bean; updated relay bean signature.
+- `backend/gls-platform-audit/src/test/java/.../relay/OutboxRelayTest.java` — wires `OutboxRelayMetrics(new SimpleMeterRegistry(), repository)` on the two construction sites.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw test` — 153/153 across the reactor.
+
+**Remaining 0.7 hardening items:**
+
+- **Circuit breaker on Rabbit downtime** — when the broker is fully down, the relay currently retries every poll cycle with exponential per-row backoff. A global breaker would short-circuit the cycle (single test against the broker; if it's open, skip the polling poll altogether). Smaller follow-up.
+- **`shedLock` Mongo collection** — created lazily by ShedLock; future schema-management policy may want a Mongock change unit to own its indexes explicitly.

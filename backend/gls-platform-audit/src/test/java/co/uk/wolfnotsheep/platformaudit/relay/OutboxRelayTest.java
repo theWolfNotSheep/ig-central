@@ -41,13 +41,17 @@ class OutboxRelayTest {
 
     private AuditOutboxRepository repository;
     private RabbitTemplate rabbitTemplate;
+    private OutboxRelayMetrics metrics;
     private OutboxRelay relay;
 
     @BeforeEach
     void setUp() {
         repository = mock(AuditOutboxRepository.class);
         rabbitTemplate = mock(RabbitTemplate.class);
-        relay = new OutboxRelay(repository, rabbitTemplate, defaultProperties());
+        metrics = new OutboxRelayMetrics(
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),
+                repository);
+        relay = new OutboxRelay(repository, rabbitTemplate, defaultProperties(), metrics);
     }
 
     @Test
@@ -66,7 +70,8 @@ class OutboxRelayTest {
     void disabled_relay_skips_polling_entirely() {
         OutboxRelay disabled = new OutboxRelay(
                 repository, rabbitTemplate,
-                new OutboxRelayProperties(false, null, 0, 0, null, null, null));
+                new OutboxRelayProperties(false, null, 0, 0, null, null, null),
+                metrics);
 
         disabled.pollOnce();
 
