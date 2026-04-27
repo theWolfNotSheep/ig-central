@@ -1252,3 +1252,41 @@ These are documented as numbered sections in the template, each with the symptom
 - 0.5.5 — Dockerfile + Compose ✓; K8s + CI/CD outstanding
 
 **Next:** Tracing, readiness `HealthIndicator`s, metrics, JWT, K8s manifests, CI/CD wiring, or pivot to other Phase 0 follow-ups.
+
+## 2026-04-27 — Phase 0.5.3 (readiness probes) — `TikaHealthIndicator` + `MinioHealthIndicator`
+
+**Done:** Wired the two readiness `HealthIndicator` beans the actuator surface needed. Each `/actuator/health` call now exercises Tika (parse a 2-byte synthetic input) and MinIO (`listBuckets`), so the readiness gate doesn't flip UP before the service can actually do its job.
+
+**What's wired:**
+
+- `TikaHealthIndicator` — parses `"ok"` through the injected `TikaExtractionService` on every check. UP unless Tika throws.
+- `MinioHealthIndicator` — calls `MinioClient.listBuckets()` and reports `bucketCount` as a detail. UP on success; DOWN with the exception's class+message on failure.
+- Both are `@Component` beans; Spring Boot Actuator picks them up automatically and exposes them under `/actuator/health/tika` and `/actuator/health/minio`.
+
+**Spring Boot 4 gotcha (logged for future services):** `Health`, `HealthIndicator`, and `Status` are no longer at `org.springframework.boot.actuate.health.*`. Spring Boot 4 split them into `spring-boot-health` jar at `org.springframework.boot.health.contributor.*`. Symptom is a confusing `package does not exist` compile error since `spring-boot-starter-actuator` is on the classpath. Documented in `docs/service-template.md` under "Spring Boot 4 gotchas".
+
+**Decisions logged:** None new.
+
+**Tests (3 new + 34 existing = 37 total, all green):**
+
+- `TikaHealthIndicatorTest` (1) — healthy Tika reports UP.
+- `MinioHealthIndicatorTest` (2) — reachable MinIO reports UP with `bucketCount`; `IOException` reports DOWN with exception detail.
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/src/main/java/.../health/{TikaHealthIndicator,MinioHealthIndicator}.java` (2 new).
+- `backend/gls-extraction-tika/src/test/java/.../health/{TikaHealthIndicatorTest,MinioHealthIndicatorTest}.java` (2 new).
+- `docs/service-template.md` — new "Spring Boot 4 gotchas" section with the health-package relocation table.
+- `version-2-implementation-plan.md` — 0.5.3 health probes flipped `[x]`.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 37/37 pass.
+
+**Phase 0.5 status after this PR:**
+
+- 0.5.1, 0.5.2, 0.5.6 ✓
+- 0.5.3 — error returns ✓, audit ✓, basic + readiness health ✓; tracing / metrics / JWT outstanding
+- 0.5.4 — unit-level only (37 tests in extraction module alone)
+- 0.5.5 — Dockerfile + Compose ✓; K8s + CI/CD outstanding
+
+**Next:** Tracing (small — already passing traceparent through; spans + OTel are bigger), metrics (Micrometer), JWT validation, K8s manifests, CI/CD wiring.
