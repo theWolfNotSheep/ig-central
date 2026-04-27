@@ -1215,3 +1215,40 @@ The codes match the RFC 7807 mapping in `ExtractionExceptionHandler` so a downst
 - Real-Mongo idempotency test — blocked by issue #7.
 
 **Next:** Tracing, readiness `HealthIndicator` beans, metrics, JWT, integration tests, K8s manifests, or the cloneable service-template doc.
+
+## 2026-04-27 — Phase 0.5.6 — `docs/service-template.md`
+
+**Done:** Captured the cloneable pattern. `docs/service-template.md` consolidates the bring-up checklist, substrate use (`gls-platform-audit`, `gls-platform-config`, generated stubs), conventions (RFC 7807 codes, idempotency, capabilities), the repo-root Docker build context requirement, and every generator + Mockito gotcha hit across 0.5.1–0.5.5.
+
+**Why this PR exists now:** the gotchas are highest-fidelity right after the reference implementation lands. Future services that use this doc will skip:
+
+- The `oneOf` empty-interface Jackson round-trip problem (caught twice in `gls-extraction-tika` — once on `setKind` not existing on inline branch, again on `Jackson can't deserialise the union`).
+- The inline backticked-colon docstring crashing the generator's snakeyaml parser.
+- The `mock()` inside an outer `when()` `UnfinishedStubbing` lint.
+- The `ConfigChangePublisher` test-classpath issue.
+- The Docker build context vs. `contracts/` accessibility gotcha.
+
+These are documented as numbered sections in the template, each with the symptom, diagnosis, and the workaround pattern.
+
+**Decisions logged:** None new. Closes 0.5.6 — both checkboxes flipped `[x]`.
+
+**Files changed:**
+
+- `docs/service-template.md` (new).
+- `version-2-implementation-plan.md` — 0.5.6 items checked.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** Markdown only — no compile / test impact.
+
+**Open issues:**
+
+- The doc references `docs/service-template.md` from `gls-extraction-tika`'s README (already there in form: "see `docs/service-template.md` (lands with 0.5.6)"). With the doc landed, the existing reference is now accurate; no further edit needed.
+
+**Phase 0.5 status after this PR:**
+
+- 0.5.1, 0.5.2, 0.5.6 ✓
+- 0.5.3 — error returns ✓, audit ✓, basic health ✓; tracing / readiness `HealthIndicator` / metrics / JWT outstanding
+- 0.5.4 — unit-level only; integration tests deferred (issue #7)
+- 0.5.5 — Dockerfile + Compose ✓; K8s + CI/CD outstanding
+
+**Next:** Tracing, readiness `HealthIndicator`s, metrics, JWT, K8s manifests, CI/CD wiring, or pivot to other Phase 0 follow-ups.
