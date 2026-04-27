@@ -58,6 +58,7 @@ public class ExtractController implements ExtractionApi {
     private final TikaExtractionService tika;
     private final DocumentSink sink;
     private final IdempotencyStore idempotency;
+    private final ExtractMetrics metrics;
     private final ObjectMapper mapper;
     private final ObjectProvider<AuditEmitter> auditEmitterProvider;
     private final long inlineByteCeiling;
@@ -70,6 +71,7 @@ public class ExtractController implements ExtractionApi {
             TikaExtractionService tika,
             DocumentSink sink,
             IdempotencyStore idempotency,
+            ExtractMetrics metrics,
             ObjectMapper mapper,
             ObjectProvider<AuditEmitter> auditEmitterProvider,
             @Value("${gls.extraction.tika.inline-byte-ceiling:262144}") long inlineByteCeiling,
@@ -80,6 +82,7 @@ public class ExtractController implements ExtractionApi {
         this.tika = tika;
         this.sink = sink;
         this.idempotency = idempotency;
+        this.metrics = metrics;
         // The generated ExtractResponseText interface (oneOf) has no
         // Jackson discriminator. Without help, deserialising a cached
         // response can't pick between inline (text + encoding) and ref
@@ -101,6 +104,9 @@ public class ExtractController implements ExtractionApi {
             ExtractRequest request,
             String idempotencyKey) {
 
+        String bucket = request.getDocumentRef() == null
+                ? null : request.getDocumentRef().getBucket();
+
         // Idempotency check first — before any source I/O. CSV #16:
         // repeated requests with the same nodeRunId within the 24h TTL
         // return the cached result (200) if completed, or 409 IN_FLIGHT
@@ -108,17 +114,26 @@ public class ExtractController implements ExtractionApi {
         IdempotencyOutcome outcome = idempotency.tryAcquire(request.getNodeRunId());
         switch (outcome.status()) {
             case CACHED -> {
+                metrics.recordIdempotencyShortCircuit("cached", bucket);
                 return ResponseEntity.ok(deserialiseCached(outcome.cachedJson()));
             }
-            case IN_FLIGHT -> throw new IdempotencyInFlightException(request.getNodeRunId());
+            case IN_FLIGHT -> {
+                metrics.recordIdempotencyShortCircuit("in_flight", bucket);
+                throw new IdempotencyInFlightException(request.getNodeRunId());
+            }
             case ACQUIRED -> { /* fall through to extraction */ }
         }
 
+        io.micrometer.core.instrument.Timer.Sample timer = metrics.startTimer();
         try {
             ResponseEntity<ExtractResponse> response = doExtract(traceparent, request, idempotencyKey);
-            cacheCompleted(request.getNodeRunId(), response.getBody());
+            ExtractResponse body = response.getBody();
+            cacheCompleted(request.getNodeRunId(), body);
+            metrics.recordSuccess(timer, bucket,
+                    body == null ? null : body.getDetectedMimeType());
             return response;
         } catch (RuntimeException failure) {
+            metrics.recordFailure(timer, bucket, errorCodeFor(failure));
             idempotency.releaseOnFailure(request.getNodeRunId());
             // Failure-path audit. Emitted from the controller (rather
             // than from ExtractionExceptionHandler) so traceparent +

@@ -184,7 +184,7 @@ Why this service: it's the simplest member of the extraction family, has a small
 - [ ] **Tracing:** `traceparent` propagation; spans for `tika.parse`, `minio.fetch`.
 - [x] **Health probes:** liveness (process alive), readiness (MinIO reachable, Tika initialised). (`TikaHealthIndicator` parses a tiny synthetic input on every check; `MinioHealthIndicator` calls `listBuckets()` and reports the count. Spring Boot 4 relocates the `Health` / `HealthIndicator` types — see `docs/service-template.md`.)
 - [x] **Error returns:** RFC 7807 with `EXTRACTION_OOM`, `EXTRACTION_CORRUPT`, `EXTRACTION_TIMEOUT` codes. (`ExtractionExceptionHandler` maps `DocumentNotFoundException` → 404 `DOCUMENT_NOT_FOUND`, `DocumentEtagMismatchException` → 409 `DOCUMENT_ETAG_MISMATCH`, `UnparseableDocumentException` → 422 `EXTRACTION_CORRUPT`, `DocumentTooLargeException` → 413 `EXTRACTION_TOO_LARGE`, `UncheckedIOException` → 503 `EXTRACTION_SOURCE_UNAVAILABLE`. `EXTRACTION_OOM` / `EXTRACTION_TIMEOUT` not yet thrown — they apply once async parsing / circuit breakers land.)
-- [ ] **Metrics:** Prometheus counters, latency histogram, error rate.
+- [x] **Metrics:** Prometheus counters, latency histogram, error rate. (`ExtractMetrics` records `gls_extraction_duration_seconds` (Timer) and `gls_extraction_result_total` (Counter) tagged by `outcome` / `source` / `mime_family` / `error_code` from a closed taxonomy. Idempotency short-circuits report `outcome=cached` / `outcome=in_flight`. `gls_extraction_bytes_processed` summary captures the per-extract byte count. Surfaced via `/actuator/prometheus`.)
 - [ ] **JWT validation** middleware (per A6 decision).
 
 #### 0.5.4 Tests

@@ -1290,3 +1290,50 @@ These are documented as numbered sections in the template, each with the symptom
 - 0.5.5 — Dockerfile + Compose ✓; K8s + CI/CD outstanding
 
 **Next:** Tracing (small — already passing traceparent through; spans + OTel are bigger), metrics (Micrometer), JWT validation, K8s manifests, CI/CD wiring.
+
+## 2026-04-27 — Phase 0.5.3 (metrics) — Micrometer counters + latency histogram
+
+**Done:** Added domain-specific Micrometer instruments to `gls-extraction-tika`. The Spring Boot Actuator + Micrometer chain already exposed JVM / HTTP metrics; this PR adds `gls_extraction_duration_seconds`, `gls_extraction_result_total`, and `gls_extraction_bytes_processed` so an operator can see the extraction pipeline's throughput, latency distribution, and outcome shape from Prometheus + Grafana.
+
+**What's wired:**
+
+- `ExtractMetrics` (`@Component`) — owns the meter names, tag taxonomy, and `Timer.Sample` lifecycle. Lives next to the controller; passes the `MeterRegistry` through.
+- `ExtractController` — `Timer.Sample` started after the idempotency check; `recordSuccess(...)` / `recordFailure(...)` on completion; `recordIdempotencyShortCircuit("cached" | "in_flight", bucket)` for the short-circuit branches.
+
+**Tag taxonomy (cardinality-bounded):**
+
+| Tag | Values | Cardinality |
+|---|---|---|
+| `outcome` | `success` / `failure` / `cached` / `in_flight` | 4 |
+| `source` | bucket name from request | bounded by # of source buckets (small) |
+| `mime_family` | major slash-prefix of detected mime, or `unknown` | ~7 |
+| `error_code` | closed taxonomy from `ExtractController.errorCodeFor` | 6 |
+
+Free-form tag values (full mime strings, error messages, document ids) are deliberately excluded — Prometheus stores one time-series per unique tag combination, so unbounded cardinality wrecks the backend.
+
+**Decisions logged:** None new.
+
+**Tests (4 new + 37 existing = 41 total, all green):**
+
+- `ExtractMetricsTest` (4) — success records duration + counter with `mime_family=application`; failure records with `error_code` tag; mime-family falls back to `unknown` for null / no-slash input; blank bucket falls back to `unknown`.
+- All existing controller tests still pass (the constructor takes one extra arg now).
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/src/main/java/.../web/ExtractMetrics.java` (new).
+- `backend/gls-extraction-tika/src/main/java/.../web/ExtractController.java` — `ExtractMetrics` constructor param; `Timer.Sample` lifecycle; short-circuit counters.
+- `backend/gls-extraction-tika/src/test/java/.../web/ExtractControllerTest.java` — wires `ExtractMetrics(new SimpleMeterRegistry())` on the two construction sites.
+- `backend/gls-extraction-tika/src/test/java/.../web/ExtractMetricsTest.java` (new — 4 tests).
+- `version-2-implementation-plan.md` — 0.5.3 metrics flipped `[x]`.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 41/41 pass. Once the service is running, `curl http://localhost:8080/actuator/prometheus | grep gls_extraction_` should show the new families.
+
+**Phase 0.5 status after this PR:**
+
+- 0.5.1, 0.5.2, 0.5.6 ✓
+- 0.5.3 — error returns ✓, audit ✓, basic + readiness health ✓, metrics ✓; **tracing / JWT outstanding**
+- 0.5.4 — unit-level only (41 tests in extraction module)
+- 0.5.5 — Dockerfile + Compose ✓; K8s + CI/CD outstanding
+
+**Next:** Tracing (spans + traceparent forwarding via Micrometer Tracing + OTel), JWT validation middleware, K8s manifests, CI/CD wiring, integration tests once issue #7 unblocks.

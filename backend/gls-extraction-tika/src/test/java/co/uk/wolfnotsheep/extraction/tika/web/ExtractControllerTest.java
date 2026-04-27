@@ -22,6 +22,7 @@ import co.uk.wolfnotsheep.platformaudit.envelope.AuditEvent;
 import co.uk.wolfnotsheep.platformaudit.envelope.Outcome;
 import co.uk.wolfnotsheep.platformaudit.envelope.Tier;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -71,6 +72,7 @@ class ExtractControllerTest {
                 new TikaExtractionService(),
                 sink,
                 idempotency,
+                new ExtractMetrics(new SimpleMeterRegistry()),
                 mapper,
                 providerOf(auditEmitter),
                 /* inlineByteCeiling */ 262_144L,
@@ -158,7 +160,7 @@ class ExtractControllerTest {
         // overflows. Source returns enough bytes to extract past the limit.
         ExtractController tinyController = new ExtractController(
                 source, new TikaExtractionService(), sink,
-                idempotency, mapper,
+                idempotency, new ExtractMetrics(new SimpleMeterRegistry()), mapper,
                 providerOf(auditEmitter),
                 /* inlineByteCeiling */ 4L,
                 "gls-extraction-tika", "0.0.1-SNAPSHOT", "test-instance");
