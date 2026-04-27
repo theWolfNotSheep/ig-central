@@ -174,10 +174,10 @@ Why this service: it's the simplest member of the extraction family, has a small
 - [x] `VERSION` 0.1.0, `CHANGELOG.md` initial entry.
 
 #### 0.5.2 Implementation
-- [ ] Generated server stub from contract.
-- [ ] Tika-based text extraction (port logic from existing `gls-document-processing`).
-- [ ] Returns text inline if ≤ 256 KB, else `textRef` to MinIO (per CSV #19).
-- [ ] Idempotency on `nodeRunId` with 24h TTL (per CSV #16).
+- [x] Generated server stub from contract.
+- [x] Tika-based text extraction (port logic from existing `gls-document-processing`).
+- [x] Returns text inline if ≤ 256 KB, else `textRef` to MinIO (per CSV #19).
+- [x] Idempotency on `nodeRunId` with 24h TTL (per CSV #16). (`extraction_idempotency` Mongo collection with TTL index; `IdempotencyStore` wraps `tryAcquire` / `cacheResult` / `releaseOnFailure`. Cached row → 200 with replayed response; in-flight → 409 `IDEMPOTENCY_IN_FLIGHT`. Failures delete the row so retries can proceed without waiting for TTL.)
 
 #### 0.5.3 Cross-cutting concerns (the template)
 - [x] **Audit:** writes to `audit_outbox` for `EXTRACTION_COMPLETED` (Tier 2) and `EXTRACTION_FAILED` (Tier 2). No Tier 1 events for extraction. (Both success and failure paths emit. Failure emission lives in the controller — `try { … } catch (RuntimeException) { emitFailed(); throw; }` — so traceparent + nodeRunId stay in scope without a request-scoped bean. The handler still owns the RFC 7807 mapping.)

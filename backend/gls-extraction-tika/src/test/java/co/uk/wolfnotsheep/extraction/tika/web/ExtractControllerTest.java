@@ -10,6 +10,9 @@ import co.uk.wolfnotsheep.extraction.tika.parse.TikaExtractionService;
 import co.uk.wolfnotsheep.extraction.tika.parse.UnparseableDocumentException;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentEtagMismatchException;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentNotFoundException;
+import co.uk.wolfnotsheep.extraction.tika.idempotency.IdempotencyInFlightException;
+import co.uk.wolfnotsheep.extraction.tika.idempotency.IdempotencyOutcome;
+import co.uk.wolfnotsheep.extraction.tika.idempotency.IdempotencyStore;
 import co.uk.wolfnotsheep.extraction.tika.sink.DocumentSink;
 import co.uk.wolfnotsheep.extraction.tika.sink.ExtractedTextRef;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentRef;
@@ -18,6 +21,7 @@ import co.uk.wolfnotsheep.platformaudit.emit.AuditEmitter;
 import co.uk.wolfnotsheep.platformaudit.envelope.AuditEvent;
 import co.uk.wolfnotsheep.platformaudit.envelope.Outcome;
 import co.uk.wolfnotsheep.platformaudit.envelope.Tier;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -49,6 +53,8 @@ class ExtractControllerTest {
 
     private DocumentSource source;
     private DocumentSink sink;
+    private IdempotencyStore idempotency;
+    private ObjectMapper mapper;
     private AuditEmitter auditEmitter;
     private ExtractController controller;
 
@@ -56,11 +62,16 @@ class ExtractControllerTest {
     void setUp() {
         source = mock(DocumentSource.class);
         sink = mock(DocumentSink.class);
+        idempotency = mock(IdempotencyStore.class);
+        when(idempotency.tryAcquire(any())).thenReturn(IdempotencyOutcome.acquired());
+        mapper = new ObjectMapper();
         auditEmitter = mock(AuditEmitter.class);
         controller = new ExtractController(
                 source,
                 new TikaExtractionService(),
                 sink,
+                idempotency,
+                mapper,
                 providerOf(auditEmitter),
                 /* inlineByteCeiling */ 262_144L,
                 "gls-extraction-tika",
@@ -147,6 +158,7 @@ class ExtractControllerTest {
         // overflows. Source returns enough bytes to extract past the limit.
         ExtractController tinyController = new ExtractController(
                 source, new TikaExtractionService(), sink,
+                idempotency, mapper,
                 providerOf(auditEmitter),
                 /* inlineByteCeiling */ 4L,
                 "gls-extraction-tika", "0.0.1-SNAPSHOT", "test-instance");
@@ -231,6 +243,69 @@ class ExtractControllerTest {
         // Caught at compile time by the implements clause; this assertion
         // is a documentation-style guard against accidentally dropping it.
         assertThat(ExtractionApi.class.isAssignableFrom(ExtractController.class)).isTrue();
+    }
+
+    @Test
+    void in_flight_idempotency_returns_409_via_exception() {
+        when(idempotency.tryAcquire("node-busy")).thenReturn(IdempotencyOutcome.inFlight());
+
+        assertThatThrownBy(() ->
+                controller.extractDocument(validTraceparent(),
+                        request("b", "k", "node-busy"), null))
+                .isInstanceOf(IdempotencyInFlightException.class);
+
+        // No source / sink / Tika activity on the in-flight short-circuit.
+        verify(source, never()).open(any());
+        verify(sink, never()).upload(any(), any());
+    }
+
+    @Test
+    void cached_idempotency_returns_stored_response_without_extracting() throws Exception {
+        ExtractResponse cached = new ExtractResponse();
+        cached.setNodeRunId("node-c");
+        ExtractResponseTextOneOf inline = new ExtractResponseTextOneOf();
+        inline.setText("from cache");
+        inline.setEncoding(ExtractResponseTextOneOf.EncodingEnum.UTF_8);
+        cached.setText(inline);
+        cached.setDetectedMimeType("text/plain");
+        cached.setDurationMs(0);
+        cached.setCostUnits(0);
+        String json = mapper.writeValueAsString(cached);
+        when(idempotency.tryAcquire("node-c")).thenReturn(IdempotencyOutcome.cached(json));
+
+        ResponseEntity<ExtractResponse> resp = controller.extractDocument(
+                validTraceparent(), request("b", "k", "node-c"), null);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).isNotNull();
+        assertThat(resp.getBody().getNodeRunId()).isEqualTo("node-c");
+        verify(source, never()).open(any());
+        verify(auditEmitter, never()).emit(any());
+    }
+
+    @Test
+    void successful_extract_caches_the_response_for_subsequent_retries() {
+        InputStream payload = new ByteArrayInputStream("ok".getBytes(StandardCharsets.UTF_8));
+        when(source.open(any(DocumentRef.class))).thenReturn(payload);
+
+        controller.extractDocument(validTraceparent(),
+                request("b", "k", "node-cache"), null);
+
+        verify(idempotency, times(1)).cacheResult(eq("node-cache"), any());
+    }
+
+    @Test
+    void failure_releases_the_idempotency_row_so_retries_can_proceed() {
+        when(source.open(any(DocumentRef.class)))
+                .thenThrow(new DocumentNotFoundException(DocumentRef.of("b", "missing")));
+
+        assertThatThrownBy(() ->
+                controller.extractDocument(validTraceparent(),
+                        request("b", "missing", "node-fail"), null))
+                .isInstanceOf(DocumentNotFoundException.class);
+
+        verify(idempotency, times(1)).releaseOnFailure("node-fail");
+        verify(idempotency, never()).cacheResult(any(), any());
     }
 
     private static ExtractRequest request(String bucket, String objectKey, String nodeRunId) {

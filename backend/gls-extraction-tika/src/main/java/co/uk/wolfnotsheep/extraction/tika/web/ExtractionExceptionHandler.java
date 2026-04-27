@@ -1,5 +1,6 @@
 package co.uk.wolfnotsheep.extraction.tika.web;
 
+import co.uk.wolfnotsheep.extraction.tika.idempotency.IdempotencyInFlightException;
 import co.uk.wolfnotsheep.extraction.tika.parse.UnparseableDocumentException;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentEtagMismatchException;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentNotFoundException;
@@ -56,6 +57,13 @@ public class ExtractionExceptionHandler {
     public ResponseEntity<ProblemDetail> handleTooLarge(DocumentTooLargeException e) {
         return problem(HttpStatus.PAYLOAD_TOO_LARGE, "EXTRACTION_TOO_LARGE",
                 "Extracted text exceeds the configured ceiling",
+                e.getMessage());
+    }
+
+    @ExceptionHandler(IdempotencyInFlightException.class)
+    public ResponseEntity<ProblemDetail> handleInFlight(IdempotencyInFlightException e) {
+        return problem(HttpStatus.CONFLICT, "IDEMPOTENCY_IN_FLIGHT",
+                "An extraction with this nodeRunId is still in flight",
                 e.getMessage());
     }
 
