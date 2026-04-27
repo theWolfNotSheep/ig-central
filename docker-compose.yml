@@ -363,16 +363,19 @@ services:
   #   container_name: ${COMPOSE_PROJECT_NAME:-gls}-extraction-tika
   #   restart: unless-stopped
   #   build:
-  #     context: ./backend
-  #     dockerfile: gls-extraction-tika/Dockerfile
+  #     # Repo-root context so the build can reach contracts/ — the
+  #     # gls-platform-audit Maven module bundles the audit envelope
+  #     # schema from contracts/audit/ at build time.
+  #     context: .
+  #     dockerfile: backend/gls-extraction-tika/Dockerfile
   #   environment:
   #     SPRING_PROFILES_ACTIVE: docker
-  #     SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
-  #     RABBITMQ_HOST: rabbitmq
   #     MINIO_ENDPOINT: http://minio:9000
+  #     MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+  #     MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+  #     # Tika service is currently stateless — no Mongo / Rabbit needs
+  #     # until idempotency + audit emission land. Add them then.
   #   depends_on:
-  #     mongo: { condition: service_healthy }
-  #     rabbitmq: { condition: service_healthy }
   #     minio: { condition: service_healthy }
   #   logging: *default-logging
   #   networks: [gls]

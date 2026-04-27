@@ -169,7 +169,7 @@ Why this service: it's the simplest member of the extraction family, has a small
 ### Scope
 
 #### 0.5.1 Module + contract
-- [x] New Maven module `gls-extraction-tika` with its own `pom.xml`, version property, Dockerfile. (Module + `gls.extraction.version` BOM property landed; **Dockerfile deferred to 0.5.2** — needs the actual implementation.)
+- [x] New Maven module `gls-extraction-tika` with its own `pom.xml`, version property, Dockerfile.
 - [x] `contracts/extraction/openapi.yaml` — `POST /v1/extract`, `GET /v1/capabilities`, `GET /actuator/health`. References `_shared/` for error envelope, security, headers.
 - [x] `VERSION` 0.1.0, `CHANGELOG.md` initial entry.
 
@@ -182,8 +182,8 @@ Why this service: it's the simplest member of the extraction family, has a small
 #### 0.5.3 Cross-cutting concerns (the template)
 - [ ] **Audit:** writes to `audit_outbox` for `EXTRACTION_COMPLETED` (Tier 2) and `EXTRACTION_FAILED` (Tier 2). No Tier 1 events for extraction.
 - [ ] **Tracing:** `traceparent` propagation; spans for `tika.parse`, `minio.fetch`.
-- [ ] **Health probes:** liveness (process alive), readiness (MinIO reachable, Tika initialised).
-- [ ] **Error returns:** RFC 7807 with `EXTRACTION_OOM`, `EXTRACTION_CORRUPT`, `EXTRACTION_TIMEOUT` codes.
+- [ ] **Health probes:** liveness (process alive), readiness (MinIO reachable, Tika initialised). (Basic `getHealth` + Spring Actuator `health` endpoint landed; **dedicated readiness `HealthIndicator` beans for Tika + MinIO still outstanding**.)
+- [x] **Error returns:** RFC 7807 with `EXTRACTION_OOM`, `EXTRACTION_CORRUPT`, `EXTRACTION_TIMEOUT` codes. (`ExtractionExceptionHandler` maps `DocumentNotFoundException` → 404 `DOCUMENT_NOT_FOUND`, `DocumentEtagMismatchException` → 409 `DOCUMENT_ETAG_MISMATCH`, `UnparseableDocumentException` → 422 `EXTRACTION_CORRUPT`, `DocumentTooLargeException` → 413 `EXTRACTION_TOO_LARGE`, `UncheckedIOException` → 503 `EXTRACTION_SOURCE_UNAVAILABLE`. `EXTRACTION_OOM` / `EXTRACTION_TIMEOUT` not yet thrown — they apply once async parsing / circuit breakers land.)
 - [ ] **Metrics:** Prometheus counters, latency histogram, error rate.
 - [ ] **JWT validation** middleware (per A6 decision).
 
@@ -195,7 +195,7 @@ Why this service: it's the simplest member of the extraction family, has a small
 - [ ] Smoke test: deploys, takes traffic, returns 200s under nominal load.
 
 #### 0.5.5 Deployment
-- [ ] Dockerfile, Docker Compose service definition, K8s manifest (Deployment, Service, HPA shell — values empty, just the structure).
+- [x] Dockerfile, Docker Compose service definition, K8s manifest (Deployment, Service, HPA shell — values empty, just the structure). (Multi-stage Dockerfile + Docker Compose placeholder block landed; **K8s manifests still outstanding** — defer until 0.2's deployment-target reasoning genuinely calls for K8s.)
 - [ ] CI/CD: builds image on PR, pushes to `ghcr.io/.../gls-extraction-tika:${VERSION}` on tag.
 
 #### 0.5.6 Documentation: the cloneable pattern

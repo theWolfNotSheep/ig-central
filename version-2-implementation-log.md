@@ -1000,3 +1000,51 @@ The OpenAPI spec uses a `oneOf` discriminator-by-`kind` for `TextPayload`, but t
 - **Capabilities + Health endpoints** — `getCapabilities` and `getHealth` are still abstract on `ExtractionApi`. Implementing them is mechanical; punted to keep this PR focused on the extract path.
 
 **Next:** MinIO sink + `getCapabilities` + `getHealth` implementations + Dockerfile (the next vertical slice). Or pivot to the relay hardening, Hub-side, or load driver.
+
+## 2026-04-27 — Phase 0.5.2 (e) + 0.5.3 + 0.5.5 — `gls-extraction-tika` is deployable
+
+**Done:** `gls-extraction-tika` is now a complete deployable. `MetaController` implements the generated `MetaApi` (`getCapabilities` + `getHealth`); a multi-stage `Dockerfile` builds the module from a repo-root context (so `contracts/` is reachable for `gls-platform-audit`'s schema-bundling resource directive); `docker-compose.yml`'s placeholder block is updated with the corrected `context: .` build path. **23 tests across the module, all green.**
+
+**What's wired:**
+
+- `MetaController` (`@RestController implements MetaApi`):
+  - `GET /v1/capabilities` — returns this build's identity (`service=gls-extraction-tika`, `version=0.0.1-SNAPSHOT` — versioned via `gls.extraction.build.version` env var when a real release tag is set), `tiers=["default"]`, `models=[]`. Pure extraction container per CSV #21.
+  - `GET /actuator/health` — minimal `UP` response. Spring Actuator's actual `/actuator/health` endpoint is the canonical probe; this implementation exists because the contract declares the operation.
+- `backend/gls-extraction-tika/Dockerfile` (multi-stage) — Eclipse Temurin 25 JDK builder + JRE runtime. Layered: copy poms first (cache-friendly), `mvn dependency:go-offline`, then copy backend + contracts, then `mvn package`. `HEALTHCHECK` curls `/actuator/health`.
+- `docker-compose.yml` placeholder block — `context: .` (repo root) + `dockerfile: backend/gls-extraction-tika/Dockerfile`. The wider context is essential: `gls-platform-audit`'s pom bundles `contracts/audit/event-envelope.schema.json` into its jar via a build-time resource at `../../contracts/audit/`; without repo-root context Docker can't reach it.
+
+**Decisions logged:** None new.
+
+**Plan checkboxes flipped:**
+
+- 0.5.1 Dockerfile note removed (no longer deferred).
+- 0.5.3 Error returns — `[x]`. RFC 7807 mapping covers `DOCUMENT_NOT_FOUND` / `DOCUMENT_ETAG_MISMATCH` / `EXTRACTION_CORRUPT` / `EXTRACTION_TOO_LARGE` / `EXTRACTION_SOURCE_UNAVAILABLE`. `EXTRACTION_OOM` / `EXTRACTION_TIMEOUT` apply once async parsing / circuit breakers land — flagged inline.
+- 0.5.3 Health probes — basic endpoint landed; readiness `HealthIndicator` beans (Tika init, MinIO reach) still outstanding — flagged inline.
+- 0.5.5 Dockerfile + Compose definition — `[x]`. K8s manifests still outstanding — flagged inline (defer until the 0.2 deployment-target reasoning genuinely calls for K8s).
+
+**Tests (3 new + 20 existing = 23 total, all green):**
+
+- `MetaControllerTest` (3) — capabilities advertise service identity + default tier; health returns UP; controller still implements `MetaApi`.
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/Dockerfile` (new, multi-stage).
+- `backend/gls-extraction-tika/src/main/java/.../web/MetaController.java` (new).
+- `backend/gls-extraction-tika/src/test/java/.../web/MetaControllerTest.java` (new).
+- `docker-compose.yml` — placeholder block updated for `context: .` + Dockerfile path; depends-on simplified (Tika is currently stateless — no Mongo / Rabbit needs until idempotency + audit emission land).
+- `version-2-implementation-plan.md` — checkboxes / inline notes.
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 23/23 pass. Docker build itself is not yet exercised in CI — flag for the next CI pass; the build context change is the load-bearing piece and worth a dry run.
+
+**Open issues (continuing into 0.5.2 follow-ups):**
+
+- **MinIO sink** for the >256 KB overflow (`textRef` branch).
+- **`nodeRunId` idempotency** (24h TTL via Mongo).
+- **Audit emission** via `gls-platform-audit`.
+- **Tika + MinIO `HealthIndicator` beans** for the readiness side of the actuator health surface.
+- **Metrics** (Micrometer counters, latency histogram, error rate).
+- **JWT validation middleware**.
+- **Existing `backend/Dockerfile` and `Dockerfile.mcp`** quietly miss the `contracts/` tree at build time. The api jar's bundled audit schema is therefore likely not present in deployed containers — separate fix, possibly the cause of subtly-different runtime behaviour.
+
+**Next:** Sink + idempotency + audit emission (the remaining 0.5.2 items). Or pivot to fixing `backend/Dockerfile`'s contracts-context issue, relay hardening, or load driver.
