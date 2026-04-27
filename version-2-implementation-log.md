@@ -1162,3 +1162,56 @@ The codes match the RFC 7807 mapping in `ExtractionExceptionHandler` so a downst
 - **`MinioDocumentSink` real-MinIO test** — blocked by issue #7's Testcontainers debt; the unit test against mocks covers the orchestration but not the wire-level upload.
 
 **Next:** `nodeRunId` idempotency, or readiness `HealthIndicator`s, or metrics, or pivot to other Phase 0 follow-ups.
+
+## 2026-04-27 — Phase 0.5.2 (idempotency, closing entry) — Phase 0.5.2 fully closed
+
+**Done:** `nodeRunId` idempotency per CSV #16 — the last outstanding 0.5.2 item. Mongo-backed `extraction_idempotency` collection with a 24h TTL; `IdempotencyStore` wraps `tryAcquire` / `cacheResult` / `releaseOnFailure`. Repeated requests within the TTL window get the cached response (200) if completed or 409 `IDEMPOTENCY_IN_FLIGHT` if still running. **0.5.2 is now fully `[x]`.** Module test count: 34, all green.
+
+**What's wired:**
+
+- `IdempotencyRecord` — Mongo document keyed by `nodeRunId`. `expiresAt` is a Mongo TTL index (`@Indexed(expireAfter = "0s")`); rows auto-delete at-or-after that instant so crashed in-flight extractions don't accumulate.
+- `IdempotencyRepository` — Spring Data Mongo.
+- `IdempotencyOutcome` — `ACQUIRED` (proceed) / `IN_FLIGHT` (409) / `CACHED` (replay). Status enum + optional `cachedJson` payload.
+- `IdempotencyStore` — `tryAcquire(nodeRunId)` is the workhorse: read-then-insert with race recovery via `DuplicateKeyException`. `cacheResult` stamps `completedAt` + `responseJson`. `releaseOnFailure` deletes the row so a follow-up retry can start fresh (alternative — leaving the row in-flight — would block recovery for the 24h TTL).
+- `IdempotencyInFlightException` — semantic exception; mapped to RFC 7807 with code `IDEMPOTENCY_IN_FLIGHT` and HTTP 409 by `ExtractionExceptionHandler`.
+- `ExtractController` — idempotency check moved to the very top, before any source I/O. Three branches per `IdempotencyOutcome.status()`. On success the response is JSON-serialised and cached; on failure the row is deleted. JSON deserialisation of the cached response uses Jackson's `JsonTypeInfo.Id.DEDUCTION` via a mixin that pins the two `oneOf` subtypes — without it the generated `ExtractResponseText` interface (which has no built-in discriminator) doesn't round-trip.
+
+**Generator gotcha worth flagging:** `openapi-generator-maven-plugin` 7.10.0 emits an empty interface for `oneOf` schemas — no `@JsonTypeInfo`, no discriminator. Round-tripping an `ExtractResponse` through Jackson requires a mixin with `JsonTypeInfo.Id.DEDUCTION` (subtype picked by which fields are present). Already noted in the 0.5.2 (d) controller log; this PR is the second hit. Add to `docs/service-template.md` as part of 0.5.6.
+
+**Decisions logged:** None new. Closes the 0.5.2 idempotency bullet.
+
+**Tests (4 new + 30 existing = 34 total, all green):**
+
+- `in_flight_idempotency_returns_409_via_exception` — `IdempotencyOutcome.IN_FLIGHT` short-circuits before source / sink / Tika.
+- `cached_idempotency_returns_stored_response_without_extracting` — `CACHED` replays the JSON; no source / no audit emit.
+- `successful_extract_caches_the_response_for_subsequent_retries` — `cacheResult` called with the right `nodeRunId`.
+- `failure_releases_the_idempotency_row_so_retries_can_proceed` — failure path calls `releaseOnFailure` and never `cacheResult`.
+
+**Files changed:**
+
+- `backend/gls-extraction-tika/src/main/java/.../idempotency/{IdempotencyRecord,IdempotencyRepository,IdempotencyOutcome,IdempotencyStore,IdempotencyInFlightException}.java` (5 new).
+- `backend/gls-extraction-tika/src/main/java/.../web/ExtractController.java` — idempotency check at entry; cache on success / release on failure; Jackson mixin for the cached round-trip; `errorCodeFor` extended.
+- `backend/gls-extraction-tika/src/main/java/.../web/ExtractionExceptionHandler.java` — `IdempotencyInFlightException` → 409 `IDEMPOTENCY_IN_FLIGHT`.
+- `backend/gls-extraction-tika/src/test/java/.../web/ExtractControllerTest.java` — wires `IdempotencyStore` mock + `ObjectMapper`; 4 new tests.
+- `version-2-implementation-plan.md` — 0.5.2 idempotency item flipped `[x]`. **Phase 0.5.2 is now fully `[x]`.**
+- `version-2-implementation-log.md` — this entry.
+
+**Verification:** `./mvnw -pl gls-extraction-tika -am test` — 34/34 pass.
+
+**Phase 0.5 status:**
+
+| Sub-phase | State |
+|---|---|
+| 0.5.1 | ✓ |
+| 0.5.2 | ✓ closed (this PR) |
+| 0.5.3 | error returns ✓, audit ✓, basic health ✓; tracing / readiness `HealthIndicator` / metrics / JWT still outstanding |
+| 0.5.4 | unit-level only; integration tests deferred (issue #7) |
+| 0.5.5 | Dockerfile + Compose ✓; K8s + CI/CD outstanding |
+| 0.5.6 | not started |
+
+**Open issues:**
+
+- Per-service Mongock — the `extraction_idempotency` TTL index is auto-created by `@Indexed`, but for production-grade migration tooling we may want Mongock to own it (consistent with the audit_outbox pattern). Track separately.
+- Real-Mongo idempotency test — blocked by issue #7.
+
+**Next:** Tracing, readiness `HealthIndicator` beans, metrics, JWT, integration tests, K8s manifests, or the cloneable service-template doc.

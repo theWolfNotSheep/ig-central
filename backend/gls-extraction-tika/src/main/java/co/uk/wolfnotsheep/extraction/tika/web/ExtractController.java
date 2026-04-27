@@ -2,6 +2,9 @@ package co.uk.wolfnotsheep.extraction.tika.web;
 
 import co.uk.wolfnotsheep.extraction.tika.api.ExtractionApi;
 import co.uk.wolfnotsheep.extraction.tika.audit.ExtractionEvents;
+import co.uk.wolfnotsheep.extraction.tika.idempotency.IdempotencyInFlightException;
+import co.uk.wolfnotsheep.extraction.tika.idempotency.IdempotencyOutcome;
+import co.uk.wolfnotsheep.extraction.tika.idempotency.IdempotencyStore;
 import co.uk.wolfnotsheep.extraction.tika.model.ExtractRequest;
 import co.uk.wolfnotsheep.extraction.tika.model.ExtractResponse;
 import co.uk.wolfnotsheep.extraction.tika.model.ExtractResponseText;
@@ -14,6 +17,10 @@ import co.uk.wolfnotsheep.extraction.tika.sink.ExtractedTextRef;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentRef;
 import co.uk.wolfnotsheep.extraction.tika.source.DocumentSource;
 import co.uk.wolfnotsheep.platformaudit.emit.AuditEmitter;
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -50,6 +57,8 @@ public class ExtractController implements ExtractionApi {
     private final DocumentSource source;
     private final TikaExtractionService tika;
     private final DocumentSink sink;
+    private final IdempotencyStore idempotency;
+    private final ObjectMapper mapper;
     private final ObjectProvider<AuditEmitter> auditEmitterProvider;
     private final long inlineByteCeiling;
     private final String serviceName;
@@ -60,6 +69,8 @@ public class ExtractController implements ExtractionApi {
             DocumentSource source,
             TikaExtractionService tika,
             DocumentSink sink,
+            IdempotencyStore idempotency,
+            ObjectMapper mapper,
             ObjectProvider<AuditEmitter> auditEmitterProvider,
             @Value("${gls.extraction.tika.inline-byte-ceiling:262144}") long inlineByteCeiling,
             @Value("${spring.application.name:gls-extraction-tika}") String serviceName,
@@ -68,6 +79,15 @@ public class ExtractController implements ExtractionApi {
         this.source = source;
         this.tika = tika;
         this.sink = sink;
+        this.idempotency = idempotency;
+        // The generated ExtractResponseText interface (oneOf) has no
+        // Jackson discriminator. Without help, deserialising a cached
+        // response can't pick between inline (text + encoding) and ref
+        // (textRef + contentLength). DEDUCTION picks the subtype by
+        // which properties are present — works because the two
+        // branches share no required fields.
+        this.mapper = mapper.copy()
+                .addMixIn(ExtractResponseText.class, ExtractResponseTextMixin.class);
         this.auditEmitterProvider = auditEmitterProvider;
         this.inlineByteCeiling = inlineByteCeiling;
         this.serviceName = serviceName;
@@ -80,15 +100,59 @@ public class ExtractController implements ExtractionApi {
             String traceparent,
             ExtractRequest request,
             String idempotencyKey) {
+
+        // Idempotency check first — before any source I/O. CSV #16:
+        // repeated requests with the same nodeRunId within the 24h TTL
+        // return the cached result (200) if completed, or 409 IN_FLIGHT
+        // if still running.
+        IdempotencyOutcome outcome = idempotency.tryAcquire(request.getNodeRunId());
+        switch (outcome.status()) {
+            case CACHED -> {
+                return ResponseEntity.ok(deserialiseCached(outcome.cachedJson()));
+            }
+            case IN_FLIGHT -> throw new IdempotencyInFlightException(request.getNodeRunId());
+            case ACQUIRED -> { /* fall through to extraction */ }
+        }
+
         try {
-            return doExtract(traceparent, request, idempotencyKey);
+            ResponseEntity<ExtractResponse> response = doExtract(traceparent, request, idempotencyKey);
+            cacheCompleted(request.getNodeRunId(), response.getBody());
+            return response;
         } catch (RuntimeException failure) {
+            idempotency.releaseOnFailure(request.getNodeRunId());
             // Failure-path audit. Emitted from the controller (rather
             // than from ExtractionExceptionHandler) so traceparent +
             // nodeRunId are still in scope without a request-scoped
             // bean. The handler still owns the RFC 7807 mapping.
             emitFailed(request, traceparent, failure);
             throw failure;
+        }
+    }
+
+    private ExtractResponse deserialiseCached(String json) {
+        try {
+            return mapper.readValue(json, ExtractResponse.class);
+        } catch (JsonProcessingException e) {
+            // Cached row is corrupt — best to drop it and let the
+            // caller retry, which will re-extract.
+            log.warn("idempotency cache deserialise failed: {}", e.getMessage());
+            throw new IllegalStateException("idempotency cache row was unparseable", e);
+        }
+    }
+
+    private void cacheCompleted(String nodeRunId, ExtractResponse response) {
+        if (response == null) {
+            return;
+        }
+        try {
+            String json = mapper.writeValueAsString(response);
+            idempotency.cacheResult(nodeRunId, json);
+        } catch (JsonProcessingException e) {
+            // Don't fail the user-facing call because the cache write
+            // failed — the response is correct, just unrepeatable on
+            // a retry within the TTL window.
+            log.warn("idempotency cache write failed for nodeRunId={}: {}",
+                    nodeRunId, e.getMessage());
         }
     }
 
@@ -100,7 +164,7 @@ public class ExtractController implements ExtractionApi {
         DocumentRef ref = toInternalRef(request);
         Instant started = Instant.now();
         if (idempotencyKey != null) {
-            log.debug("extract: nodeRunId={} idempotencyKey={} (cache check is a TODO)",
+            log.debug("extract: nodeRunId={} idempotencyKey={}",
                     request.getNodeRunId(), idempotencyKey);
         }
 
@@ -145,6 +209,14 @@ public class ExtractController implements ExtractionApi {
         }
     }
 
+    @JsonTypeInfo(use = JsonTypeInfo.Id.DEDUCTION)
+    @JsonSubTypes({
+            @JsonSubTypes.Type(ExtractResponseTextOneOf.class),
+            @JsonSubTypes.Type(ExtractResponseTextOneOf1.class)
+    })
+    abstract static class ExtractResponseTextMixin {
+    }
+
     private static String errorCodeFor(Throwable cause) {
         if (cause instanceof co.uk.wolfnotsheep.extraction.tika.source.DocumentNotFoundException) {
             return "DOCUMENT_NOT_FOUND";
@@ -157,6 +229,9 @@ public class ExtractController implements ExtractionApi {
         }
         if (cause instanceof DocumentTooLargeException) {
             return "EXTRACTION_TOO_LARGE";
+        }
+        if (cause instanceof IdempotencyInFlightException) {
+            return "IDEMPOTENCY_IN_FLIGHT";
         }
         if (cause instanceof UncheckedIOException) {
             return "EXTRACTION_SOURCE_UNAVAILABLE";
