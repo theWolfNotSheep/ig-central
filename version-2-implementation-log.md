@@ -2438,3 +2438,87 @@ The previous 375-reactor test suite is unchanged. New module: 14 tests, total 38
 **Phase 1.6 status:** one of four plan checkboxes ticked (the "conform to new contract" item). PR2/PR3 close the rest.
 
 **Next:** Phase 1.6 PR2 (real Anthropic + MCP, lifted from `gls-llm-orchestration`); OR Phase 1.6 PR3 (router cutover from Rabbit to HTTP); OR per-category overrides; OR Dockerfile / Compose for the v2 services.
+
+## 2026-04-29 — Phase 1.6 PR2 — Anthropic + Ollama LLM backends + MCP
+
+**Done:** Real LLM backends behind the `LlmService` interface. Selected via `gls.llm.worker.backend=anthropic|ollama`. Uses Spring AI's `AnthropicChatModel` / `OllamaChatModel` (same starters `gls-llm-orchestration` already depends on). MCP integration via `spring-ai-starter-mcp-client` per CSV #1 — every backend hands the configured `ToolCallbackProvider` beans to its ChatClient builder. Closes the Phase 1.6 "move logic into the new shape" plan checkbox.
+
+**Decisions logged:** None new — implements CSV #1 (each worker calls MCP itself) and CSV #2 (cascade dispatch task-agnostic) for the LLM tier.
+
+**What's wired:**
+
+- **`AnthropicLlmService`** (lifted from `AnthropicHaikuSlmService`) — same shape as the SLM's Anthropic service. Defaults to `claude-sonnet-4-5` (the v2 LLM tier's planned default per CLAUDE.md), `temperature=0.1`, `max-tokens=4096`. Resolves PROMPT block via `PromptBlockResolver`, substitutes `{{text}}`, calls Spring AI `ChatClient` with `AnthropicChatOptions(model, temperature, maxTokens)` and `defaultToolCallbacks(toolCallbackProviders)` when MCP is wired. Same JSON / fence parsing, same `tokensIn`/`tokensOut` extraction, same `UncheckedIOException` wrapping for SDK errors.
+- **`OllamaLlmService`** (lifted from `OllamaSlmService`) — defaults to `qwen2.5:32b` (matches the legacy orchestrator's default), `temperature=0.1`, `numCtx=32768`. Same shape as Anthropic but with `OllamaChatOptions`.
+- **`PromptBlockResolver`** (lifted from `gls-slm-worker`) — reads `pipeline_blocks` via raw `MongoTemplate` projection. Resolves PROMPT blocks to `(systemPrompt, userPromptTemplate)`. Same minimal-coupling pattern as SLM (no `gls-governance` dep).
+- **`LlmBackendConfig`** (rewritten) — single `@Bean` factory selects between not-configured / Anthropic / Ollama based on `gls.llm.worker.backend`. `ObjectProvider<AnthropicChatModel>` and `ObjectProvider<OllamaChatModel>` with `getIfAvailable()` so the service starts cleanly without either configured. Collects `ToolCallbackProvider` beans via `ObjectProvider.stream()` and passes them to whichever backend is active.
+- **`pom.xml`** — adds `spring-ai-starter-model-anthropic`, `spring-ai-starter-model-ollama`, `spring-ai-starter-mcp-client`. Imports the `spring-ai-bom` (2.0.0-SNAPSHOT) and registers the Spring snapshot repos at the module level — same pattern as `gls-slm-worker` and `gls-llm-orchestration`.
+- **`application.yaml`** — new `gls.llm.worker.{anthropic, ollama}.*` config keys + `spring.ai.mcp.client.sse.connections.governance.url` (default `http://gls-mcp-server:8081`).
+
+**Why "lift wholesale from SLM" instead of "lift from gls-llm-orchestration":**
+
+The SLM module was authored with the new contract shape (HTTP, async surface, JobStore, RFC 7807 errors). The legacy `gls-llm-orchestration` is Rabbit-driven; its classification logic (`LlmClientFactory.call(systemPrompt, userPrompt)`) is wrapped in queue consumers + result publishers that don't translate to the new HTTP shape. Lifting from the SLM module gets us a working LLM worker in the new shape immediately; the remaining orchestrator-specific bits (cost budgets, rate-limit semaphores, app_config-driven model selection) are smaller follow-ups that don't block the cascade router cut-over.
+
+**Tests (26 new in module; 415 reactor total):**
+
+- `AnthropicLlmServiceTest` (9, lifted) — `renderUser` substitution paths; `parseContent` for pure JSON / fenced JSON / plain text / blank / no-confidence-default; `activeBackend()` returns `ANTHROPIC`; tool-callbacks-aware constructor + null array fallback.
+- `OllamaLlmServiceTest` (7, lifted) — similar coverage plus `activeBackend()=OLLAMA` and blank-modelId fallback to `qwen2.5:32b`.
+- `PromptBlockResolverTest` (8, lifted) — happy active-version resolve; pinned-version resolve; unknown id / wrong type / missing version / empty content → `BlockUnknownException`; `draftContent` fallback; blank id → exception.
+- Existing 14 tests from PR1 (`NotConfiguredLlmServiceTest` + `LlmEventsTest` + `ClassifyControllerTest`) unchanged.
+
+The previous 389-reactor test suite (per the LLM PR1 entry) is unchanged. Module count: 14 → 40.
+
+**Files changed:** 4 new source files (`AnthropicLlmService`, `OllamaLlmService`, `PromptBlockResolver`) + rewritten `LlmBackendConfig` + `pom.xml` (Spring AI BOM + 3 starters + Spring snapshot repos) + `application.yaml` + 3 new test files + plan / log = 11 files.
+
+**Open issues / deferred:**
+
+- **Cost budget gate** — Phase 1.6 plan checkbox; per-day spending cap. Not in this PR; lifts from the legacy orchestrator's tracking shape if it has one, otherwise a small follow-up.
+- **Rate-limit semaphore per replica** — Phase 1.6 plan checkbox; bounds concurrent in-flight calls. Small follow-up.
+- **Cascade router cutover (PR3)** — `LlmDispatchCascadeService` (Rabbit) → `LlmHttpDispatcher` + `LlmOrchestratorCascadeService` mirroring the SLM pattern. Activated by a feature flag.
+- **Real cross-service integration test** — needs a running Anthropic API + an MCP server. Same blocker as the rest of the v2 services; gated on issue #7.
+- **Legacy `gls-llm-orchestration` retirement** — after PR3 + a stabilisation window.
+- **`isReady()` reachability probe** — currently returns `chatModel != null`. A real ping-style probe lives with the broader health follow-up.
+
+**Phase 1.6 status:** two of four plan checkboxes ticked (PR1's contract + PR2's logic move). Cost budget + rate limit remain. PR3 cuts the cascade router over to HTTP.
+
+**Next:** Phase 1.6 PR3 (cascade router cut-over: `LlmHttpDispatcher` + `LlmOrchestratorCascadeService` replacing `LlmDispatchCascadeService`); OR cost budget + rate limit; OR per-category overrides; OR Dockerfile / Compose for `gls-llm-worker`.
+
+## 2026-04-29 — Phase 1.6 PR3 — cascade router cut-over (Rabbit → HTTP for LLM)
+
+**Done:** The cascade router can now dispatch the LLM tier via HTTP to `gls-llm-worker` instead of via Rabbit to `gls-llm-orchestration`. Activated by `gls.router.cascade.llm-http.enabled=true`. When both flags are on (HTTP + Rabbit), HTTP wins — that's the cut-over path. The legacy Rabbit dispatcher stays operational behind its own feature flag for rollback.
+
+**Decisions logged:** None new — implements the planned LLM-tier transport swap.
+
+**What's wired:**
+
+- **`LlmHttpDispatcher`** (new) — pure HTTP client to `gls-llm-worker`'s `POST /v1/classify`. Same shape as BERT/SLM equivalents. 200 → `LlmInferenceResult`; 503 → `LlmTierFallthroughException` (default `LLM_NOT_CONFIGURED`); 422 → `LlmBlockUnknownException`; other 4xx/5xx → fallthrough with `errorCode=LLM_HTTP_<status>`; transport / parse → `LLM_TRANSPORT_ERROR` / `LLM_RESPONSE_INVALID`.
+- **`LlmInferenceResult`** (new record) — `(result, confidence, modelId, tokensIn, tokensOut, costUnits)`. No `backend` field (LLM has only one provider conceptually).
+- **`LlmTierFallthroughException`** + **`LlmBlockUnknownException`** — same pattern as BERT/SLM.
+- **`LlmHttpCascadeService`** (new) — implements `CascadeService`. Unlike the BERT/SLM orchestrators, doesn't wrap an inner cascade — LLM IS the cascade's floor. On `LlmTierFallthroughException`, surfaces as `LlmJobFailedException` → `ROUTER_LLM_FAILED` 502 (mirrors the legacy Rabbit failure mapping). `LlmBlockUnknownException` propagates for 422.
+- **`RouterHttpConfig`** — new `@Bean` registers `LlmHttpDispatcher` when `gls.router.cascade.llm-http.enabled=true`.
+- **`CascadeBackendConfig`** — selection logic: HTTP wins over Rabbit when both are wired; else Rabbit; else mock. The HTTP dispatcher → `LlmHttpCascadeService` becomes the cascade's floor.
+- **`RouterExceptionHandler`** — new handler → 422 `ROUTER_LLM_BLOCK_UNKNOWN`.
+- **`ClassifyController.errorCodeFor`** — extended with `ROUTER_LLM_BLOCK_UNKNOWN`.
+- **`application.yaml`** — `gls.router.cascade.llm-http.{enabled, url, timeout-ms}` (defaults: `false`, `http://gls-llm-worker:8080`, 90s).
+
+**Why HTTP wins over Rabbit when both are configured:**
+
+The cut-over should be deterministic — flipping `llm-http.enabled=true` is the explicit "use the new path" signal. Falling back to Rabbit only when HTTP isn't wired keeps existing setups working untouched. The `llm.enabled=true` flag remains the legacy-path activator; `llm-http.enabled=true` is the new-path activator. Both can be on during a redeploy transition. The selection picks the most modern wired option.
+
+**Tests (9 new in module; 424 reactor total):**
+
+- `LlmHttpDispatcherTest` (6) — happy 200; 503 with code; 503 without code; 422 → BlockUnknown; 500 → fallthrough; transport failure → fallthrough.
+- `LlmHttpCascadeServiceTest` (3) — `LLM` outcome on success; fallthrough → `LlmJobFailedException`; `LlmBlockUnknownException` propagates.
+
+Router module: 68 → 77 tests. Reactor: 415 → 424.
+
+**Files changed:** 5 new source files + 4 modified + 2 new test files + log = 12 files.
+
+**Open issues / deferred:**
+
+- **Cost budget gate + rate-limit semaphore** — Phase 1.6 plan checkbox; lives on the worker side. Small follow-up.
+- **Legacy `gls-llm-orchestration` retirement** — once the new path runs in non-dev, the Rabbit dispatcher + legacy module can be removed.
+- **End-to-end integration test** — gated on issue #7.
+
+**Phase 1.6 status:** **three of four plan checkboxes ticked.** PR1 (contract + skeleton), PR2 (real backends + MCP), PR3 (cascade cut-over). Cost budget + rate-limit semaphore is the last item.
+
+**Next:** Cost budget + rate limit on the LLM worker; OR per-category overrides; OR Dockerfile + Compose for `gls-llm-worker`; OR legacy retirement.

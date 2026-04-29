@@ -326,6 +326,7 @@ public class ClassifyController implements ClassifyApi {
         if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmJobFailedException) return "ROUTER_LLM_FAILED";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.BertBlockUnknownException) return "ROUTER_BERT_BLOCK_UNKNOWN";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.SlmBlockUnknownException) return "ROUTER_SLM_BLOCK_UNKNOWN";
+        if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmBlockUnknownException) return "ROUTER_LLM_BLOCK_UNKNOWN";
         if (cause instanceof java.io.UncheckedIOException) return "ROUTER_DEPENDENCY_UNAVAILABLE";
         return "ROUTER_UNEXPECTED";
     }

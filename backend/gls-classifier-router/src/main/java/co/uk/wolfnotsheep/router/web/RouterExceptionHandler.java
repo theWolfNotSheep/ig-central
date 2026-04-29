@@ -1,6 +1,7 @@
 package co.uk.wolfnotsheep.router.web;
 
 import co.uk.wolfnotsheep.router.parse.BertBlockUnknownException;
+import co.uk.wolfnotsheep.router.parse.LlmBlockUnknownException;
 import co.uk.wolfnotsheep.router.parse.LlmJobFailedException;
 import co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException;
 import co.uk.wolfnotsheep.router.parse.SlmBlockUnknownException;
@@ -63,6 +64,12 @@ public class RouterExceptionHandler {
     public ResponseEntity<ProblemDetail> handleSlmBlockUnknown(SlmBlockUnknownException e) {
         return problem(HttpStatus.UNPROCESSABLE_ENTITY, "ROUTER_SLM_BLOCK_UNKNOWN",
                 "PROMPT block coords did not resolve at gls-slm-worker", e.getMessage());
+    }
+
+    @ExceptionHandler(LlmBlockUnknownException.class)
+    public ResponseEntity<ProblemDetail> handleLlmBlockUnknown(LlmBlockUnknownException e) {
+        return problem(HttpStatus.UNPROCESSABLE_ENTITY, "ROUTER_LLM_BLOCK_UNKNOWN",
+                "PROMPT block coords did not resolve at gls-llm-worker", e.getMessage());
     }
 
     @ExceptionHandler(UncheckedIOException.class)
