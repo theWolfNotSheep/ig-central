@@ -2875,3 +2875,57 @@ Reactor: 450 → 455 Java tests in `gls-app-assembly`. Full backend reactor gree
 - **Schema coverage in CI** — Spectral lints `contracts/**/*.yaml` (OpenAPI), but JSON Schema files under `contracts/blocks/` aren't validated against their meta-schema in CI. The local Python check in this PR proves the schema is meta-valid; promoting that to a CI step is a small follow-up.
 
 **Next:** Phase 1.9 PR2 — engine Stage ④ dispatch. Plumb the resolved `requiredScans[]` through the engine's shared context; add a dispatcher that iterates each scan, resolves its `ref` as a PROMPT block id, and calls `gls-classifier-router` for execution. Aggregate results into a new context key for PR3 (metadata extraction) and PR4 (enforcement handoff).
+
+## 2026-04-29 — Phase 1.9 PR2 — Engine Stage ④ scan dispatch
+
+**Done:** Engine now dispatches the resolved POLICY block's `requiredScans[]` through the cascade router. Observe-only — blocking failures are logged but don't gate the pipeline yet (PR4 wires gating + audit emission).
+
+**What's wired:**
+
+- **Engine plumbing.** `PipelineExecutionEngine.resolveAndRecordPolicy` now stashes the actual `requiredScans` list in `ctx` under `policyRequiredScans` (List<Map<String,Object>> with `scanType`, `ref`, `blocking` keys), in addition to the existing `policyRequiredScanCount`. Downstream PRs read the typed list; the count stays as a cheap log signal.
+
+- **`ScanRouterClient` (new).** Sibling to `ClassifierRouterClient` — same `POST /v1/classify` transport, but a scan-specific result parse: SCAN PROMPT blocks return `{found, instances, confidence}`, not the classification fields the existing client extracts. Returns a generic `RouterScanOutcome(success, tierOfDecision, confidence, result, error, durationMs)` record. Active when `pipeline.scan-router.enabled=true` (defaults true so the bean is present whenever the cascade-router classpath is wired). Independent flag from `pipeline.classifier-router.enabled` so SCAN dispatch can be staged-rolled.
+
+- **`PolicyScanDispatcher` (new).** Iterates `requiredScans[]`, calls the client per scan, and aggregates `PolicyScanResult` records. Behaviour:
+  - Empty / null scans → returns empty list silently.
+  - Client absent (test contexts, flag off) → records each scan as `dispatched=false` with an explanatory error so the engine has a deterministic record without a scan ever leaving the JVM.
+  - Scan with null / blank `ref` → records `dispatched=false` + error; doesn't call the client.
+  - Client throws → caught, recorded as `dispatched=true` (we attempted) with `error` populated.
+  - Builds `nodeRunId` as `${pipelineRunId}-scan-${ref}` (or just `scan-${ref}` when no run id) so the cascade router's 24h idempotency window dedupes correctly across retries.
+
+- **`PolicyScanResult` (new record).** Carries scan metadata + outcome: `scanType`, `ref`, `blocking`, `dispatched`, `tierOfDecision`, `confidence`, `result` (raw block-shaped output), `error`, `durationMs`. Convenience: `success()` and `blockingFailure()` helpers.
+
+- **Engine wire-in.** New `dispatchPolicyScans(run, doc, ctx)` reads `policyRequiredScans` from ctx, deserialises back into typed `RequiredScan` records, calls the dispatcher with `doc.getExtractedText()`, and stashes the results under `policyScanResults`. Fail-soft: dispatcher exceptions are logged (observe-only) and don't surface to the engine's pipeline run state.
+
+**Why a sibling client instead of extending `ClassifierRouterClient`:**
+
+The classification client returns an `LlmJobCompletedEvent` populated from classification-specific fields in `result` (categoryId, sensitivity, retentionScheduleId, etc). For SCAN PROMPTs, those fields don't exist — the result is `{found, instances, confidence}`. Bolting scan parsing onto the same client would either bloat its response shape or silently strip data. A sibling client with a generic `Map<String,Object>` result keeps both code paths focused.
+
+**Why observe-only at this phase:**
+
+PR2 establishes the dispatch shape — the typed `RequiredScan` flowing through to the cascade router and back. Gating the pipeline on blocking failures is a separate behavioural change that needs a status transition (e.g. `SCAN_FAILED` → retry / quarantine) which is part of PR4 (results aggregated, passed to enforcement). Splitting them keeps the failure-mode review separate from the wire-in.
+
+**Tests:**
+
+- `PolicyScanDispatcherTest` (10 tests): empty scans, single scan success, transport failure, blocking-failure flag, multi-scan ordering, no-client fallback, null/blank ref handling, dispatcher exception capture, nodeRunId convention (`runId-scan-ref` and the null-runId fallback).
+- `ScanRouterClientTest` (5 tests): JDK builtin `HttpServer` round-trip — successful response → outcome with tier + confidence + result, non-2xx → failure outcome with HTTP status + body, minimal `result: {found:false}` parse, idempotency-key fallback to `nodeRunId`, `blockVersion` lands in request body.
+
+Reactor: 455 → 470 in `gls-app-assembly`. Full backend reactor green.
+
+**Contracts touched:** None. The router contract (`contracts/classifier-router/openapi.yaml` v0.2.0) already supports any PROMPT block id at `POST /v1/classify`, which is what SCAN dispatch leverages.
+
+**Files changed:**
+
+- `PipelineExecutionEngine.java` — constructor +1 param, `resolveAndRecordPolicy` plumbs `policyRequiredScans`, new `dispatchPolicyScans` helper.
+- `PolicyScanDispatcher.java` (new), `ScanRouterClient.java` (new), `PolicyScanResult.java` (new).
+- `PolicyScanDispatcherTest.java` (new), `ScanRouterClientTest.java` (new).
+- Plan + log = 8 files.
+
+**Open issues / deferred:**
+
+- **Gating on blocking failures** — currently observed-only. PR4 wires `SCAN_FAILED` status + retry path.
+- **Visual-DAG node form-factor** — same deferral as Phase 1.8 PR3. Once PR3 + PR4 ship, the inline-call shape is concrete enough to promote to a real visual-node type.
+- **Per-scan audit emission** — `PolicyScanDispatcher` doesn't emit Tier 2 audit events yet. Adds nicely after `gls-platform-audit` library work continues (CSV #1 / #5 / #6).
+- **Block ref → PROMPT vs PiiType fallback** — the seeded `scan-pii-${key}` blocks make `requiredScans[].ref` always resolve as a PROMPT block id today. If pre-seed POLICY blocks reference raw `PiiTypeDefinition.key` strings, the router will return 422 (no such block); a follow-up can add a `ScanRefResolver` that detects PiiType keys and synthesizes a transient PROMPT block at dispatch time.
+
+**Next:** Phase 1.9 PR3 — metadata extraction PROMPT block seeder + dispatch (parallel pattern to PR1 + PR2 but for `policyMetadataSchemaIds[]`). After that, PR4 aggregates scan + metadata results, persists them to the document, hands off to enforcement, and gates the pipeline on blocking failures.

@@ -107,6 +107,12 @@ public class PipelineExecutionEngine {
     // dispatched in Phase 1.9 (Stage ④ scan dispatch).
     private final ObjectProvider<co.uk.wolfnotsheep.governance.services.PolicyBlockResolver> policyBlockResolverProvider;
 
+    // Phase 1.9 PR2 — Stage ④ scan dispatcher. Iterates the resolved
+    // POLICY block's requiredScans[] and runs each through the cascade
+    // router. Always present (the underlying ScanRouterClient is the
+    // optional bean); observe-only at this phase.
+    private final PolicyScanDispatcher policyScanDispatcher;
+
     public PipelineExecutionEngine(TextExtractionService textExtractionService,
                                    DocumentService documentService,
                                    ObjectStorageService objectStorage,
@@ -131,7 +137,8 @@ public class PipelineExecutionEngine {
                                    PipelineRunRepository pipelineRunRepo,
                                    NodeRunRepository nodeRunRepo,
                                    ObjectProvider<ClassifierRouterClient> classifierRouterClientProvider,
-                                   ObjectProvider<co.uk.wolfnotsheep.governance.services.PolicyBlockResolver> policyBlockResolverProvider) {
+                                   ObjectProvider<co.uk.wolfnotsheep.governance.services.PolicyBlockResolver> policyBlockResolverProvider,
+                                   PolicyScanDispatcher policyScanDispatcher) {
         this.textExtractionService = textExtractionService;
         this.documentService = documentService;
         this.objectStorage = objectStorage;
@@ -157,6 +164,7 @@ public class PipelineExecutionEngine {
         this.nodeRunRepo = nodeRunRepo;
         this.classifierRouterClientProvider = classifierRouterClientProvider;
         this.policyBlockResolverProvider = policyBlockResolverProvider;
+        this.policyScanDispatcher = policyScanDispatcher;
     }
 
     // ── Main entry point: execute pipeline from the beginning ─────────
@@ -356,6 +364,13 @@ public class PipelineExecutionEngine {
         // only; Phase 1.9 (Stage ④ scan dispatch) consumes this to drive
         // the post-classify pipeline.
         resolveAndRecordPolicy(classifiedEvent, ctx);
+
+        // Phase 1.9 PR2 — dispatch the resolved POLICY block's
+        // requiredScans[] through the cascade router. Observe-only at
+        // this phase: results land in `policyScanResults` (ctx) so PR3
+        // and PR4 can read them; the engine doesn't gate on blocking
+        // failures yet.
+        dispatchPolicyScans(run, doc, ctx);
 
         // Store classification as the current context for post-classification nodes
         ctx.put("currentClassification", "applied");
@@ -1035,6 +1050,14 @@ public class PipelineExecutionEngine {
                         policy.effectiveFor(sensitivityName);
                 ctx.put("policyCategoryId", effective.categoryId());
                 ctx.put("policyRequiredScanCount", effective.requiredScans().size());
+                ctx.put("policyRequiredScans", effective.requiredScans().stream()
+                        .map(s -> {
+                            java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                            m.put("scanType", s.scanType());
+                            m.put("ref", s.ref());
+                            m.put("blocking", s.blocking());
+                            return m;
+                        }).toList());
                 ctx.put("policyMetadataSchemaIds", effective.metadataSchemaIds());
                 ctx.put("policyGovernancePolicyIds", effective.governancePolicyIds());
                 log.info("[engine] resolved POLICY for categoryId={}, sensitivity={}: scans={} schemas={} policies={}",
@@ -1048,6 +1071,59 @@ public class PipelineExecutionEngine {
             log.warn("[engine] POLICY resolution failed for categoryId={}: {} — continuing without policy",
                     event.categoryId(), e.getMessage());
         }
+    }
+
+    /**
+     * Phase 1.9 PR2. Read the {@code policyRequiredScans} list stashed
+     * by {@link #resolveAndRecordPolicy} and dispatch each scan through
+     * the cascade router. Records the per-scan outcomes under
+     * {@code policyScanResults} in shared context. Tolerant of: no
+     * scans (returns silently), no router client (records each scan as
+     * not-dispatched), or dispatcher exceptions (logged + skipped).
+     */
+    @SuppressWarnings("unchecked")
+    private void dispatchPolicyScans(PipelineRun run, DocumentModel doc,
+                                     java.util.Map<String, Object> ctx) {
+        Object scansObj = ctx.get("policyRequiredScans");
+        if (!(scansObj instanceof List<?> rawList) || rawList.isEmpty()) {
+            return;
+        }
+        List<co.uk.wolfnotsheep.governance.models.PolicyBlock.RequiredScan> scans = new ArrayList<>(rawList.size());
+        for (Object item : rawList) {
+            if (!(item instanceof Map<?, ?> m)) continue;
+            Object scanType = m.get("scanType");
+            Object ref = m.get("ref");
+            Object blocking = m.get("blocking");
+            if (ref == null) continue;
+            scans.add(new co.uk.wolfnotsheep.governance.models.PolicyBlock.RequiredScan(
+                    scanType == null ? null : scanType.toString(),
+                    ref.toString(),
+                    blocking instanceof Boolean b ? b : true));
+        }
+        if (scans.isEmpty()) return;
+
+        try {
+            List<PolicyScanResult> results = policyScanDispatcher.dispatch(
+                    run.getId(), scans, doc.getExtractedText());
+            ctx.put("policyScanResults", results.stream().map(this::scanResultToMap).toList());
+        } catch (RuntimeException e) {
+            log.warn("[engine] policy scan dispatch threw for doc {}: {} — observe-only, continuing",
+                    doc.getId(), e.getMessage());
+        }
+    }
+
+    private Map<String, Object> scanResultToMap(PolicyScanResult r) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("scanType", r.scanType());
+        m.put("ref", r.ref());
+        m.put("blocking", r.blocking());
+        m.put("dispatched", r.dispatched());
+        m.put("tierOfDecision", r.tierOfDecision());
+        m.put("confidence", r.confidence());
+        m.put("result", r.result());
+        m.put("error", r.error());
+        m.put("durationMs", r.durationMs());
+        return m;
     }
 
     private void applyClassificationToDocument(DocumentModel doc, DocumentClassifiedEvent event) {
