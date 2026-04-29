@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | In progress (1.1 underway) | 2026-04-29 | — | 1.1 — `gls-extraction-archive` module + contract landed (CSV #43 fan-out responsibility decided). Generated stub compiles. Per-format walkers, MinIO source/sink, idempotency, audit, tests, Dockerfile in follow-up PRs that mirror Tika's 0.5.2–0.5.6. |
+| 1   | In progress (1.1 underway) | 2026-04-29 | — | 1.1 — `gls-extraction-archive`: contract + module + ZIP/MBOX impl + MinIO source/sink + idempotency + audit + health + metrics + 34 unit tests landed. PST walker, JWT, Dockerfile + Compose, integration tests still outstanding. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -1611,3 +1611,57 @@ Several PR descriptions in this session said "Hub-side publishers still pending"
 - **Generated-stub commit policy** — the Tika service does not commit `target/generated-sources/openapi/` (CLAUDE.md → API Contracts says generated artefacts go under `contracts/<service>/generated/`). Mirroring Tika's behaviour for now; the policy gap was noted on the Tika 0.5.1 entry and remains a separate workstream.
 
 **Next:** Phase 1.1 (archive) implementation PR — generated server stub + parser dispatch (ZIP via Commons Compress, MBOX via Tika's `MboxParser`) + MinIO source / sink + nodeRunId idempotency. PST walker is its own follow-up. Mirrors Tika's 0.5.2 boundary.
+
+## 2026-04-29 — Phase 1.1 — `gls-extraction-archive` implementation (ZIP + MBOX)
+
+**Done:** Wired the archive service end-to-end at the unit-test layer. The module clones the `gls-extraction-tika` 0.5.2–0.5.4 scaffolding (source / sink / idempotency / audit / health / metrics / exception handler / controller) and adds the per-format walker dispatch the archive service needs. PST walker is deferred — explicitly out-of-scope for this PR pending a `java-libpst`-or-equivalent decision; the dispatcher rejects PST mime types via `UnsupportedArchiveTypeException` until it lands.
+
+**Decisions logged:** None new. Implements CSV #43 (caller owns fan-out) — controller returns the list of children's MinIO `documentRef`s on the response; orchestrator commits per-child `DocumentModel` rows + publishes ingest events.
+
+**What's wired (under `backend/gls-extraction-archive/src/main/java/co/uk/wolfnotsheep/extraction/archive/`):**
+
+- **`source/`** — `DocumentRef`, `DocumentSource`, `MinioDocumentSource`, `MinioSourceConfig`, `DocumentNotFoundException`, `DocumentEtagMismatchException`. Identical shape to Tika's source layer; reads the source archive bytes from MinIO with optional ETag check + `@Observed` span (`minio.fetch`).
+- **`sink/`** — `ChildSink` (interface), `MinioChildSink` (impl), `ChildRef` (record), `MinioChildSinkConfig`. Distinct from Tika's text sink — writes binary children, key shape `<nodeRunId>/<index>-<sanitised-fileName>` (deterministic so retries overwrite, not append). `@Observed` `minio.put`. Lazy bucket creation. Filename sanitisation strips path separators + control chars while keeping the extension for downstream mime detection.
+- **`idempotency/`** — full Tika-style store, repo, record, outcome, `IdempotencyInFlightException`. Mongo collection `archive_idempotency` with the same TTL contract (24h default). `tryAcquire` / `cacheResult` / `releaseOnFailure` semantics for ACQUIRED / IN_FLIGHT / CACHED.
+- **`audit/ArchiveEvents.java`** — Tier 2 event factory. Reuses `EXTRACTION_COMPLETED` / `EXTRACTION_FAILED` event types so the audit stream is homogeneous across the extraction family (readers filtering on `action="EXTRACT"` catch tika + archive + future ocr/audio in one query). Metadata distinguishes archive specifics: `archiveType`, `childCount`. Validated by the schema validator in tests.
+- **`parse/`** — `ArchiveType` enum (`ZIP`, `MBOX`, `PST`); `ArchiveWalker` interface; `ChildEmitter` callback (renamed from `ChildSink` to avoid collision with the storage-side interface); `ArchiveWalkerDispatcher` which Tika-detects the source mime, picks the matching walker, and invokes a single-pass walk (`@Observed` span `archive.walk`). Walkers: `ZipArchiveWalker` (Apache Commons Compress streaming reader; skips directory entries; corruption / EOF mid-stream → `CorruptArchiveException` for a 422; encrypted entries → `CorruptArchiveException` since passwords are out-of-scope) and `MboxArchiveWalker` (line-based RFC 4155 splitter that emits one `.eml` per `From `-prefixed message; tolerates garbage at file head; preserves the envelope `From ` line on emitted children for downstream MIME parsing).
+- **`health/`** — `MinioHealthIndicator` (clones Tika's; lists buckets), `ArchiveDispatcherHealthIndicator` (DOWN if no walkers registered; UP with `supportedTypes` detail otherwise).
+- **`web/`** — `ExtractController` (the orchestration hub: idempotency → source.open → dispatch → sink.upload per child → assemble response → cache + audit; per-cap caps thrown via `ArchiveCapsExceededException`); `ArchiveExceptionHandler` (RFC 7807 mapping with `code` extensions: `DOCUMENT_NOT_FOUND`, `DOCUMENT_ETAG_MISMATCH`, `ARCHIVE_CORRUPT`, `ARCHIVE_UNSUPPORTED_TYPE`, `ARCHIVE_TOO_LARGE`, `ARCHIVE_TOO_MANY_CHILDREN`, `ARCHIVE_CHILD_TOO_LARGE`, `IDEMPOTENCY_IN_FLIGHT`, `ARCHIVE_SOURCE_UNAVAILABLE`); `MetaController` (clones Tika's); `ExtractMetrics` (cohesive Micrometer instruments — `gls_archive_duration_seconds`, `gls_archive_result_total`, `gls_archive_children`, `gls_archive_bytes_processed`).
+- **`GlsExtractionArchiveApplication`** — Spring Boot entry point.
+- **`src/main/resources/application.yaml`** — `server.port: 8090` (distinct from Tika's 8080); MinIO endpoint / credentials env-var fallbacks; cap defaults — 1 GB max archive, 5000 max children, 256 MB max single-child decompressed (zip-bomb defence; the decompression is bounded inline by `ChildBoundedInputStream` so a malicious ZIP can't OOM the JVM before the walk completes); idempotency TTL `PT24H`; actuator exposes `health, info, prometheus`.
+
+**Caps strategy:**
+
+Three caps enforced with explicit error codes:
+
+- **`ARCHIVE_TOO_LARGE`** — source archive bytes exceed `gls.extraction.archive.caps.max-archive-bytes` (default 1 GB). Pre-flight check via `source.sizeOf()` plus an inline `CountingInputStream` that trips on actual reads (handles sources that don't expose a HEAD).
+- **`ARCHIVE_TOO_MANY_CHILDREN`** — child count exceeds `max-children` (default 5000). Checked by the controller's emitter before the next child upload.
+- **`ARCHIVE_CHILD_TOO_LARGE`** — a single child's decompressed size exceeds `max-child-bytes` (default 256 MB). Bounded by `ChildBoundedInputStream` wrapping the entry stream; trips during the put, before the JVM commits memory to the inflated bytes.
+
+The contract documented "max recursion depth" as a third cap, but per-invocation depth is moot in this architecture (one-level walk by design; pipeline depth is the orchestrator's concern). The implementation enforces what fits: size + count + per-child size. Future depth concerns belong upstream of this service.
+
+**Tests (34 in module; 187 reactor total):**
+
+- `ArchiveEventsTest` (4) — completed/failed envelope shape, schema validation, eventId pattern.
+- `ZipArchiveWalkerTest` (4) — happy multi-entry, directory-entry skip, emitter caps propagation, truncated-archive corruption.
+- `MboxArchiveWalkerTest` (5) — multi-message split, empty input, single message, separator-line preservation, garbage-head tolerance.
+- `ArchiveWalkerDispatcherTest` (4) — ZIP / MBOX dispatch routing; unsupported-mime rejection; walkers map advert.
+- `ExtractControllerTest` (11) — happy ZIP, happy MBOX, document-not-found + FAILED audit, archive-too-large pre-flight, archive-too-many-children mid-walk, EXTRACTION_COMPLETED Tier 2 emission, in-flight idempotency short-circuit, cached idempotency replay, success-cache write, failure releases idempotency row, generated-API contract assertion.
+- `MetaControllerTest` (3) — capabilities advert, health UP, generated API contract.
+- `MinioChildSinkKeyTest` (3) — path-separator stripping, null-filename fallback, control-character replacement.
+
+Spring context is not loaded — pure POJO tests with mocked source / sink / idempotency / audit + real `ArchiveWalkerDispatcher` driving real `ZipArchiveWalker` / `MboxArchiveWalker`. Aligns with Tika's test pyramid; integration tests blocked on issue #7 like the rest of the reactor.
+
+**One-line correction during the run:** `ZipArchiveWalker`'s catch block initially split `ZipException` (→ corruption) from generic `IOException` (→ `UncheckedIOException`). A truncated ZIP throws `EOFException` (a plain `IOException`), which surfaced the test failure `walk_throws_corrupt_on_truncated_zip`. Fix: any `IOException` raised by Commons Compress *during* the walk is corruption, since the source-side I/O boundary already passed cleanly at `source.open()`. Source-unavailable still surfaces as `UncheckedIOException` from the source layer, matching Tika's pattern.
+
+**Files changed:** 26 new source files under `backend/gls-extraction-archive/src/main/java/`; 1 new resource (`application.yaml`); 7 new test files; plan + log.
+
+**Open issues:**
+
+- **PST walker** — its own PR with the lib decision logged in CSV.
+- **JWT** — same as Tika; blocked on JWKS infra.
+- **Dockerfile + Compose** — own PR. Mirror Tika's repo-root build context pattern (per `docs/service-template.md`'s "Repo-root build context" callout).
+- **Integration tests** — gated on issue #7.
+- **Generated stubs commit policy** — same gap as Tika; tracked elsewhere.
+
+**Next:** Dockerfile + Compose service entry for `gls-extraction-archive` (mirrors Tika's 0.5.5). Then the PST walker. Then Phase 1.1 acceptance — three extraction services live or skip ahead to 1.2 router.
