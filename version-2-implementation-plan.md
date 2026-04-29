@@ -235,11 +235,12 @@ Clone the Tika pattern.
 
 - [ ] **`gls-extraction-archive`** — handles `.zip`, `.mbox`, `.pst`. On encountering archives, fans out child documents back to step ① ingest. Recursive ingest pattern documented. Decision: CSV #43 — caller owns fan-out (one-level walk, children returned inline; orchestrator publishes per-child ingest events).
   - [x] Module + contract (`contracts/extraction-archive/`, BOM property, reactor entry).
-  - [ ] Generated server stub + parser dispatch (ZIP / MBOX / PST) + MinIO source / sink.
-  - [ ] Idempotency, audit, JWT, health, metrics, tracing.
-  - [ ] Tests (unit + integration).
+  - [x] Generated server stub + parser dispatch (ZIP, MBOX) + MinIO source / sink. PST walker deferred.
+  - [x] Idempotency (`archive_idempotency` Mongo TTL), audit (`EXTRACTION_*` Tier 2), health (parser dispatcher + MinIO), metrics, tracing (`archive.walk`, `minio.fetch`, `minio.put`).
+  - [ ] JWT validation (blocked on JWKS infra, same as Tika).
+  - [x] Tests — unit only (34 in module). Integration tests blocked on issue #7.
   - [ ] Dockerfile + Compose.
-  - [ ] Per-service README.
+  - [ ] Per-service README extension (covered by initial 1.1 PR's `backend/gls-extraction-archive/README.md`).
 - [ ] **`gls-extraction-ocr`** — Tesseract or Document AI (decide and log in CSV); GPU-tolerant if needed.
 - [ ] **`gls-extraction-audio`** — Whisper or Deepgram (decide and log); long-running, requires `Prefer: respond-async` (per A1 decision).
 - [x] Mime-detection logic — where does it live? Decision: at ingest in `gls-api` / `gls-connectors` using Tika's detector. Log in CSV. (CSV #42 — DECIDED.)
