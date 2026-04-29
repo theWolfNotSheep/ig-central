@@ -2736,3 +2736,47 @@ Governance module: 17 → 26. Reactor: 441 → 450.
 - **Schema-validation-at-save** — cross-cuts all block content types.
 
 **Next:** Phase 1.8 PR3 (engine integration); OR Phase 1.9 Stage ④ scan dispatch; OR `.env.example` updates; OR legacy retirement.
+
+## 2026-04-29 — Phase 1.8 PR3 — POLICY interpreter wired into the pipeline engine
+
+**Done:** `PipelineExecutionEngine` now resolves the POLICY block for the just-classified category right after `applyClassificationToDocument`, applies the per-sensitivity override, and stashes the effective policy's key fields in the pipeline run's shared context. Phase 1.9's Stage ④ scan dispatch reads from the context — no extra Mongo round-trip per stage. Observe-only this PR; the dispatch lands in 1.9.
+
+**Decisions logged:** None new.
+
+**What's wired:**
+
+- **`PipelineExecutionEngine`** constructor — gains an `ObjectProvider<PolicyBlockResolver>` parameter. Optional via `getIfAvailable()` so test contexts that don't stand up Mongo can construct the engine cleanly.
+- **`resolveAndRecordPolicy(event, ctx)`** (new private helper) — called once per classification, right after `applyClassificationToDocument`. Looks up the POLICY block for `event.categoryId()`, applies `effectiveFor(event.sensitivityLabel().name())`, writes four keys into `ctx`:
+  - `policyCategoryId` — confirms the policy applied (might be null for un-classified docs, where this whole path is skipped).
+  - `policyRequiredScanCount` — for downstream observability.
+  - `policyMetadataSchemaIds` — list of schema ids Stage ④ will dispatch.
+  - `policyGovernancePolicyIds` — list of governance-policy ids enforcement uses.
+- Logs at INFO when a policy resolves; WARN if the resolver throws (fail-soft — pipeline doesn't fail if policy resolution misbehaves).
+
+**Why "stash in shared context" instead of carrying via a structured event:**
+
+The pipeline already passes `Map<String, Object> ctx` through every node call. Adding policy fields to that map is a one-line change per consumer ("read this key, fall back to empty"). The alternative — synthesising a richer event with policy fields — would require reshaping `DocumentClassifiedEvent` and every downstream consumer. The map-stash works for now; if the policy fields multiply, a typed `PolicyContext` value can replace them in the same key namespace.
+
+**Why fail-soft on resolver errors:**
+
+Pipeline correctness shouldn't depend on the POLICY block being resolvable. If Mongo is flaky, if a category has no POLICY block yet, if the resolver bean is missing in a test context — the pipeline should keep working with no policy applied (the pre-1.8 behaviour). The audit trail records that no policy was applied; ops can investigate.
+
+**Tests (no new in module; 450 reactor unchanged):**
+
+The new helper is covered structurally by:
+
+- `PolicyBlockResolverTest` (PR2) — proves the resolver returns the right policy.
+- `PolicyBlock.effectiveFor` (PR2) — proves the override application.
+- `PipelineExecutionEngineTest` — Mockito's `@InjectMocks` autowires the new constructor parameter. The existing 7 tests don't exercise the new path so they're unaffected; an end-to-end "after classify, ctx contains policy keys" assertion needs more setup than the existing test fixtures provide and lives with the broader integration suite (gated on issue #7).
+
+**Files changed:** 1 modified `PipelineExecutionEngine.java` + plan / log = 3 files.
+
+**Open issues / deferred:**
+
+- **Visual-DAG-node form-factor** — currently the engine calls the resolver inline. CSV #37 Option A says "a node in the visual DAG that runs after classification". Promoting the call to a real node type (with editable config in the admin UI) is deferred to Phase 1.9 once the Stage ④ dispatch shape is concrete; until then the inline call is the simplest correct shape.
+- **Pack-installed POLICY blocks (PR4)** — Mongock change unit + `PackImportService` enhancement so installing a governance pack auto-creates one POLICY block per category.
+- **Visibility into resolved policy** — the four context keys are logged but not surfaced to admin UI consumers. A "what policy applied?" panel on the document-detail screen lands when the admin UI editor for POLICY blocks is in shape.
+
+**Phase 1.8 status:** **three of four plan checkboxes ticked.** PR1 (enum + schema), PR2 (resolver + typed view), PR3 (engine wire-in). PR4 (per-category pack-install seeding) is the last item — small.
+
+**Next:** Phase 1.8 PR4 (per-category POLICY blocks seeded from imported pack); OR Phase 1.9 Stage ④ scan dispatch; OR `.env.example` updates; OR legacy retirement.

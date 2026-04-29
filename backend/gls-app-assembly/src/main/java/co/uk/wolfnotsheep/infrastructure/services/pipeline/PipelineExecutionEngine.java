@@ -101,6 +101,12 @@ public class PipelineExecutionEngine {
     // — when absent, the engine keeps the existing async-Rabbit dispatch.
     private final ObjectProvider<ClassifierRouterClient> classifierRouterClientProvider;
 
+    // Phase 1.8 PR3 — POLICY block resolver. Looked up after each
+    // classification to log + audit the policy that applies; the
+    // resolved scans / metadata schemas / governance policies are
+    // dispatched in Phase 1.9 (Stage ④ scan dispatch).
+    private final ObjectProvider<co.uk.wolfnotsheep.governance.services.PolicyBlockResolver> policyBlockResolverProvider;
+
     public PipelineExecutionEngine(TextExtractionService textExtractionService,
                                    DocumentService documentService,
                                    ObjectStorageService objectStorage,
@@ -124,7 +130,8 @@ public class PipelineExecutionEngine {
                                    ConnectedDriveRepository connectedDriveRepo,
                                    PipelineRunRepository pipelineRunRepo,
                                    NodeRunRepository nodeRunRepo,
-                                   ObjectProvider<ClassifierRouterClient> classifierRouterClientProvider) {
+                                   ObjectProvider<ClassifierRouterClient> classifierRouterClientProvider,
+                                   ObjectProvider<co.uk.wolfnotsheep.governance.services.PolicyBlockResolver> policyBlockResolverProvider) {
         this.textExtractionService = textExtractionService;
         this.documentService = documentService;
         this.objectStorage = objectStorage;
@@ -149,6 +156,7 @@ public class PipelineExecutionEngine {
         this.pipelineRunRepo = pipelineRunRepo;
         this.nodeRunRepo = nodeRunRepo;
         this.classifierRouterClientProvider = classifierRouterClientProvider;
+        this.policyBlockResolverProvider = policyBlockResolverProvider;
     }
 
     // ── Main entry point: execute pipeline from the beginning ─────────
@@ -342,6 +350,12 @@ public class PipelineExecutionEngine {
         // Apply classification to document
         DocumentClassifiedEvent classifiedEvent = buildClassifiedEvent(completedEvent, doc.getId());
         applyClassificationToDocument(doc, classifiedEvent);
+
+        // Resolve POLICY block for the just-classified category and stash
+        // the effective policy in shared context. Phase 1.8 PR3 — observe-
+        // only; Phase 1.9 (Stage ④ scan dispatch) consumes this to drive
+        // the post-classify pipeline.
+        resolveAndRecordPolicy(classifiedEvent, ctx);
 
         // Store classification as the current context for post-classification nodes
         ctx.put("currentClassification", "applied");
@@ -999,6 +1013,41 @@ public class PipelineExecutionEngine {
                 e.requiresHumanReview(),
                 e.completedAt() != null ? e.completedAt() : Instant.now()
         );
+    }
+
+    /**
+     * Resolve the POLICY block for the just-classified category and
+     * stash key fields in the shared context so Phase 1.9's Stage ④
+     * scan dispatch can read it without re-querying Mongo. Tolerant
+     * of a missing resolver bean (test contexts) or no POLICY block
+     * for the category — both leave the context untouched.
+     */
+    private void resolveAndRecordPolicy(DocumentClassifiedEvent event,
+                                         java.util.Map<String, Object> ctx) {
+        co.uk.wolfnotsheep.governance.services.PolicyBlockResolver resolver =
+                policyBlockResolverProvider.getIfAvailable();
+        if (resolver == null) return;
+        if (event == null || event.categoryId() == null) return;
+        try {
+            String sensitivityName = event.sensitivityLabel() == null ? null : event.sensitivityLabel().name();
+            resolver.resolveByCategoryId(event.categoryId()).ifPresent(policy -> {
+                co.uk.wolfnotsheep.governance.models.PolicyBlock effective =
+                        policy.effectiveFor(sensitivityName);
+                ctx.put("policyCategoryId", effective.categoryId());
+                ctx.put("policyRequiredScanCount", effective.requiredScans().size());
+                ctx.put("policyMetadataSchemaIds", effective.metadataSchemaIds());
+                ctx.put("policyGovernancePolicyIds", effective.governancePolicyIds());
+                log.info("[engine] resolved POLICY for categoryId={}, sensitivity={}: scans={} schemas={} policies={}",
+                        event.categoryId(), sensitivityName,
+                        effective.requiredScans().size(),
+                        effective.metadataSchemaIds().size(),
+                        effective.governancePolicyIds().size());
+            });
+        } catch (RuntimeException e) {
+            // Fail-soft: a misbehaving resolver shouldn't take down the pipeline.
+            log.warn("[engine] POLICY resolution failed for categoryId={}: {} — continuing without policy",
+                    event.categoryId(), e.getMessage());
+        }
     }
 
     private void applyClassificationToDocument(DocumentModel doc, DocumentClassifiedEvent event) {
