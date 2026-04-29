@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ArchiveWalkerDispatcherTest {
 
     private final ArchiveWalkerDispatcher dispatcher = new ArchiveWalkerDispatcher(
-            List.of(new ZipArchiveWalker(), new MboxArchiveWalker()));
+            List.of(new ZipArchiveWalker(), new MboxArchiveWalker(), new PstArchiveWalker()));
 
     @Test
     void dispatches_zip_to_zip_walker() throws IOException {
@@ -66,7 +66,7 @@ class ArchiveWalkerDispatcherTest {
     @Test
     void walkers_view_advertises_registered_types() {
         assertThat(dispatcher.walkers().keySet()).containsExactlyInAnyOrder(
-                ArchiveType.ZIP, ArchiveType.MBOX);
+                ArchiveType.ZIP, ArchiveType.MBOX, ArchiveType.PST);
     }
 
     private static byte[] makeZip() throws IOException {
