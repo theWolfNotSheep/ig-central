@@ -36,6 +36,7 @@ import co.uk.wolfnotsheep.infrastructure.services.pipeline.accelerators.SmartTru
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -95,6 +96,11 @@ public class PipelineExecutionEngine {
     private final PipelineRunRepository pipelineRunRepo;
     private final NodeRunRepository nodeRunRepo;
 
+    // Phase 1.3 cutover: optional sync HTTP path through gls-classifier-router.
+    // Bean is conditionally registered via @ConditionalOnProperty; default OFF
+    // — when absent, the engine keeps the existing async-Rabbit dispatch.
+    private final ObjectProvider<ClassifierRouterClient> classifierRouterClientProvider;
+
     public PipelineExecutionEngine(TextExtractionService textExtractionService,
                                    DocumentService documentService,
                                    ObjectStorageService objectStorage,
@@ -117,7 +123,8 @@ public class PipelineExecutionEngine {
                                    GoogleDriveService googleDriveService,
                                    ConnectedDriveRepository connectedDriveRepo,
                                    PipelineRunRepository pipelineRunRepo,
-                                   NodeRunRepository nodeRunRepo) {
+                                   NodeRunRepository nodeRunRepo,
+                                   ObjectProvider<ClassifierRouterClient> classifierRouterClientProvider) {
         this.textExtractionService = textExtractionService;
         this.documentService = documentService;
         this.objectStorage = objectStorage;
@@ -141,6 +148,7 @@ public class PipelineExecutionEngine {
         this.connectedDriveRepo = connectedDriveRepo;
         this.pipelineRunRepo = pipelineRunRepo;
         this.nodeRunRepo = nodeRunRepo;
+        this.classifierRouterClientProvider = classifierRouterClientProvider;
     }
 
     // ── Main entry point: execute pipeline from the beginning ─────────
@@ -527,6 +535,47 @@ public class PipelineExecutionEngine {
                                 ? mergedConfig.get("blockId").toString() : null;
                         String mode = determineLlmMode(mergedConfig, blockId);
 
+                        // Pause the pipeline run
+                        run.setStatus(PipelineRunStatus.WAITING);
+                        run.setCurrentNodeKey(node.id());
+                        run.setCurrentNodeIndex(i);
+                        run.setUpdatedAt(Instant.now());
+                        pipelineRunRepo.save(run);
+
+                        // Update document status
+                        documentService.updateStatus(docId, DocumentStatus.CLASSIFYING, "SYSTEM");
+
+                        // Phase 1.3 cutover: when the classifier-router client is wired
+                        // (pipeline.classifier-router.enabled=true), call the router
+                        // synchronously and apply the result inline via resumePipeline.
+                        // The router internally dispatches via the existing LLM worker,
+                        // so the underlying model call is unchanged — only the engine's
+                        // transport changes.
+                        ClassifierRouterClient routerClient = classifierRouterClientProvider.getIfAvailable();
+                        if (routerClient != null) {
+                            statusNotifier.emitLog(docId,
+                                    doc.getOriginalFileName() != null ? doc.getOriginalFileName() : "",
+                                    "LLM_CALL", "INFO",
+                                    "Classify dispatched via gls-classifier-router for node '" + node.label() + "'",
+                                    null);
+                            LlmJobCompletedEvent completed;
+                            try {
+                                completed = routerClient.classify(jobId, run.getId(), nodeRun.getId(),
+                                        blockId, /* blockVersion */ null,
+                                        doc.getExtractedText(), idempotencyKey);
+                            } catch (RuntimeException e) {
+                                log.warn("[Engine] classifier-router call failed for jobId={}: {}",
+                                        jobId, e.getMessage());
+                                completed = LlmJobCompletedEvent.failure(jobId, run.getId(),
+                                        nodeRun.getId(), "classifier-router: " + e.getMessage());
+                            }
+                            log.info("[Engine] classifier-router returned (jobId={} success={}) — resuming inline",
+                                    jobId, completed.success());
+                            resumePipeline(completed);
+                            return; // Inline resume drove the rest of the pipeline.
+                        }
+
+                        // Default path: publish to Rabbit and release the thread.
                         LlmJobRequestedEvent jobEvent = new LlmJobRequestedEvent(
                                 jobId,
                                 run.getId(),
@@ -544,16 +593,6 @@ public class PipelineExecutionEngine {
                                 doc.getUploadedBy(),
                                 idempotencyKey
                         );
-
-                        // Pause the pipeline run
-                        run.setStatus(PipelineRunStatus.WAITING);
-                        run.setCurrentNodeKey(node.id());
-                        run.setCurrentNodeIndex(i);
-                        run.setUpdatedAt(Instant.now());
-                        pipelineRunRepo.save(run);
-
-                        // Update document status
-                        documentService.updateStatus(docId, DocumentStatus.CLASSIFYING, "SYSTEM");
 
                         statusNotifier.emitLog(docId,
                                 doc.getOriginalFileName() != null ? doc.getOriginalFileName() : "",

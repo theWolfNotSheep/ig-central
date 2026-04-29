@@ -120,6 +120,16 @@ pipeline:
   llm:
     service-url: ${LLM_SERVICE_URL:http://localhost:8082}
     timeout-ms: ${LLM_TIMEOUT_MS:300000}
+  classifier-router:
+    # Phase 1.3 cutover. When true, the engine calls
+    # gls-classifier-router synchronously instead of publishing
+    # LlmJobRequestedEvent to Rabbit. The router internally
+    # dispatches via the existing LLM worker — same model call,
+    # different transport. Default false so the legacy async path
+    # remains primary; flip to true to roll forward.
+    enabled: ${PIPELINE_CLASSIFIER_ROUTER_ENABLED:false}
+    url: ${PIPELINE_CLASSIFIER_ROUTER_URL:http://gls-classifier-router:8080}
+    timeout-ms: ${PIPELINE_CLASSIFIER_ROUTER_TIMEOUT_MS:90000}
 
 logging:
   level:

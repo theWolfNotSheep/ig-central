@@ -257,10 +257,10 @@ First iteration is a *proxy* — accepts the new contract, dispatches to the exi
 
 ### 1.3 Orchestrator cutover (no behaviour change)
 
-- [ ] Replace direct LLM dispatch in `PipelineExecutionEngine` with a call to `gls-classifier-router`.
-- [ ] Same outcome from a user's perspective; under the hood, traffic now flows through the new path.
-- [ ] **Rollback plan:** feature flag `pipeline.classifier-router.enabled` gates the new path; flip to `false` to revert.
-- [ ] Performance comparison against baseline: confirm latency is within 10% of current.
+- [x] Replace direct LLM dispatch in `PipelineExecutionEngine` with a call to `gls-classifier-router`. `ClassifierRouterClient` (`@ConditionalOnProperty pipeline.classifier-router.enabled=true`) wraps a JDK `HttpClient` against `POST /v1/classify` and translates the router's `ClassifyResponse` back into the existing `LlmJobCompletedEvent` shape; engine calls `resumePipeline(event)` inline.
+- [x] Same outcome from a user's perspective; under the hood, traffic now flows through the new path. The router internally dispatches via the existing LLM worker (`LlmDispatchCascadeService`), so the underlying model call is unchanged — only the orchestrator's transport changes.
+- [x] **Rollback plan:** feature flag `pipeline.classifier-router.enabled` gates the new path; flip to `false` to revert. Default `false` — the legacy async-Rabbit path stays primary until explicitly flipped.
+- [ ] Performance comparison against baseline: confirm latency is within 10% of current. **Blocked on Phase 0.11** load driver + first captured baseline (no representative-corpus data yet).
 
 ### 1.4 BERT trainer + inference
 
