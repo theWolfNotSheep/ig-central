@@ -35,6 +35,7 @@
         <gls.extraction.ocr.version>${gls.version}</gls.extraction.ocr.version>
         <gls.extraction.audio.version>${gls.version}</gls.extraction.audio.version>
         <gls.router.version>${gls.version}</gls.router.version>
+        <gls.bert.inference.version>${gls.version}</gls.bert.inference.version>
     </properties>
 
     <dependencyManagement>
@@ -88,6 +89,12 @@
                 <groupId>co.uk.wolfnotsheep.router</groupId>
                 <artifactId>gls-classifier-router</artifactId>
                 <version>${gls.router.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.bert</groupId>
+                <artifactId>gls-bert-inference</artifactId>
+                <version>${gls.bert.inference.version}</version>
             </dependency>
 
             <!-- ==================== Governance ==================== -->
