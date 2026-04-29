@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gls.local/contracts/blocks/policy.schema.json",
+  "title": "POLICY block content",
+  "description": "Carries post-classification policy for a category — which PII scans run, which metadata schemas extract, which governance policies enforce. Per architecture §3 / CSV #35. The in-engine interpreter (CSV #37 Option A) reads this block after the classifier and dispatches the corresponding stage-④ work.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["categoryId"],
+  "properties": {
+    "categoryId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Taxonomy category this policy applies to. Each category gets one POLICY block; the engine resolves by `categoryId == result.categoryId` after classification."
+    },
+    "categoryName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional human-readable category name; the admin UI surfaces this without joining to the taxonomy collection."
+    },
+    "requiredScans": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "References to `PiiTypeDefinition` keys (or block ids of PROMPT-shaped scans) that MUST run for documents in this category. Engine dispatches each via the cascade router.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scanType", "ref"],
+        "properties": {
+          "scanType": {
+            "type": "string",
+            "enum": ["PII", "PHI", "PCI", "CUSTOM"],
+            "description": "Scan family. PII / PHI / PCI gate downstream redaction policies; CUSTOM is operator-defined."
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Either a `PiiTypeDefinition.key` or a PROMPT block id, depending on `scanType`."
+          },
+          "blocking": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, scan failure stops the pipeline (the document doesn't progress to enforcement). If false, scan failure is logged + recorded in audit but the pipeline continues."
+          }
+        }
+      }
+    },
+    "metadataSchemaIds": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "Ordered references to `MetadataSchema` documents whose extracted-metadata fields the engine populates after classification. Each schema runs as a follow-up LLM call via the cascade router (with the schema's prompt).",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    },
+    "governancePolicyIds": {
+      "type": "array",
+      "maxItems": 16,
+      "description": "References to `GovernancePolicy` documents (storage tier, retention schedule, access controls) that apply to this category. Engine hands them to `gls-enforcement-worker` after scans + metadata extraction succeed.",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    },
+    "conditions": {
+      "type": "object",
+      "description": "Optional per-condition overrides. The engine evaluates each entry against the classification result; the first match's `apply` block overlays the top-level `requiredScans` / `metadataSchemaIds` / `governancePolicyIds`.",
+      "additionalProperties": false,
+      "properties": {
+        "bySensitivity": {
+          "type": "array",
+          "maxItems": 16,
+          "description": "Override slot triggered when the classification's sensitivity matches the listed values. Useful for `RESTRICTED` documents in this category needing stricter scans than the default.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sensitivities", "apply"],
+            "properties": {
+              "sensitivities": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              },
+              "apply": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "requiredScans": { "$ref": "#/properties/requiredScans" },
+                  "metadataSchemaIds": { "$ref": "#/properties/metadataSchemaIds" },
+                  "governancePolicyIds": { "$ref": "#/properties/governancePolicyIds" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

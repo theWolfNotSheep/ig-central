@@ -298,8 +298,8 @@ Per CSV #2 (DECIDED hybrid).
 
 ### 1.8 `POLICY` block type + interpreter (CSV #35)
 
-- [ ] `POLICY` added to `BlockType` enum.
-- [ ] Block content schema: `requiredScans[]` (refs to `PiiTypeDefinition`s), `metadataSchemaIds[]`, `governancePolicyIds[]`, optional `conditions{}` for per-category overrides.
+- [x] `POLICY` added to `BlockType` enum. Phase 1.8 PR1 — `gls-governance.PipelineBlock.BlockType.POLICY`.
+- [x] Block content schema: `requiredScans[]` (refs to `PiiTypeDefinition`s), `metadataSchemaIds[]`, `governancePolicyIds[]`, optional `conditions{}` for per-category overrides. Phase 1.8 PR1 — `contracts/blocks/policy.schema.json` v0.4.0. `requiredScans[]` carries `(scanType, ref, blocking)` per scan; `conditions.bySensitivity[]` for per-sensitivity overrides.
 - [ ] In-engine interpreter (Option A from CSV #37): a node in the visual DAG that runs after classification.
 - [ ] Per-category POLICY blocks seeded at install time from the imported governance pack.
 

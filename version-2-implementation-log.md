@@ -2660,3 +2660,44 @@ Previous 435 reactor tests unchanged. App-assembly module: 10 → 16.
 **Phase 1.7 status:** **all six plan checkboxes ticked.** PR1 (entity fields + Mongock backfill), PR2 (preserve-on-missing). Event firing pre-existing via `GovernanceConfigChangeBridge`. Phase 1.7 complete.
 
 **Next:** Phase 1.8 `POLICY` block type + interpreter (CSV #35); OR Phase 1.9 Stage ④ scan dispatch; OR `.env.example` updates; OR per-category overrides in the cascade router; OR legacy `gls-llm-orchestration` retirement.
+
+## 2026-04-29 — Phase 1.8 PR1 — POLICY block enum + content schema
+
+**Done:** Phase 1.8 starts. `BlockType.POLICY` added to `gls-governance.PipelineBlock`. New `contracts/blocks/policy.schema.json` v0.4.0 declares the content shape: `requiredScans[]`, `metadataSchemaIds[]`, `governancePolicyIds[]`, optional `conditions.bySensitivity[]`. PR2 wires the in-engine interpreter (CSV #37 Option A); PR3 seeds per-category POLICY blocks from imported governance packs.
+
+**Decisions logged:** None new — implements CSV #35.
+
+**What's wired:**
+
+- **`BlockType.POLICY`** — added to `PipelineBlock.BlockType` (gls-governance) with a Javadoc pointer to the schema. The admin UI's block-list filter and validation switch are the natural consumers; both currently render unknown enum values gracefully so no UI changes needed for PR1.
+- **`contracts/blocks/policy.schema.json`** (new, v0.4.0) — JSON Schema 2020-12 for `POLICY` block content:
+  - `categoryId` (required, taxonomy reference) — each category gets one POLICY block; the engine resolves by `categoryId == result.categoryId` after classification.
+  - `requiredScans[]` — array of `{scanType (PII/PHI/PCI/CUSTOM), ref, blocking}`. `ref` is a `PiiTypeDefinition.key` or a PROMPT block id depending on scanType. `blocking=true` means scan failure stops the pipeline.
+  - `metadataSchemaIds[]` — ordered list of `MetadataSchema` ids whose extracted-metadata fields the engine populates after classification.
+  - `governancePolicyIds[]` — list of `GovernancePolicy` ids that apply.
+  - `conditions.bySensitivity[]` — per-sensitivity overrides (e.g. RESTRICTED docs in this category needing stricter scans). The engine evaluates the first match's `apply` block, overlaying the top-level lists.
+- **`contracts/blocks/VERSION`** — bumped 0.3.0 → 0.4.0.
+- **`contracts/blocks/CHANGELOG.md`** — appends a 0.4.0 entry.
+- **`contracts/blocks/README.md`** — flips the POLICY bullet to ✓ (v0.4.0).
+
+**Why a `(scanType, ref)` tuple instead of a flat ref + lookup:**
+
+PII / PHI / PCI scans dispatch differently in stage ④ (different prompt templates, different audit metadata). The engine needs to know `scanType` without first resolving `ref` against the right collection — keeps the dispatch decision local.
+
+**Why `conditions.bySensitivity` instead of a generic predicate language:**
+
+Sensitivity is the most operationally common condition for stricter scans. A general predicate language (full JSONLogic / CEL) would be more flexible but invites configuration sprawl + interpreter complexity. By-sensitivity covers ~all of CSV #35's listed use cases ("RESTRICTED docs need extended PII scan", "INTERNAL skips the metadata-extraction step"). A future schema bump can add `byTraitId` / `byContentLength` / etc. when concrete needs surface.
+
+**Tests (no new in module; 441 reactor unchanged):**
+
+The schema is consumed by the admin UI (block save validation lands in a separate cross-cutting PR) and by the in-engine interpreter (Phase 1.8 PR2). Validity of the schema document itself is exercised by Spectral / Redocly via the CI's `contracts-validate` job.
+
+**Files changed:** 1 modified `PipelineBlock.java` (enum) + 1 new `policy.schema.json` + 3 modified contract files (`VERSION`, `CHANGELOG.md`, `README.md`) + plan / log = 7 files.
+
+**Open issues / deferred:**
+
+- **In-engine interpreter (PR2)** — a new pipeline-engine node that resolves the POLICY block for the just-classified category, then dispatches the listed scans / metadata schemas / governance policies. Lives in `gls-app-assembly`'s `PipelineExecutionEngine`.
+- **Per-category seed at install time (PR3)** — Mongock change unit + `PackImportService` enhancement so installing a governance pack auto-creates one POLICY block per category. Default content carries the pack-author-supplied `requiredScans`; operators tune from there.
+- **Schema validation at block save time** — same blocker as the other content schemas; cross-cuts all block types.
+
+**Next:** Phase 1.8 PR2 (in-engine interpreter); OR Phase 1.9 Stage ④ scan dispatch (the workers POLICY blocks reference); OR `.env.example` updates; OR legacy `gls-llm-orchestration` retirement.
