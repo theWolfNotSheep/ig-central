@@ -1,0 +1,390 @@
+openapi: 3.1.1
+info:
+  title: ig-central — SLM Worker
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    SLM (Small Language Model) tier of the cascade. Sits between BERT
+    and LLM in the cascade order (architecture §3 / §8.1, CSV #1).
+    Two pluggable backends:
+
+    - **Anthropic Haiku** (cloud) — selected via
+      `gls.slm.worker.backend=anthropic`. Requires `ANTHROPIC_API_KEY`.
+    - **Ollama** (local) — selected via `gls.slm.worker.backend=ollama`.
+      A local model name is configured per replica (e.g. `llama3.1:8b`).
+
+    Phase 1.5 first cut: contract + JVM module + a stub backend that
+    returns `SLM_NOT_CONFIGURED` 503 until either of the above is
+    wired. Cascade wire-in (`gls-classifier-router`'s SLM tier) and
+    real backends ship as separate Phase 1.5 follow-ups.
+
+    **Conventions referenced from `_shared/`:**
+    - Error envelope (RFC 7807 + extensions) — CSV #17.
+    - Service-account JWT — CSV #18.
+    - `traceparent` + `Idempotency-Key` + `Prefer` headers — CSV #16 / #20.
+    - `TextPayload` (inline ≤ 256 KB or by reference) — CSV #19.
+    - `Capabilities` — CSV #21.
+
+servers:
+  - url: http://gls-slm-worker:8080
+    description: Internal Docker Compose hostname.
+  - url: http://localhost:8095
+    description: Local dev (override).
+
+tags:
+  - name: classify
+    description: SLM classification.
+  - name: jobs
+    description: |
+      Async classify — `Prefer: respond-async` poll surface.
+  - name: backends
+    description: Backend lifecycle — list available backends + readiness.
+  - name: meta
+    description: Capabilities + health.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/classify:
+    post:
+      operationId: classify
+      tags: [classify]
+      summary: Run an SLM classification over a text payload.
+      description: |
+        Caller supplies the text payload (inline ≤ 256 KB or by
+        reference per CSV #19) plus a `PROMPT` block coordinate (id +
+        optional version per CSV #14). The worker invokes the
+        configured backend with the block's prompt + the text and
+        returns a structured classification.
+
+        **Sync vs async (CSV #13 / #47).** Without
+        `Prefer: respond-async`, blocks until the backend completes and
+        returns 200 with the result. With `Prefer: respond-async`,
+        returns 202 immediately with `Location: /v1/jobs/{nodeRunId}`
+        and a `JobAccepted` body.
+
+        **Idempotency.** Repeated requests with the same `nodeRunId`
+        within the 24h TTL window return the same result without
+        re-running the backend (CSV #16). Sync and async share the
+        same job row — same poll surface contract as the audio service.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/IdempotencyKey'
+        - name: Prefer
+          in: header
+          schema:
+            type: string
+            enum: ["respond-async"]
+          description: |
+            Set to `respond-async` to dispatch asynchronously and
+            return 202. Absent or empty → sync.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassifyRequest'
+      responses:
+        '200':
+          description: Classification succeeded (sync path).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassifyResponse'
+        '202':
+          description: |
+            Classification accepted; job dispatched. Poll
+            `Location` for status + result.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri
+              description: Job poll URL — `/v1/jobs/{nodeRunId}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAccepted'
+        '409':
+          $ref: '../_shared/idempotency.yaml#/components/responses/InFlight'
+        '422':
+          description: |
+            Block coordinates resolve to nothing or the prompt block
+            is malformed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '../_shared/retry.yaml#/components/responses/TooManyRequests'
+        '503':
+          description: |
+            No SLM backend is configured. Returned with
+            `code=SLM_NOT_CONFIGURED`. Caller should fall through to
+            the next cascade tier.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/jobs/{nodeRunId}:
+    get:
+      operationId: getJob
+      tags: [jobs]
+      summary: Poll an async classify job.
+      description: |
+        Returns the current state of an async classification dispatched
+        via `POST /v1/classify` with `Prefer: respond-async`. Status is
+        one of `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`. When
+        `COMPLETED`, the same response shape as the sync 200 is
+        included on the `result` field.
+      parameters:
+        - name: nodeRunId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: Job state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+        '404':
+          description: No job exists for this nodeRunId.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+
+  /v1/backends:
+    get:
+      operationId: listBackends
+      tags: [backends]
+      summary: List available SLM backends + readiness.
+      description: |
+        Reports which backends this build supports + which is currently
+        active. Useful for ops to verify a config change took effect
+        without standing up an end-to-end classify call.
+      responses:
+        '200':
+          description: Backend roster.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackendsResponse'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Service capability advertisement.
+      responses:
+        '200':
+          description: Capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: '../_shared/capabilities.yaml#/components/schemas/Capabilities'
+
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [meta]
+      summary: Liveness + readiness probe.
+      description: |
+        Liveness reflects process state. Readiness flips UP only when
+        the active backend is configured + reachable.
+      security: []
+      responses:
+        '200':
+          description: Up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Not ready (backend not configured / unreachable).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    ClassifyRequest:
+      type: object
+      required: [block, text, nodeRunId]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            Pipeline-node run id per architecture §6.11. Idempotency key
+            (CSV #16).
+        block:
+          $ref: '#/components/schemas/PromptBlockRef'
+        text:
+          $ref: '../_shared/text-payload.yaml#/components/schemas/TextPayload'
+        documentId:
+          type: string
+          maxLength: 64
+          description: Optional canonical document id; surfaced on Tier 1 audit when present.
+
+    PromptBlockRef:
+      type: object
+      required: [id]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: PROMPT block document id.
+        version:
+          type: integer
+          minimum: 1
+          description: Pinned block version (CSV #14). Omit for active.
+
+    ClassifyResponse:
+      type: object
+      required: [nodeRunId, result, confidence, backend, costUnits]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+        backend:
+          type: string
+          enum: [ANTHROPIC_HAIKU, OLLAMA]
+          description: Which SLM backend produced the result.
+        modelId:
+          type: string
+          description: |
+            Backend-specific model identifier (e.g. `claude-haiku-4-5`,
+            `llama3.1:8b`) so the audit trail can pin the model version.
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        result:
+          type: object
+          additionalProperties: true
+          description: |
+            Block-shaped output. The worker doesn't constrain the
+            shape — that's the block's contract.
+        rationale:
+          type: string
+          maxLength: 4000
+          description: Optional free-text rationale from the model.
+        durationMs:
+          type: integer
+          minimum: 0
+        costUnits:
+          type: integer
+          minimum: 0
+          description: |
+            Cost-attribution unit per CSV #22. For SLM this is
+            `(tokensIn + tokensOut) / 1000` rounded up.
+        tokensIn:
+          type: integer
+          minimum: 0
+        tokensOut:
+          type: integer
+          minimum: 0
+
+    BackendsResponse:
+      type: object
+      required: [active, available]
+      properties:
+        active:
+          type: string
+          enum: [ANTHROPIC_HAIKU, OLLAMA, NONE]
+          description: Currently selected backend; `NONE` until configured.
+        available:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/BackendInfo'
+
+    BackendInfo:
+      type: object
+      required: [id, ready]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          enum: [ANTHROPIC_HAIKU, OLLAMA]
+        ready:
+          type: boolean
+          description: True if the backend's required config is set + reachable.
+        modelId:
+          type: string
+          description: Active model identifier for this backend.
+        notes:
+          type: string
+          maxLength: 256
+
+    JobAccepted:
+      type: object
+      required: [nodeRunId, status, pollUrl]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING]
+        pollUrl:
+          type: string
+          format: uri
+
+    JobStatus:
+      type: object
+      required: [nodeRunId, status]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        result:
+          description: Present when `status=COMPLETED`. Same shape as the sync 200.
+          $ref: '#/components/schemas/ClassifyResponse'
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'

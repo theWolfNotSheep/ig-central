@@ -48,6 +48,7 @@
         <module>gls-extraction-audio</module>
         <module>gls-classifier-router</module>
         <module>gls-bert-inference</module>
+        <module>gls-slm-worker</module>
     </modules>
 
     <dependencyManagement>
