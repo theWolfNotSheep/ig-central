@@ -252,8 +252,8 @@ First iteration is a *proxy* — accepts the new contract, dispatches to the exi
 - [x] `contracts/classifier-router/openapi.yaml` per §11.A decisions.
 - [x] Mock implementation (Phase 1.2 PR1) — `MockCascadeService` returns deterministic `tierOfDecision=MOCK`.
 - [x] Real LLM-worker dispatch (Phase 1.2 PR2) — `LlmDispatchCascadeService` publishes to `gls.pipeline` exchange (routing key `pipeline.llm.requested`); per-replica auto-named queue bound to `pipeline.llm.completed` correlates by `jobId`. Selected via `gls.router.cascade.llm.enabled=true`. Default still mock so the router stays self-contained until the orchestrator cutover (1.3) lands.
-- [ ] Cascade policy block schema (`ROUTER` block content) — separate PR.
-- [ ] Admin migration to introduce the `ROUTER` block type with conservative defaults (`bertAccept=1.01` everywhere — disabled) — separate PR.
+- [x] Cascade policy block schema (`ROUTER` block content) — `contracts/blocks/router.schema.json` v0.2.0. Per-tier `enabled` + `accept`, fallback strategy (`LLM_FLOOR` / `ROUTER_SHORT_CIRCUIT`), per-category overrides, optional cost budget.
+- [x] Admin migration — Mongock `V003_DefaultRouterBlock` seeds the `default-router` block with `bertAccept=1.01`, `slmAccept=1.01`, `llmAccept=0.0`, fallback `LLM_FLOOR`. Cascade is functionally disabled until per-category tuning lands in 1.4–1.6.
 
 ### 1.3 Orchestrator cutover (no behaviour change)
 

@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | 1.1 complete; 1.2 underway | 2026-04-29 | — | 1.1 extraction triad complete (archive / OCR / audio). 1.2 first cut: `gls-classifier-router` contract + module + deterministic mock cascade + Dockerfile + Compose entry shipped; ROUTER block schema, admin migration, real LLM-worker dispatch deferred to follow-up PRs. JWT + integration tests still blocked family-wide. |
+| 1   | 1.1 complete; 1.2 complete | 2026-04-29 | — | 1.1 extraction triad shipped. 1.2 closed: cascade router (mock + real LLM dispatch + ROUTER block schema + Mongock seed). Phases 1.3+ open. JWT + integration tests still blocked family-wide. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -1846,3 +1846,30 @@ Real-backend integration tests (Whisper round-trip with an `OPENAI_API_KEY`) are
 - **Real LLM-worker integration test** — gated on issue #7 + a Testcontainers Rabbit + a stub LLM consumer; same blocker as the rest.
 
 **Next:** ROUTER block content schema + admin migration (closes Phase 1.2 plan checkboxes), OR Phase 1.3 orchestrator cutover (call `gls-classifier-router` from `PipelineExecutionEngine` behind a feature flag), OR Phase 1.4 BERT inference (cascade's first tier).
+
+## 2026-04-29 — Phase 1.2 — ROUTER block schema + admin migration (PR3, close-off)
+
+**Done:** Closes Phase 1.2's remaining checkboxes. The cascade policy that the router consumes now has a stable schema + a default seed block that's installed by Mongock at startup. Cascade is functionally disabled (`accept=1.01` on BERT and SLM, `0.0` on LLM, fallback `LLM_FLOOR`) — every request falls through to the LLM tier until per-category tuning lands in 1.4–1.6.
+
+**Decisions logged:** None new — implements what's already in the plan.
+
+**What's wired:**
+
+- **`contracts/blocks/router.schema.json`** (new, v0.2.0) — JSON Schema 2020-12 for ROUTER block content. Top-level `tiers` carries per-tier `{enabled, accept, modelRef?, timeout?}` for `bert` / `slm` / `llm`. Optional `fallback` chooses between `LLM_FLOOR` (return the LLM tier's result even below threshold — the architectural floor) and `ROUTER_SHORT_CIRCUIT` (return a configured `defaultResult` without invoking any model). Optional `categoryOverrides` for per-category tier configs (used by the same router when post-classify scans + metadata extraction route through, per architecture §3). Optional `costBudget.maxCostUnits` per cascade run.
+- **`contracts/blocks/VERSION`** — bumped to `0.2.0`.
+- **`contracts/blocks/CHANGELOG.md`** — appended `0.2.0` entry.
+- **`contracts/blocks/README.md`** — flipped the ROUTER schema bullet to "✓ (v0.2.0)".
+- **`backend/gls-app-assembly/.../migrations/V003_DefaultRouterBlock.java`** (new) — Mongock change unit. Idempotent: skips if a block named `default-router` already exists. Seeds a `PipelineBlock` with type `ROUTER`, `activeVersion=1`, content carrying the conservative defaults. Operates on the raw `pipeline_blocks` collection so it stays decoupled from any future Java domain shape changes. Rollback removes the seeded document by name + `createdBy=mongock:V003_DefaultRouterBlock` (so it doesn't accidentally delete an admin-created block of the same name).
+
+**Tests:** No new tests — the change unit is exercised by Mongock at startup and the schema is consumed once tier-aware dispatch wires in (Phases 1.4–1.6). 259 / 259 reactor unchanged.
+
+**Files changed:** 4 contract files (router.schema.json, VERSION, CHANGELOG, README) + 1 Java change unit + 2 plan / log = 7 files.
+
+**Phase 1.2 status:** complete. All four sub-checkboxes ticked.
+
+**Open issues / deferred:**
+
+- **Schema validation at block save time** — the admin UI's block save path doesn't yet validate `content` against the matching schema. Adds in a separate PR (cross-cuts all block types, not just ROUTER).
+- **Per-category override usage** — the router's `MockCascadeService` and `LlmDispatchCascadeService` don't yet read `categoryOverrides`; lands when the BERT / SLM tiers wire in (1.4 / 1.5).
+
+**Next:** Phase 1.3 orchestrator cutover (call `gls-classifier-router` from `PipelineExecutionEngine` behind `pipeline.classifier-router.enabled` feature flag), OR Phase 1.4 BERT inference (cascade's first tier — `gls-bert-inference` JVM service + `gls-bert-trainer` Python sketch), OR async surface for the router (`Prefer: respond-async` + 202 + `/v1/jobs/{nodeRunId}` mirroring the audio service).

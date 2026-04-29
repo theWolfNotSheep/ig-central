@@ -20,7 +20,7 @@ Block content is dynamic — different block types have different schemas. Stori
 - `prompt.schema.json` — PROMPT block (system prompt + user template + model config).
 - `regex-set.schema.json` — REGEX_SET block (patterns + types + confidence).
 - `extractor.schema.json` — EXTRACTOR block (text extraction config).
-- `router.schema.json` — ROUTER block (cascade thresholds, fallback policy). Phase 1.2.
+- `router.schema.json` — ROUTER block (cascade thresholds, fallback policy). Phase 1.2 ✓ (v0.2.0).
 - `enforcer.schema.json` — ENFORCER block (governance enforcement rules).
 - `bert-classifier.schema.json` — BERT_CLASSIFIER block (model version, threshold). Phase 1.4.
 - `policy.schema.json` — POLICY block (taxonomy-driven dispatch rules). Per CSV #35. Phase 1.8.
