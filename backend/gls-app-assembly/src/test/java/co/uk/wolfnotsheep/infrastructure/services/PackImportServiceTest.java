@@ -1,5 +1,6 @@
 package co.uk.wolfnotsheep.infrastructure.services;
 
+import co.uk.wolfnotsheep.governance.models.PiiTypeDefinition;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -62,5 +63,85 @@ class PackImportServiceTest {
         map.put("applicableCategoryIds", null);
         assertThat(PackImportService.strListOrNull(map, "applicableCategoryIds"))
                 .isNull();
+    }
+
+    // ── Phase 1.9 PR1 — buildScanSystemPrompt ─────────
+
+    @Test
+    void buildScanSystemPrompt_includes_displayName_when_present() {
+        PiiTypeDefinition pii = new PiiTypeDefinition();
+        pii.setKey("UK_NATIONAL_INSURANCE_NUMBER");
+        pii.setDisplayName("UK National Insurance Number");
+        pii.setDescription("UK NI number, format: 2 letters + 6 digits + 1 letter");
+        pii.setExamples(List.of("AB123456C", "QQ123456D"));
+
+        String prompt = PackImportService.buildScanSystemPrompt(pii);
+
+        assertThat(prompt)
+                .contains("UK National Insurance Number")
+                .contains("Definition: UK NI number")
+                .contains("Examples: AB123456C, QQ123456D")
+                .contains("found")
+                .contains("instances")
+                .contains("confidence");
+    }
+
+    @Test
+    void buildScanSystemPrompt_falls_back_to_key_when_displayName_is_null() {
+        PiiTypeDefinition pii = new PiiTypeDefinition();
+        pii.setKey("CUSTOM_PII_KEY");
+
+        String prompt = PackImportService.buildScanSystemPrompt(pii);
+
+        assertThat(prompt).contains("CUSTOM_PII_KEY");
+    }
+
+    @Test
+    void buildScanSystemPrompt_omits_definition_line_when_description_is_blank() {
+        PiiTypeDefinition pii = new PiiTypeDefinition();
+        pii.setKey("X");
+        pii.setDisplayName("Thing");
+        pii.setDescription("   ");
+
+        String prompt = PackImportService.buildScanSystemPrompt(pii);
+
+        assertThat(prompt).doesNotContain("Definition:");
+    }
+
+    @Test
+    void buildScanSystemPrompt_omits_examples_line_when_examples_is_empty_or_null() {
+        PiiTypeDefinition piiNoExamples = new PiiTypeDefinition();
+        piiNoExamples.setKey("X");
+        piiNoExamples.setDisplayName("Thing");
+        piiNoExamples.setExamples(List.of());
+
+        assertThat(PackImportService.buildScanSystemPrompt(piiNoExamples))
+                .doesNotContain("Examples:");
+
+        PiiTypeDefinition piiNullExamples = new PiiTypeDefinition();
+        piiNullExamples.setKey("Y");
+        piiNullExamples.setDisplayName("Other");
+        piiNullExamples.setExamples(null);
+
+        assertThat(PackImportService.buildScanSystemPrompt(piiNullExamples))
+                .doesNotContain("Examples:");
+    }
+
+    @Test
+    void buildScanSystemPrompt_emits_strict_JSON_response_contract() {
+        PiiTypeDefinition pii = new PiiTypeDefinition();
+        pii.setKey("X");
+        pii.setDisplayName("Thing");
+
+        String prompt = PackImportService.buildScanSystemPrompt(pii);
+
+        // The prompt instructs the model to return strict JSON. Without
+        // this, the cascade-router worker can't parse the response.
+        assertThat(prompt)
+                .contains("strict JSON")
+                .contains("\"found\"")
+                .contains("\"instances\"")
+                .contains("\"confidence\"")
+                .contains("found=false");
     }
 }

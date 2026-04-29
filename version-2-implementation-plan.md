@@ -305,7 +305,7 @@ Per CSV #2 (DECIDED hybrid).
 
 ### 1.9 Stage ④ scan dispatch (CSV #36)
 
-- [ ] PII / PHI / PCI scan PROMPT blocks created per category needing them.
+- [x] PII / PHI / PCI scan PROMPT blocks created per category needing them. Phase 1.9 PR1: `prompt.schema.json` formalises the PROMPT block content shape (introducing the `kind` discriminator: `CLASSIFICATION` / `SCAN` / `METADATA_EXTRACTION` / `GENERAL`); `PackImportService.seedScanPromptBlocksForPiiTypes` auto-creates a `kind=SCAN` PROMPT block per `PiiTypeDefinition` (id `scan-pii-${key}`), inheriting the PII type's `applicableCategoryIds` for category scoping.
 - [ ] Stage ④ node calls `gls-classifier-router` with the scan PROMPT block — same cascade, different content.
 - [ ] Metadata extraction PROMPT blocks created per `MetadataSchema`.
 - [ ] Results aggregated, passed to enforcement.
