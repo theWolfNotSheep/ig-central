@@ -41,6 +41,7 @@ public class PackImportService {
     private final InstalledPackRepository installedPackRepo;
     private final PackUpdateAvailableRepository packUpdateRepo;
     private final ImportItemSnapshotRepository snapshotRepo;
+    private final PipelineBlockRepository pipelineBlockRepo;
 
     public PackImportService(
             LegislationRepository legislationRepo,
@@ -54,7 +55,8 @@ public class PackImportService {
             GovernancePolicyRepository policyRepo,
             InstalledPackRepository installedPackRepo,
             PackUpdateAvailableRepository packUpdateRepo,
-            ImportItemSnapshotRepository snapshotRepo) {
+            ImportItemSnapshotRepository snapshotRepo,
+            PipelineBlockRepository pipelineBlockRepo) {
         this.legislationRepo = legislationRepo;
         this.sensitivityRepo = sensitivityRepo;
         this.retentionRepo = retentionRepo;
@@ -67,6 +69,7 @@ public class PackImportService {
         this.installedPackRepo = installedPackRepo;
         this.packUpdateRepo = packUpdateRepo;
         this.snapshotRepo = snapshotRepo;
+        this.pipelineBlockRepo = pipelineBlockRepo;
     }
 
     // ── Import modes ─────────────────────────────────
@@ -140,6 +143,20 @@ public class PackImportService {
                 results.add(new ComponentResult(type, comp.name(), 0, 0, 0, comp.itemCount(),
                         List.of("Error: " + e.getMessage())));
             }
+        }
+
+        // Phase 1.8 PR4 — seed an empty POLICY block for each
+        // imported category that doesn't already have one. Operators
+        // populate `requiredScans` / `metadataSchemaIds` /
+        // `governancePolicyIds` from the admin UI later. Pack files
+        // can also include POLICY_BLOCKS as a future component type
+        // (PIPELINE_BLOCKS import is not yet supported in this pass);
+        // when that lands, the seed step here only creates blocks for
+        // categories the pack didn't explicitly cover.
+        ComponentResult policySeedResult = seedPolicyBlocksForCategories(ctx);
+        if (policySeedResult.created() > 0 || policySeedResult.updated() > 0
+                || policySeedResult.skipped() > 0) {
+            results.add(policySeedResult);
         }
 
         int totalCreated = results.stream().mapToInt(ComponentResult::created).sum();
@@ -694,6 +711,88 @@ public class PackImportService {
         if (incomingCategories != null) {
             def.setApplicableCategoryIds(incomingCategories);
         }
+    }
+
+    // ── POLICY block seeding ─────────────────────────
+
+    /**
+     * Phase 1.8 PR4. After all components are imported, seed an empty
+     * POLICY block for every category in {@code ctx.categoryNameToId}
+     * that doesn't already have one. Idempotent: re-running the import
+     * doesn't recreate blocks for categories that already have them.
+     *
+     * <p>Block name convention: {@code policy-${categoryId}}. Matches
+     * the {@code default-router} convention used elsewhere — one
+     * deterministic name per logical block, so re-imports + admin
+     * tooling can find by name.
+     *
+     * <p>The seeded block is empty: no required scans, no metadata
+     * schemas, no governance policies. Operators populate via the
+     * admin UI; pack files that ship explicit POLICY blocks will, in
+     * a future enhancement, supersede the seeds for matching
+     * categories. For now packs can't ship POLICY blocks (the
+     * {@code PIPELINE_BLOCKS} component type isn't fully wired) so
+     * the seed is the only source.
+     */
+    private ComponentResult seedPolicyBlocksForCategories(ImportContext ctx) {
+        if (ctx.mode == ImportMode.PREVIEW) {
+            return new ComponentResult("POLICY_BLOCKS_SEED", "auto-seed",
+                    0, 0, ctx.categoryNameToId.size(), 0,
+                    List.of("Preview mode — POLICY block seeding skipped"));
+        }
+        int created = 0, skipped = 0;
+        List<String> details = new ArrayList<>();
+        for (Map.Entry<String, String> entry : ctx.categoryNameToId.entrySet()) {
+            String categoryName = entry.getKey();
+            String categoryId = entry.getValue();
+            if (categoryId == null) continue;
+
+            String blockName = "policy-" + categoryId;
+            if (pipelineBlockRepo.findByName(blockName).isPresent()) {
+                skipped++;
+                continue;
+            }
+
+            PipelineBlock block = new PipelineBlock();
+            block.setName(blockName);
+            block.setDescription("POLICY block auto-seeded for category " + categoryName
+                    + " (" + categoryId + "). Phase 1.8 / CSV #35. Operators populate "
+                    + "requiredScans / metadataSchemaIds / governancePolicyIds via the admin UI.");
+            block.setType(PipelineBlock.BlockType.POLICY);
+            block.setActive(true);
+            block.setActiveVersion(1);
+
+            Map<String, Object> content = new LinkedHashMap<>();
+            content.put("categoryId", categoryId);
+            content.put("categoryName", categoryName);
+            content.put("requiredScans", List.of());
+            content.put("metadataSchemaIds", List.of());
+            content.put("governancePolicyIds", List.of());
+
+            PipelineBlock.BlockVersion v1 = new PipelineBlock.BlockVersion(
+                    1, content,
+                    "Auto-seeded by PackImportService (pack=" + ctx.packSlug + ").",
+                    "pack-import:" + ctx.packSlug,
+                    ctx.importedAt);
+            block.setVersions(new ArrayList<>(List.of(v1)));
+            block.setCreatedAt(ctx.importedAt);
+            block.setCreatedBy("pack-import:" + ctx.packSlug);
+            block.setUpdatedAt(ctx.importedAt);
+            block.setSourcePackSlug(ctx.packSlug);
+            block.setSourcePackVersion(ctx.packVersion);
+            block.setImportedAt(ctx.importedAt);
+
+            pipelineBlockRepo.save(block);
+            created++;
+            details.add("Seeded POLICY block: " + blockName);
+        }
+
+        if (created > 0) {
+            log.info("Seeded {} POLICY block(s) for newly-imported categories ({} pre-existing skipped)",
+                    created, skipped);
+        }
+        return new ComponentResult("POLICY_BLOCKS_SEED", "auto-seed",
+                created, 0, skipped, 0, details);
     }
 
     // ── Taxonomy Categories ──────────────────────────
