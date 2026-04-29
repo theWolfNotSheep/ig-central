@@ -478,7 +478,12 @@ services:
       GLS_ROUTER_BERT_URL: http://gls-bert-inference:8094
       GLS_ROUTER_SLM_ENABLED: ${GLS_ROUTER_SLM_ENABLED:-false}
       GLS_ROUTER_SLM_URL: http://gls-slm-worker:8095
+      # Legacy Rabbit-based LLM dispatch (gls-llm-orchestration).
+      # Phase 1.6 PR3 introduced an HTTP path; flip GLS_ROUTER_LLM_HTTP_ENABLED
+      # to use it. When both are on, HTTP wins.
       GLS_ROUTER_LLM_ENABLED: ${GLS_ROUTER_LLM_ENABLED:-false}
+      GLS_ROUTER_LLM_HTTP_ENABLED: ${GLS_ROUTER_LLM_HTTP_ENABLED:-false}
+      GLS_ROUTER_LLM_HTTP_URL: http://gls-llm-worker:8096
     depends_on:
       mongo: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
@@ -524,6 +529,35 @@ services:
       GLS_SLM_ANTHROPIC_MODEL: ${GLS_SLM_ANTHROPIC_MODEL:-claude-haiku-4-5}
       GLS_SLM_OLLAMA_MODEL: ${GLS_SLM_OLLAMA_MODEL:-llama3.1:8b}
       GLS_MCP_SERVER_URL: http://mcp-server:8081
+    depends_on:
+      mongo: { condition: service_healthy }
+      mcp-server: { condition: service_healthy }
+    logging: *default-logging
+    networks: [gls]
+
+  gls-llm-worker:                                         # Phase 1.6
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-llm-worker
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: backend/gls-llm-worker/Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      # Default: stub backend that returns LLM_NOT_CONFIGURED 503.
+      # Flip GLS_LLM_BACKEND to `anthropic` (with ANTHROPIC_API_KEY)
+      # or `ollama` (with OLLAMA_BASE_URL) to enable real classification.
+      GLS_LLM_BACKEND: ${GLS_LLM_BACKEND:-none}
+      SPRING_AI_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SPRING_AI_OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      GLS_LLM_ANTHROPIC_MODEL: ${GLS_LLM_ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      GLS_LLM_OLLAMA_MODEL: ${GLS_LLM_OLLAMA_MODEL:-qwen2.5:32b}
+      GLS_MCP_SERVER_URL: http://mcp-server:8081
+      # Cost budget + rate limit defaults are 0 (disabled). Tune via
+      # GLS_LLM_BUDGET_DAILY_TOKEN_CAP / GLS_LLM_RATE_LIMIT_PERMITS.
+      GLS_LLM_BUDGET_DAILY_TOKEN_CAP: ${GLS_LLM_BUDGET_DAILY_TOKEN_CAP:-0}
+      GLS_LLM_RATE_LIMIT_PERMITS: ${GLS_LLM_RATE_LIMIT_PERMITS:-0}
+      GLS_LLM_RATE_LIMIT_WAIT_MS: ${GLS_LLM_RATE_LIMIT_WAIT_MS:-0}
     depends_on:
       mongo: { condition: service_healthy }
       mcp-server: { condition: service_healthy }
