@@ -267,8 +267,8 @@ First iteration is a *proxy* — accepts the new contract, dispatches to the exi
 Per CSV #2 (DECIDED hybrid).
 
 - [ ] **`gls-bert-trainer`** (Python, k8s Job): reads training samples from Mongo, fine-tunes ModernBERT on the org's top-3 categories, exports ONNX, publishes to MinIO under versioned key.
-- [ ] **`gls-bert-inference`** (JVM, DJL + ONNX Runtime): loads ONNX from MinIO at startup, exposes `POST /v1/infer`, `POST /v1/models/reload`, `GET /v1/models`.
-- [ ] `BERT_CLASSIFIER` block type: links categories to model version + acceptance threshold.
+- [x] **`gls-bert-inference`** (JVM, DJL + ONNX Runtime): loads ONNX from MinIO at startup, exposes `POST /v1/infer`, `POST /v1/models/reload`, `GET /v1/models`. Phase 1.4 PR1 — first cut ships the contract surface, JVM module, DJL classpath, audit / metrics / health / model-readiness wiring, and a stub `NotLoadedInferenceEngine` that returns `MODEL_NOT_LOADED` 503 until the trainer publishes an artefact. The real DJL + ONNX engine swaps in behind the `InferenceEngine` interface in a follow-up PR.
+- [x] `BERT_CLASSIFIER` block type: links categories to model version + acceptance threshold. Phase 1.4 PR1 — `contracts/blocks/bert-classifier.schema.json` v0.3.0 carries `modelVersion`, optional `artifactRef` MinIO pointer, `labelMapping[]`, optional `trainingMetadata`, optional `minTextLength`. The bert-inference service consumes it once the trainer's first artefact is wired.
 - [ ] Wire `gls-bert-inference` into `gls-classifier-router` cascade behind the existing `ROUTER` block. Conservative thresholds (`bertAccept=0.92`).
 - [ ] Enable BERT for the org's top-1 category first; observe escalation rate; widen.
 

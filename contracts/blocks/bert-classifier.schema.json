@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gls.local/contracts/blocks/bert-classifier.schema.json",
+  "title": "BERT_CLASSIFIER block content",
+  "description": "Maps a fine-tuned BERT model artefact onto a taxonomy slice. The classifier router resolves this block to pick the model that runs at the BERT tier of the cascade. Per architecture §8.2 and CSV #2 (Python trains, JVM serves).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["modelVersion", "labelMapping"],
+  "properties": {
+    "modelVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "description": "Semantic version of the ONNX artefact (e.g. `2026.04.0`). The bert-inference service maps this to a MinIO object key under the configured artefacts bucket.",
+      "examples": ["2026.04.0", "2026.05.1-rc.1"]
+    },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional explicit MinIO pointer. When absent, bert-inference resolves `modelVersion` against its configured artefacts bucket / prefix.",
+      "properties": {
+        "bucket": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "objectKey": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "labelMapping": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "description": "Maps the model's training labels onto taxonomy categories. Order is the model's softmax ordering — index 0 is the model's first class. The router consumes the matched `categoryId` plus the cascade-tier confidence.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["modelLabel", "categoryId"],
+        "properties": {
+          "modelLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Label as produced by the trainer (e.g. `hr_letter`, `finance_invoice`)."
+          },
+          "categoryId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Taxonomy category id this label maps to."
+          },
+          "categoryName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional human-readable category name; the admin UI surfaces this without joining to the taxonomy collection."
+          }
+        }
+      }
+    },
+    "trainingMetadata": {
+      "type": "object",
+      "description": "Audit-friendly metadata about the artefact's provenance. Populated by the trainer; the inference service treats this as opaque.",
+      "additionalProperties": true,
+      "properties": {
+        "trainerVersion": { "type": "string" },
+        "trainedAt": { "type": "string", "format": "date-time" },
+        "datasetSize": { "type": "integer", "minimum": 0 },
+        "evaluationMetrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Held-out evaluation metrics — used by the admin UI's model-promotion screen.",
+          "properties": {
+            "accuracy": { "type": "number", "minimum": 0, "maximum": 1 },
+            "f1Macro": { "type": "number", "minimum": 0, "maximum": 1 },
+            "perLabel": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["label", "precision", "recall", "f1"],
+                "properties": {
+                  "label": { "type": "string" },
+                  "precision": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "recall": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "f1": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "support": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "minTextLength": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Skip this tier if the input text is shorter than this. Useful when a model is unreliable on tiny inputs — fall through to SLM/LLM."
+    }
+  }
+}

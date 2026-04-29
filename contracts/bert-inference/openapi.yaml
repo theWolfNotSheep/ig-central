@@ -1,0 +1,334 @@
+openapi: 3.1.1
+info:
+  title: ig-central — BERT Inference
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    BERT-tier classifier serving. JVM + DJL + ONNX Runtime per CSV #2:
+    serving wins from the JVM (homogeneous deploy, observability, IAM,
+    lower memory than Python+CUDA), training wins from Python
+    (HuggingFace, distillation, ONNX export). The
+    `gls-bert-trainer` (Phase 1.4 follow-up) publishes ONNX artefacts
+    to MinIO under versioned keys; this service loads them at startup
+    and exposes synchronous inference + a hot-reload trigger.
+
+    Phase 1.4 first cut: contract + JVM module + DJL classpath + a
+    stub backend that returns `MODEL_NOT_LOADED` until a trained
+    artefact is wired. The router cascade integration (BERT tier in
+    `gls-classifier-router`) and the Python trainer ship as separate
+    follow-up PRs.
+
+    **Conventions referenced from `_shared/`:**
+    - Error envelope (RFC 7807 + extensions) — CSV #17.
+    - Service-account JWT — CSV #18.
+    - `traceparent` + `Idempotency-Key` headers — CSV #16 / #20.
+    - `Capabilities` shape — CSV #21.
+
+servers:
+  - url: http://gls-bert-inference:8080
+    description: Internal Docker Compose hostname.
+  - url: http://localhost:8094
+    description: Local dev (override).
+
+tags:
+  - name: inference
+    description: BERT model inference.
+  - name: models
+    description: Model lifecycle — list + reload.
+  - name: meta
+    description: Capabilities + health.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/infer:
+    post:
+      operationId: infer
+      tags: [inference]
+      summary: Run BERT classification over a text input.
+      description: |
+        Synchronous endpoint. Caller supplies the text payload
+        (inline ≤ 256 KB or by reference per CSV #19) plus a
+        `BERT_CLASSIFIER` block coordinate (id + optional version per
+        CSV #14). The service runs the model bound to that block
+        version against the text and returns a label + confidence.
+
+        **No idempotency cache.** Inference is stateless and cheap
+        relative to the LLM tier; the cascade router's idempotency
+        already covers replay correlation upstream. Repeat calls hit
+        the model again.
+
+        **Stateful warm-up.** This service is Class C in the
+        scaling roster (`version-2-architecture.md` § Scaling profile)
+        — replicas load the configured ONNX into RAM at startup and
+        are not interchangeable until that warm-up completes. Until a
+        model is loaded the service returns `MODEL_NOT_LOADED` (503)
+        from this endpoint.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InferRequest'
+      responses:
+        '200':
+          description: Inference succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InferResponse'
+        '422':
+          description: |
+            Block coordinates resolve to nothing or the loaded model
+            doesn't match the block's declared model version.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '503':
+          description: |
+            No model is loaded on this replica yet. Returned with
+            `code=MODEL_NOT_LOADED`. Caller should fall through to the
+            next cascade tier.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/models:
+    get:
+      operationId: listModels
+      tags: [models]
+      summary: List loaded models.
+      description: |
+        Returns the model artefacts this replica currently has loaded
+        — their MinIO key, semantic version, label set, and the
+        `BERT_CLASSIFIER` block ids that select them.
+      responses:
+        '200':
+          description: Loaded models.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+
+  /v1/models/reload:
+    post:
+      operationId: reloadModels
+      tags: [models]
+      summary: Trigger a model reload from MinIO.
+      description: |
+        Ops trigger. Re-fetches the configured model artefacts from
+        MinIO and swaps them in. While reload is in progress, the
+        replica returns `503 MODEL_NOT_LOADED` from `/v1/infer` (the
+        old model is unloaded before the new one is verified) — load
+        balancers should drain accordingly.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+      responses:
+        '202':
+          description: Reload accepted; in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReloadAccepted'
+        '409':
+          description: A reload is already in progress.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Service capability advertisement.
+      responses:
+        '200':
+          description: Capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: '../_shared/capabilities.yaml#/components/schemas/Capabilities'
+
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [meta]
+      summary: Liveness + readiness probe.
+      description: |
+        Liveness reflects process state. Readiness flips UP only when
+        at least one model artefact is loaded — Kubernetes / Compose
+        health checks should treat this replica as not ready while
+        warming up or after a reload.
+      security: []
+      responses:
+        '200':
+          description: Up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Not ready (no model loaded, or reload in progress).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    InferRequest:
+      type: object
+      required: [block, text]
+      additionalProperties: false
+      properties:
+        block:
+          $ref: '#/components/schemas/BertBlockRef'
+        text:
+          $ref: '../_shared/text-payload.yaml#/components/schemas/TextPayload'
+        nodeRunId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            Optional; passed through to the audit envelope so a
+            downstream observer can correlate this inference with the
+            cascade run that triggered it.
+
+    BertBlockRef:
+      type: object
+      required: [id]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: BERT_CLASSIFIER block document id.
+        version:
+          type: integer
+          minimum: 1
+          description: Pinned block version (CSV #14). Omit for active.
+
+    InferResponse:
+      type: object
+      required: [label, confidence, modelVersion, costUnits]
+      additionalProperties: false
+      properties:
+        label:
+          type: string
+          description: |
+            Predicted label. Comes from the model's training labels —
+            the BERT_CLASSIFIER block maps these onto taxonomy
+            categories.
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        modelVersion:
+          type: string
+          description: |
+            Semantic version of the ONNX artefact (e.g. `2026.04.0`)
+            so the audit trail can pin the model that produced this
+            inference.
+        scores:
+          type: array
+          maxItems: 64
+          description: |
+            Optional full softmax distribution. Empty for builds where
+            it isn't useful to surface; useful for the admin UI's
+            "what was the runner-up?" panel.
+          items:
+            type: object
+            additionalProperties: false
+            required: [label, confidence]
+            properties:
+              label: { type: string }
+              confidence:
+                type: number
+                format: float
+                minimum: 0
+                maximum: 1
+        durationMs:
+          type: integer
+          minimum: 0
+        costUnits:
+          type: integer
+          minimum: 0
+          description: |
+            Cost-attribution unit per CSV #22. For BERT inference this
+            is byte-count of input text divided by 1024.
+
+    ModelsResponse:
+      type: object
+      required: [models]
+      additionalProperties: false
+      properties:
+        models:
+          type: array
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/LoadedModel'
+
+    LoadedModel:
+      type: object
+      required: [modelVersion, labels, blockIds]
+      additionalProperties: false
+      properties:
+        modelVersion:
+          type: string
+        artifactRef:
+          type: object
+          additionalProperties: false
+          properties:
+            bucket: { type: string }
+            objectKey: { type: string }
+        labels:
+          type: array
+          items: { type: string }
+        blockIds:
+          type: array
+          maxItems: 64
+          items: { type: string }
+          description: BERT_CLASSIFIER block document ids that resolve to this artefact.
+        loadedAt:
+          type: string
+          format: date-time
+
+    ReloadAccepted:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [PENDING]
+        startedAt:
+          type: string
+          format: date-time
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'

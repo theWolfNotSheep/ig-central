@@ -22,7 +22,7 @@ Block content is dynamic — different block types have different schemas. Stori
 - `extractor.schema.json` — EXTRACTOR block (text extraction config).
 - `router.schema.json` — ROUTER block (cascade thresholds, fallback policy). Phase 1.2 ✓ (v0.2.0).
 - `enforcer.schema.json` — ENFORCER block (governance enforcement rules).
-- `bert-classifier.schema.json` — BERT_CLASSIFIER block (model version, threshold). Phase 1.4.
+- `bert-classifier.schema.json` — BERT_CLASSIFIER block (model version, label mapping, optional artifact ref + training metadata + minTextLength skip). Phase 1.4 ✓ (v0.3.0).
 - `policy.schema.json` — POLICY block (taxonomy-driven dispatch rules). Per CSV #35. Phase 1.8.
 
 ## Convention
