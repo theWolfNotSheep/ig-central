@@ -58,7 +58,14 @@ public class PipelineBlock {
         EXTRACTOR,
         ROUTER,
         ENFORCER,
-        BERT_CLASSIFIER
+        BERT_CLASSIFIER,
+        /**
+         * Phase 1.8 / CSV #35. Carries post-classification policy
+         * for a category — which PII scans run, which metadata
+         * schemas extract, which governance policies enforce.
+         * Content shape: contracts/blocks/policy.schema.json.
+         */
+        POLICY
     }
 
     public record BlockVersion(
