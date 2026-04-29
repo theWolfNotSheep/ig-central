@@ -472,9 +472,61 @@ services:
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      # Cascade tier feature flags. Default off — flip to true once
+      # the targeted worker is reachable.
+      GLS_ROUTER_BERT_ENABLED: ${GLS_ROUTER_BERT_ENABLED:-false}
+      GLS_ROUTER_BERT_URL: http://gls-bert-inference:8094
+      GLS_ROUTER_SLM_ENABLED: ${GLS_ROUTER_SLM_ENABLED:-false}
+      GLS_ROUTER_SLM_URL: http://gls-slm-worker:8095
+      GLS_ROUTER_LLM_ENABLED: ${GLS_ROUTER_LLM_ENABLED:-false}
     depends_on:
       mongo: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
+    logging: *default-logging
+    networks: [gls]
+
+  gls-bert-inference:                                     # Phase 1.4
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-bert-inference
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: backend/gls-bert-inference/Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      # Default: stub backend that returns MODEL_NOT_LOADED 503.
+      # Flip GLS_BERT_ENGINE to `djl` once the trainer publishes its
+      # first ONNX artefact + the engine wires in.
+      GLS_BERT_ENGINE: ${GLS_BERT_ENGINE:-none}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      GLS_BERT_ARTIFACTS_BUCKET: ${GLS_BERT_ARTIFACTS_BUCKET:-gls-bert-artifacts}
+    depends_on:
+      minio: { condition: service_healthy }
+    logging: *default-logging
+    networks: [gls]
+
+  gls-slm-worker:                                         # Phase 1.5
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-slm-worker
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: backend/gls-slm-worker/Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      # Default: stub backend that returns SLM_NOT_CONFIGURED 503.
+      # Flip GLS_SLM_BACKEND to `anthropic` (with ANTHROPIC_API_KEY)
+      # or `ollama` (with OLLAMA_BASE_URL) to enable real classification.
+      GLS_SLM_BACKEND: ${GLS_SLM_BACKEND:-none}
+      SPRING_AI_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SPRING_AI_OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      GLS_SLM_ANTHROPIC_MODEL: ${GLS_SLM_ANTHROPIC_MODEL:-claude-haiku-4-5}
+      GLS_SLM_OLLAMA_MODEL: ${GLS_SLM_OLLAMA_MODEL:-llama3.1:8b}
+      GLS_MCP_SERVER_URL: http://mcp-server:8081
+    depends_on:
+      mongo: { condition: service_healthy }
+      mcp-server: { condition: service_healthy }
     logging: *default-logging
     networks: [gls]
 
