@@ -113,6 +113,12 @@ public class PipelineExecutionEngine {
     // optional bean); observe-only at this phase.
     private final PolicyScanDispatcher policyScanDispatcher;
 
+    // Phase 1.9 PR3 — Stage ④ metadata extraction dispatcher. Iterates
+    // metadataSchemaIds[] from the resolved POLICY block and runs each
+    // through the cascade router (against the seeded
+    // extract-metadata-${schemaId} PROMPT block). Observe-only.
+    private final MetadataExtractionDispatcher metadataExtractionDispatcher;
+
     public PipelineExecutionEngine(TextExtractionService textExtractionService,
                                    DocumentService documentService,
                                    ObjectStorageService objectStorage,
@@ -138,7 +144,8 @@ public class PipelineExecutionEngine {
                                    NodeRunRepository nodeRunRepo,
                                    ObjectProvider<ClassifierRouterClient> classifierRouterClientProvider,
                                    ObjectProvider<co.uk.wolfnotsheep.governance.services.PolicyBlockResolver> policyBlockResolverProvider,
-                                   PolicyScanDispatcher policyScanDispatcher) {
+                                   PolicyScanDispatcher policyScanDispatcher,
+                                   MetadataExtractionDispatcher metadataExtractionDispatcher) {
         this.textExtractionService = textExtractionService;
         this.documentService = documentService;
         this.objectStorage = objectStorage;
@@ -165,6 +172,7 @@ public class PipelineExecutionEngine {
         this.classifierRouterClientProvider = classifierRouterClientProvider;
         this.policyBlockResolverProvider = policyBlockResolverProvider;
         this.policyScanDispatcher = policyScanDispatcher;
+        this.metadataExtractionDispatcher = metadataExtractionDispatcher;
     }
 
     // ── Main entry point: execute pipeline from the beginning ─────────
@@ -371,6 +379,14 @@ public class PipelineExecutionEngine {
         // and PR4 can read them; the engine doesn't gate on blocking
         // failures yet.
         dispatchPolicyScans(run, doc, ctx);
+
+        // Phase 1.9 PR3 — dispatch the resolved POLICY block's
+        // metadataSchemaIds[] through the cascade router. Each
+        // schema id resolves to a seeded
+        // `extract-metadata-${schemaId}` PROMPT block. Results land
+        // under `policyExtractionResults` for PR4 to persist onto
+        // the document + hand off to enforcement.
+        dispatchMetadataExtraction(run, doc, ctx);
 
         // Store classification as the current context for post-classification nodes
         ctx.put("currentClassification", "applied");
@@ -1121,6 +1137,52 @@ public class PipelineExecutionEngine {
         m.put("tierOfDecision", r.tierOfDecision());
         m.put("confidence", r.confidence());
         m.put("result", r.result());
+        m.put("error", r.error());
+        m.put("durationMs", r.durationMs());
+        return m;
+    }
+
+    /**
+     * Phase 1.9 PR3. Read the {@code policyMetadataSchemaIds} list
+     * stashed by {@link #resolveAndRecordPolicy} and dispatch each
+     * schema's extraction prompt through the cascade router. Records
+     * the per-schema outcomes under {@code policyExtractionResults} in
+     * shared context. Tolerant of: no schemas (returns silently), no
+     * router client (records each schema as not-dispatched), or
+     * dispatcher exceptions (logged + skipped).
+     */
+    @SuppressWarnings("unchecked")
+    private void dispatchMetadataExtraction(PipelineRun run, DocumentModel doc,
+                                            java.util.Map<String, Object> ctx) {
+        Object schemasObj = ctx.get("policyMetadataSchemaIds");
+        if (!(schemasObj instanceof List<?> rawList) || rawList.isEmpty()) {
+            return;
+        }
+        List<String> schemaIds = new ArrayList<>(rawList.size());
+        for (Object item : rawList) {
+            if (item != null) schemaIds.add(item.toString());
+        }
+        if (schemaIds.isEmpty()) return;
+
+        try {
+            List<MetadataExtractionResult> results = metadataExtractionDispatcher.dispatch(
+                    run.getId(), schemaIds, doc.getExtractedText());
+            ctx.put("policyExtractionResults",
+                    results.stream().map(this::extractionResultToMap).toList());
+        } catch (RuntimeException e) {
+            log.warn("[engine] metadata extraction dispatch threw for doc {}: {} — observe-only, continuing",
+                    doc.getId(), e.getMessage());
+        }
+    }
+
+    private Map<String, Object> extractionResultToMap(MetadataExtractionResult r) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaId", r.schemaId());
+        m.put("blockRef", r.blockRef());
+        m.put("dispatched", r.dispatched());
+        m.put("tierOfDecision", r.tierOfDecision());
+        m.put("confidence", r.confidence());
+        m.put("extractedFields", r.extractedFields());
         m.put("error", r.error());
         m.put("durationMs", r.durationMs());
         return m;
