@@ -250,7 +250,8 @@ Clone the Tika pattern.
 First iteration is a *proxy* — accepts the new contract, dispatches to the existing LLM worker. Proves orchestrator integration without any model work.
 
 - [x] `contracts/classifier-router/openapi.yaml` per §11.A decisions.
-- [x] Mock implementation: deterministic stub returning `tierOfDecision=MOCK` until BERT/SLM/LLM tiers wire in 1.4–1.6. (`MockCascadeService` behind a `CascadeService` interface.) Real LLM-worker dispatch via `gls.pipeline.llm.jobs` deferred to a follow-up PR.
+- [x] Mock implementation (Phase 1.2 PR1) — `MockCascadeService` returns deterministic `tierOfDecision=MOCK`.
+- [x] Real LLM-worker dispatch (Phase 1.2 PR2) — `LlmDispatchCascadeService` publishes to `gls.pipeline` exchange (routing key `pipeline.llm.requested`); per-replica auto-named queue bound to `pipeline.llm.completed` correlates by `jobId`. Selected via `gls.router.cascade.llm.enabled=true`. Default still mock so the router stays self-contained until the orchestrator cutover (1.3) lands.
 - [ ] Cascade policy block schema (`ROUTER` block content) — separate PR.
 - [ ] Admin migration to introduce the `ROUTER` block type with conservative defaults (`bertAccept=1.01` everywhere — disabled) — separate PR.
 

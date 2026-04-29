@@ -1,6 +1,8 @@
 package co.uk.wolfnotsheep.router.web;
 
 import co.uk.wolfnotsheep.router.idempotency.IdempotencyInFlightException;
+import co.uk.wolfnotsheep.router.parse.LlmJobFailedException;
+import co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -30,6 +32,18 @@ public class RouterExceptionHandler {
     public ResponseEntity<ProblemDetail> handleInFlight(IdempotencyInFlightException e) {
         return problem(HttpStatus.CONFLICT, "IDEMPOTENCY_IN_FLIGHT",
                 "A classify call with this nodeRunId is still in flight", e.getMessage());
+    }
+
+    @ExceptionHandler(LlmJobTimeoutException.class)
+    public ResponseEntity<ProblemDetail> handleLlmTimeout(LlmJobTimeoutException e) {
+        return problem(HttpStatus.GATEWAY_TIMEOUT, "ROUTER_LLM_TIMEOUT",
+                "LLM tier did not respond within the configured wait window", e.getMessage());
+    }
+
+    @ExceptionHandler(LlmJobFailedException.class)
+    public ResponseEntity<ProblemDetail> handleLlmFailed(LlmJobFailedException e) {
+        return problem(HttpStatus.BAD_GATEWAY, "ROUTER_LLM_FAILED",
+                "LLM tier returned a failure", e.getMessage());
     }
 
     @ExceptionHandler(UncheckedIOException.class)

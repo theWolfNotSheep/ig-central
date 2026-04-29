@@ -9,6 +9,14 @@ gls:
   router:
     idempotency:
       ttl: ${GLS_ROUTER_IDEMPOTENCY_TTL:PT24H}
+    cascade:
+      llm:
+        # When true, LlmDispatchCascadeService dispatches via Rabbit
+        # to the existing gls-llm-orchestration worker. When false
+        # (default), MockCascadeService returns a deterministic stub.
+        # Phase 1.2 PR2 wires this; PR1 was mock-only.
+        enabled: ${GLS_ROUTER_LLM_ENABLED:false}
+        timeout: ${GLS_ROUTER_LLM_TIMEOUT:PT60S}
 
 management:
   endpoints:
