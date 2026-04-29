@@ -2522,3 +2522,47 @@ Router module: 68 → 77 tests. Reactor: 415 → 424.
 **Phase 1.6 status:** **three of four plan checkboxes ticked.** PR1 (contract + skeleton), PR2 (real backends + MCP), PR3 (cascade cut-over). Cost budget + rate-limit semaphore is the last item.
 
 **Next:** Cost budget + rate limit on the LLM worker; OR per-category overrides; OR Dockerfile + Compose for `gls-llm-worker`; OR legacy retirement.
+
+## 2026-04-29 — Phase 1.6 PR4 — cost budget gate + rate-limit semaphore
+
+**Done:** Phase 1.6 closes. The LLM worker now enforces a per-replica daily token budget + a per-replica concurrency limit. Both default to disabled so existing setups behave identically; flip the configured values to enable.
+
+**Decisions logged:** None new — closes the two remaining Phase 1.6 plan checkboxes.
+
+**What's wired:**
+
+- **`CostBudgetTracker`** (new `@Component`) — in-memory atomic counter resetting at UTC midnight. `checkBudget()` throws `BudgetExceededException` when the running daily total has crossed `gls.llm.worker.budget.daily-token-cap`. `recordUsage(tokensIn, tokensOut)` adds to the running total after each successful call. Default `0` disables enforcement entirely. Test-friendly Clock injection for time-travel testing of the UTC rollover.
+- **`RateLimitGate`** (new `@Component`) — bounded fair `Semaphore`. `acquire()` returns an `AutoCloseable` Token (idempotent close) so callers use try-with-resources. Throws `RateLimitExceededException` when no permit is available within the configured wait window. Default `permits=0` disables enforcement (acquire returns a no-op Token).
+- **`BudgetExceededException`** + **`RateLimitExceededException`** — both mapped to 429 in `LlmExceptionHandler`. Budget carries a `Retry-After: <seconds-until-midnight-UTC>`; rate limit carries `Retry-After: 1` (semaphore frees up as soon as another call completes).
+- **`ClassifyController.doClassify`** — now wraps the backend call: `budgetTracker.checkBudget()` → `try (var t = rateLimitGate.acquire())` → backend.classify → `budgetTracker.recordUsage(...)`. The try-with-resources ensures the permit is released even if the backend throws.
+- **`LlmExceptionHandler`** — new handlers for both exceptions, with the appropriate `Retry-After` header.
+- **`ClassifyController.errorCodeFor`** — `LLM_BUDGET_EXCEEDED` and `LLM_RATE_LIMITED` map onto the exceptions for audit envelope shaping.
+- **`application.yaml`** — new `gls.llm.worker.budget.daily-token-cap` (default 0), `gls.llm.worker.rate-limit.{permits, wait-ms}` (defaults 0, 0).
+
+**Why budget is checked before AND recorded after the call:**
+
+The simplest correct shape. `checkBudget()` rejects if the running total has already crossed the cap — so the first request *after* the cap is hit gets the 429. `recordUsage(in, out)` adds to the running total after success, so the cap detection always lags by one call. No upfront token estimation (which would need to hand-roll a tokeniser) — accept "budget exceeded by one call" as the rounding error.
+
+**Why per-replica instead of cluster-wide:**
+
+A cluster-wide budget would need a backing store (Redis token bucket, Mongo atomic increment). For Phase 1.6 PR4 first cut, per-replica is simpler and meaningful — replicas are stateless, so a 5-replica deployment with cap=1000/day gets a soft 5000-token cluster cap. A future enhancement makes the budget cluster-wide once a representative production load profile exists.
+
+**Tests (11 new in module; 435 reactor total):**
+
+- `CostBudgetTrackerTest` (6) — disabled at cap=0; allows calls until cap reached; rejects when cap exceeded; `retryAfterSeconds` is positive and ≤ 24h; UTC midnight rollover (with frozen Clock); `recordUsage(0, 0)` is a no-op.
+- `RateLimitGateTest` (5) — disabled at permits=0; permits acquired + released via try-with-resources; throws when no permit available; `release` is idempotent; multiple threads bounded to permit count.
+
+The previous 424-reactor test suite is unchanged. LLM worker module: 40 → 51.
+
+**Files changed:** 4 new source files (`CostBudgetTracker`, `RateLimitGate`, `BudgetExceededException`, `RateLimitExceededException`) + 3 modified (`ClassifyController`, `LlmExceptionHandler`, `application.yaml`) + 2 new test files + plan / log = 11 files.
+
+**Open issues / deferred:**
+
+- **Cluster-wide budget** — per-replica today; a Redis or Mongo-backed counter would let the cluster enforce a single cap. Lands when a representative production load profile exists.
+- **Per-block / per-category budgets** — the gate is a single global cap. Per-block or per-tenant caps belong with the broader observability + cost-attribution work in Phase 2.
+- **Tokeniser-based pre-check** — currently we rejection-test against the running total *before* the call but accept "budget exceeded by one call" as rounding. A pre-check using HuggingFace's `tiktoken` (or an Anthropic SDK helper) would tighten the bound but adds a dep.
+- **Real backend integration test** — needs a running Anthropic API + `MOCK_BUDGET=true` shape. Same blocker; gated on issue #7.
+
+**Phase 1.6 status:** **all four plan checkboxes ticked.** PR1 (contract + skeleton), PR2 (Anthropic + Ollama + MCP), PR3 (cascade router cut-over), PR4 (cost budget + rate limit). Phase 1.6 is complete.
+
+**Next:** Legacy `gls-llm-orchestration` retirement (the Rabbit dispatcher's last consumer is the cascade router which now prefers HTTP — once the new path is verified in non-dev, the legacy module can be deleted); OR Phase 1.7 Hub-component-to-taxonomy wiring; OR Dockerfile + Compose for `gls-llm-worker`; OR per-category overrides + cascadeHints handling.

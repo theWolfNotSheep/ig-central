@@ -1,7 +1,9 @@
 package co.uk.wolfnotsheep.llmworker.web;
 
 import co.uk.wolfnotsheep.llmworker.backend.BlockUnknownException;
+import co.uk.wolfnotsheep.llmworker.backend.BudgetExceededException;
 import co.uk.wolfnotsheep.llmworker.backend.LlmNotConfiguredException;
+import co.uk.wolfnotsheep.llmworker.backend.RateLimitExceededException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -50,6 +52,32 @@ public class LlmExceptionHandler {
         log.warn("llm I/O failure: {}", e.getMessage(), e);
         return problem(HttpStatus.SERVICE_UNAVAILABLE, "LLM_DEPENDENCY_UNAVAILABLE",
                 "An LLM backend dependency is unreachable", e.getMessage());
+    }
+
+    @ExceptionHandler(BudgetExceededException.class)
+    public ResponseEntity<ProblemDetail> handleBudgetExceeded(BudgetExceededException e) {
+        ResponseEntity<ProblemDetail> base = problem(HttpStatus.TOO_MANY_REQUESTS,
+                "LLM_BUDGET_EXCEEDED",
+                "Daily LLM token budget exceeded", e.getMessage());
+        return ResponseEntity.status(base.getStatusCode())
+                .headers(h -> {
+                    base.getHeaders().forEach(h::addAll);
+                    h.add("Retry-After", String.valueOf(e.retryAfterSeconds()));
+                })
+                .body(base.getBody());
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ProblemDetail> handleRateLimit(RateLimitExceededException e) {
+        ResponseEntity<ProblemDetail> base = problem(HttpStatus.TOO_MANY_REQUESTS,
+                "LLM_RATE_LIMITED",
+                "Per-replica LLM rate limit exceeded", e.getMessage());
+        return ResponseEntity.status(base.getStatusCode())
+                .headers(h -> {
+                    base.getHeaders().forEach(h::addAll);
+                    h.add("Retry-After", "1");
+                })
+                .body(base.getBody());
     }
 
     private static ResponseEntity<ProblemDetail> problem(
