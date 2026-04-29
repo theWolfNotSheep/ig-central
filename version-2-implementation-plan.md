@@ -233,7 +233,13 @@ Why this service: it's the simplest member of the extraction family, has a small
 
 Clone the Tika pattern.
 
-- [ ] **`gls-extraction-archive`** — handles `.zip`, `.mbox`, `.pst`. On encountering archives, fans out child documents back to step ① ingest. Recursive ingest pattern documented.
+- [ ] **`gls-extraction-archive`** — handles `.zip`, `.mbox`, `.pst`. On encountering archives, fans out child documents back to step ① ingest. Recursive ingest pattern documented. Decision: CSV #43 — caller owns fan-out (one-level walk, children returned inline; orchestrator publishes per-child ingest events).
+  - [x] Module + contract (`contracts/extraction-archive/`, BOM property, reactor entry).
+  - [ ] Generated server stub + parser dispatch (ZIP / MBOX / PST) + MinIO source / sink.
+  - [ ] Idempotency, audit, JWT, health, metrics, tracing.
+  - [ ] Tests (unit + integration).
+  - [ ] Dockerfile + Compose.
+  - [ ] Per-service README.
 - [ ] **`gls-extraction-ocr`** — Tesseract or Document AI (decide and log in CSV); GPU-tolerant if needed.
 - [ ] **`gls-extraction-audio`** — Whisper or Deepgram (decide and log); long-running, requires `Prefer: respond-async` (per A1 decision).
 - [x] Mime-detection logic — where does it live? Decision: at ingest in `gls-api` / `gls-connectors` using Tika's detector. Log in CSV. (CSV #42 — DECIDED.)
