@@ -293,8 +293,8 @@ Per CSV #2 (DECIDED hybrid).
 - [x] **StorageTier** gains `applicableCategoryIds[]`. Phase 1.7 PR1 — same shape; same Mongock backfill.
 - [x] **TraitDefinition** gains `applicableCategoryIds[]`. Phase 1.7 PR1 — same shape; same Mongock backfill.
 - [x] **SensitivityDefinition** promoted to first-class entity. Migration: existing enum values seed entities with `applicableCategoryIds=[]`. Phase 1.7 PR1 — `SensitivityDefinition` was already a `@Document` collection (so the "promote" half is pre-existing); this PR adds `applicableCategoryIds` and the V004 backfill restores the `[]` default for any pre-1.7 row.
-- [ ] Hub `PackImportService` updated to preserve `applicableCategoryIds[]` on import.
-- [ ] Hub `PackImportService` fires `gls.config.changed` events for affected component types (per CSV #30).
+- [x] Hub `PackImportService` updated to preserve `applicableCategoryIds[]` on import. Phase 1.7 PR2 — `strListOrNull` helper distinguishes "key absent" (preserve existing value) from "explicit empty array" (reset to global). All four apply* methods (`applySensitivity`, `applyStorageTier`, `applyPiiType`, `applyTrait`) opt in.
+- [x] Hub `PackImportService` fires `gls.config.changed` events for affected component types (per CSV #30). Already implemented via `GovernanceConfigChangeBridge` in `gls-governance` (Phase 0.7+) — every Spring Data Mongo `AfterSaveEvent` for the four entity types is bridged to a `gls.config.changed` publish. PackImportService's `repo.save(...)` calls trigger the bridge automatically; no PackImportService changes needed.
 
 ### 1.8 `POLICY` block type + interpreter (CSV #35)
 
