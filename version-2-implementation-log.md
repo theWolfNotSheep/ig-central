@@ -2438,3 +2438,46 @@ The previous 375-reactor test suite is unchanged. New module: 14 tests, total 38
 **Phase 1.6 status:** one of four plan checkboxes ticked (the "conform to new contract" item). PR2/PR3 close the rest.
 
 **Next:** Phase 1.6 PR2 (real Anthropic + MCP, lifted from `gls-llm-orchestration`); OR Phase 1.6 PR3 (router cutover from Rabbit to HTTP); OR per-category overrides; OR Dockerfile / Compose for the v2 services.
+
+## 2026-04-29 — Phase 1.6 PR2 — Anthropic + Ollama LLM backends + MCP
+
+**Done:** Real LLM backends behind the `LlmService` interface. Selected via `gls.llm.worker.backend=anthropic|ollama`. Uses Spring AI's `AnthropicChatModel` / `OllamaChatModel` (same starters `gls-llm-orchestration` already depends on). MCP integration via `spring-ai-starter-mcp-client` per CSV #1 — every backend hands the configured `ToolCallbackProvider` beans to its ChatClient builder. Closes the Phase 1.6 "move logic into the new shape" plan checkbox.
+
+**Decisions logged:** None new — implements CSV #1 (each worker calls MCP itself) and CSV #2 (cascade dispatch task-agnostic) for the LLM tier.
+
+**What's wired:**
+
+- **`AnthropicLlmService`** (lifted from `AnthropicHaikuSlmService`) — same shape as the SLM's Anthropic service. Defaults to `claude-sonnet-4-5` (the v2 LLM tier's planned default per CLAUDE.md), `temperature=0.1`, `max-tokens=4096`. Resolves PROMPT block via `PromptBlockResolver`, substitutes `{{text}}`, calls Spring AI `ChatClient` with `AnthropicChatOptions(model, temperature, maxTokens)` and `defaultToolCallbacks(toolCallbackProviders)` when MCP is wired. Same JSON / fence parsing, same `tokensIn`/`tokensOut` extraction, same `UncheckedIOException` wrapping for SDK errors.
+- **`OllamaLlmService`** (lifted from `OllamaSlmService`) — defaults to `qwen2.5:32b` (matches the legacy orchestrator's default), `temperature=0.1`, `numCtx=32768`. Same shape as Anthropic but with `OllamaChatOptions`.
+- **`PromptBlockResolver`** (lifted from `gls-slm-worker`) — reads `pipeline_blocks` via raw `MongoTemplate` projection. Resolves PROMPT blocks to `(systemPrompt, userPromptTemplate)`. Same minimal-coupling pattern as SLM (no `gls-governance` dep).
+- **`LlmBackendConfig`** (rewritten) — single `@Bean` factory selects between not-configured / Anthropic / Ollama based on `gls.llm.worker.backend`. `ObjectProvider<AnthropicChatModel>` and `ObjectProvider<OllamaChatModel>` with `getIfAvailable()` so the service starts cleanly without either configured. Collects `ToolCallbackProvider` beans via `ObjectProvider.stream()` and passes them to whichever backend is active.
+- **`pom.xml`** — adds `spring-ai-starter-model-anthropic`, `spring-ai-starter-model-ollama`, `spring-ai-starter-mcp-client`. Imports the `spring-ai-bom` (2.0.0-SNAPSHOT) and registers the Spring snapshot repos at the module level — same pattern as `gls-slm-worker` and `gls-llm-orchestration`.
+- **`application.yaml`** — new `gls.llm.worker.{anthropic, ollama}.*` config keys + `spring.ai.mcp.client.sse.connections.governance.url` (default `http://gls-mcp-server:8081`).
+
+**Why "lift wholesale from SLM" instead of "lift from gls-llm-orchestration":**
+
+The SLM module was authored with the new contract shape (HTTP, async surface, JobStore, RFC 7807 errors). The legacy `gls-llm-orchestration` is Rabbit-driven; its classification logic (`LlmClientFactory.call(systemPrompt, userPrompt)`) is wrapped in queue consumers + result publishers that don't translate to the new HTTP shape. Lifting from the SLM module gets us a working LLM worker in the new shape immediately; the remaining orchestrator-specific bits (cost budgets, rate-limit semaphores, app_config-driven model selection) are smaller follow-ups that don't block the cascade router cut-over.
+
+**Tests (26 new in module; 415 reactor total):**
+
+- `AnthropicLlmServiceTest` (9, lifted) — `renderUser` substitution paths; `parseContent` for pure JSON / fenced JSON / plain text / blank / no-confidence-default; `activeBackend()` returns `ANTHROPIC`; tool-callbacks-aware constructor + null array fallback.
+- `OllamaLlmServiceTest` (7, lifted) — similar coverage plus `activeBackend()=OLLAMA` and blank-modelId fallback to `qwen2.5:32b`.
+- `PromptBlockResolverTest` (8, lifted) — happy active-version resolve; pinned-version resolve; unknown id / wrong type / missing version / empty content → `BlockUnknownException`; `draftContent` fallback; blank id → exception.
+- Existing 14 tests from PR1 (`NotConfiguredLlmServiceTest` + `LlmEventsTest` + `ClassifyControllerTest`) unchanged.
+
+The previous 389-reactor test suite (per the LLM PR1 entry) is unchanged. Module count: 14 → 40.
+
+**Files changed:** 4 new source files (`AnthropicLlmService`, `OllamaLlmService`, `PromptBlockResolver`) + rewritten `LlmBackendConfig` + `pom.xml` (Spring AI BOM + 3 starters + Spring snapshot repos) + `application.yaml` + 3 new test files + plan / log = 11 files.
+
+**Open issues / deferred:**
+
+- **Cost budget gate** — Phase 1.6 plan checkbox; per-day spending cap. Not in this PR; lifts from the legacy orchestrator's tracking shape if it has one, otherwise a small follow-up.
+- **Rate-limit semaphore per replica** — Phase 1.6 plan checkbox; bounds concurrent in-flight calls. Small follow-up.
+- **Cascade router cutover (PR3)** — `LlmDispatchCascadeService` (Rabbit) → `LlmHttpDispatcher` + `LlmOrchestratorCascadeService` mirroring the SLM pattern. Activated by a feature flag.
+- **Real cross-service integration test** — needs a running Anthropic API + an MCP server. Same blocker as the rest of the v2 services; gated on issue #7.
+- **Legacy `gls-llm-orchestration` retirement** — after PR3 + a stabilisation window.
+- **`isReady()` reachability probe** — currently returns `chatModel != null`. A real ping-style probe lives with the broader health follow-up.
+
+**Phase 1.6 status:** two of four plan checkboxes ticked (PR1's contract + PR2's logic move). Cost budget + rate limit remain. PR3 cuts the cascade router over to HTTP.
+
+**Next:** Phase 1.6 PR3 (cascade router cut-over: `LlmHttpDispatcher` + `LlmOrchestratorCascadeService` replacing `LlmDispatchCascadeService`); OR cost budget + rate limit; OR per-category overrides; OR Dockerfile / Compose for `gls-llm-worker`.
