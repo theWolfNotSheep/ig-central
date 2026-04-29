@@ -49,6 +49,7 @@
         <module>gls-classifier-router</module>
         <module>gls-bert-inference</module>
         <module>gls-slm-worker</module>
+        <module>gls-llm-worker</module>
     </modules>
 
     <dependencyManagement>

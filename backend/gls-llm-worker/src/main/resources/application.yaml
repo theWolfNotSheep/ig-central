@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: gls-llm-worker
+
+server:
+  port: 8096
+
+gls:
+  llm:
+    worker:
+      # `none` (default) → NotConfiguredLlmService; every /v1/classify
+      # returns 503 LLM_NOT_CONFIGURED.
+      # `anthropic` (Phase 1.6 PR2) → real Claude backend lifted from
+      # gls-llm-orchestration. Requires ANTHROPIC_API_KEY.
+      backend: ${GLS_LLM_BACKEND:none}
+      jobs:
+        ttl: ${GLS_LLM_JOBS_TTL:PT24H}
+      async:
+        core-size: ${GLS_LLM_ASYNC_CORE:4}
+        max-size: ${GLS_LLM_ASYNC_MAX:8}
+        queue-capacity: ${GLS_LLM_ASYNC_QUEUE:32}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+
+logging:
+  level:
+    co.uk.wolfnotsheep: INFO

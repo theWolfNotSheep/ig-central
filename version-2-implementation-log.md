@@ -2393,3 +2393,48 @@ The previous 364-reactor test suite is unchanged. Router module count: 57 → 68
 - **Real Mongo integration test for the resolver** — gated on issue #7.
 
 **Next:** Phase 1.6 LLM worker rework; OR per-category overrides + cascadeHints handling; OR `costBudget.maxCostUnits` enforcement; OR `.env.example` updates.
+
+## 2026-04-29 — Phase 1.6 PR1 — `gls-llm-worker` module + contract (stub backend)
+
+**Done:** Phase 1.6 starts. New `gls-llm-worker` JVM module mirrors `gls-slm-worker`'s shape — same async surface, same `JobStore` lifecycle, same audit factory. Ships with a stub `NotConfiguredLlmService` returning `LLM_NOT_CONFIGURED` 503. PR2 lifts the existing `gls-llm-orchestration` Anthropic + MCP integration into `LlmService` behind the same selector pattern SLM uses.
+
+**Decisions logged:** None new — implements CSV #1 / #13 / #47 for the LLM tier specifically.
+
+**What's wired:**
+
+- **`contracts/llm-worker/`** (new, v0.1.0) — OpenAPI 3.1.1. Four operations (`classify`, `getJob`, `getCapabilities`, `getHealth`). Drops `/v1/backends` from the SLM template since LLM has only one provider conceptually.
+- **`gls-llm-worker`** module — package `co.uk.wolfnotsheep.llmworker` (distinct from the existing `co.uk.wolfnotsheep.llm` in `gls-llm-orchestration` so the two coexist during the transition). Lifted from `gls-slm-worker` with mechanical `Slm` → `Llm` renames + minor adjustments (no `BackendsController`, no `body.setBackend()` since the LLM contract has only one provider).
+- **`LlmService`** + **`NotConfiguredLlmService`** stub — always throws `LlmNotConfiguredException` → 503 `LLM_NOT_CONFIGURED`.
+- **`LlmBackendId`** enum: `ANTHROPIC`, `OLLAMA`, `NONE` (the v2 LLM worker keeps the same two backends as legacy `gls-llm-orchestration`).
+- **`JobStore` / `JobRecord` / `JobAcquisition` / `JobRepository`** — same shape as SLM and the router. Mongo collection `llm_jobs`.
+- **`ClassifyController` / `JobController` / `MetaController` / `AsyncDispatcher` / `LlmExceptionHandler`** — same lifecycle as SLM.
+- **`LlmEvents`** audit factory: `LLM_COMPLETED` / `LLM_FAILED`. `action="CLASSIFY"` matches the router and SLM so observers can join cascade-internal LLM tier calls into the same trace.
+- **BOM + parent pom** — `gls.llm.worker.version` property + dependency declaration; module registered in `backend/pom.xml`.
+- **`application.yaml`** — `gls.llm.worker.{backend, jobs.ttl, async.*}`. Default `backend=none`.
+
+**Why a new module instead of in-place refactor of `gls-llm-orchestration`:**
+
+The legacy module is Rabbit-driven (consumer + dispatcher) while the new contract is HTTP. An in-place refactor would have to delete the Rabbit consumer wholesale and rewire callers — and the cascade router still uses the Rabbit dispatch path today. By creating a new module, the legacy service stays operational during the transition; PR2 + a follow-up cascade-router PR cut the existing dispatch over to HTTP, then a final PR retires the legacy module. Distinct top-level packages (`co.uk.wolfnotsheep.llm` vs. `co.uk.wolfnotsheep.llmworker`) means classpath coexistence is clean.
+
+**Tests (14 in module; 389 reactor total):**
+
+- `NotConfiguredLlmServiceTest` (2) — `classify` always throws; `activeBackend()=NONE`, `isReady()=false`.
+- `LlmEventsTest` (4) — `LLM_COMPLETED` / `LLM_FAILED` envelope shapes; null-safe metadata; eventId is 26-char ULID-ish.
+- `ClassifyControllerTest` (8) — happy path with mocked `LlmService`; backend failure → markFailed + propagate; in-flight 409; cached idempotency; respond-async 202; running row → 202 without re-dispatch; real-stub round-trip propagates `LlmNotConfiguredException`.
+
+The previous 375-reactor test suite is unchanged. New module: 14 tests, total 389.
+
+**Files changed:** ~17 new source files in `gls-llm-worker` + 3 new test files + `pom.xml` + `application.yaml` + 4 contract files + `backend/pom.xml` + `backend/bom/pom.xml` + plan / log = ~30 files.
+
+**Open issues / deferred:**
+
+- **Real Anthropic backend (PR2)** — lifts the existing `gls-llm-orchestration` `LlmClientFactory` + `LlmProviderConfig` into `LlmService` behind `LlmBackendConfig`. Same `spring-ai-starter-model-anthropic` dep + MCP client integration as SLM PR2/PR5.
+- **Cascade router cut-over (PR3)** — a new `LlmHttpDispatcher` in `gls-classifier-router` replaces the legacy `LlmDispatchCascadeService` (Rabbit) with HTTP calls. Activated by a feature flag.
+- **Cost budget gate + rate-limit semaphore** — Phase 1.6 plan checkboxes; land in PR2.
+- **Legacy `gls-llm-orchestration` retirement** — after PR2 + PR3 + a stabilisation window.
+- **Dockerfile + Compose entry** — deferred (same pattern as BERT/SLM PR1).
+- **JobControllerTest + MetaControllerTest in module** — basic happy paths only in PR1; full coverage matches SLM in PR2.
+
+**Phase 1.6 status:** one of four plan checkboxes ticked (the "conform to new contract" item). PR2/PR3 close the rest.
+
+**Next:** Phase 1.6 PR2 (real Anthropic + MCP, lifted from `gls-llm-orchestration`); OR Phase 1.6 PR3 (router cutover from Rabbit to HTTP); OR per-category overrides; OR Dockerfile / Compose for the v2 services.

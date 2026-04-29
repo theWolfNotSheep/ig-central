@@ -282,8 +282,8 @@ Per CSV #2 (DECIDED hybrid).
 
 ### 1.6 LLM worker rework
 
-- [ ] Move existing `gls-llm-orchestration` logic into the new `gls-llm-worker` shape (sync entry point + async path retained).
-- [ ] Conform to new contract (RFC 7807 errors, idempotency, traceparent).
+- [ ] Move existing `gls-llm-orchestration` logic into the new `gls-llm-worker` shape (sync entry point + async path retained). Phase 1.6 PR1 — module + contract + stub backend (`NotConfiguredLlmService` returning `LLM_NOT_CONFIGURED` 503). PR2 lifts the actual Anthropic + MCP integration from `gls-llm-orchestration` into `LlmService` shape behind the new `LlmBackendConfig` selector.
+- [x] Conform to new contract (RFC 7807 errors, idempotency, traceparent). Phase 1.6 PR1 — `contracts/llm-worker/openapi.yaml` v0.1.0 mirrors `gls-slm-worker`'s shape: `POST /v1/classify` with sync + `Prefer: respond-async`, `GET /v1/jobs/{nodeRunId}`, `GET /v1/capabilities`, `GET /actuator/health`. Same `JobStore` lifecycle as the rest of the v2 services.
 - [ ] Cost budget gate: per-day spending cap, configurable.
 - [ ] Rate-limit semaphore per replica.
 
