@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | In progress (1.1 underway) | 2026-04-29 | — | 1.1 — `gls-extraction-archive` (ZIP/MBOX/PST) + `gls-extraction-ocr` (Tesseract via Tess4J) shipped end-to-end. Audio service upcoming. JWT + integration tests blocked. |
+| 1   | 1.1 substantively complete | 2026-04-29 | — | 1.1 extraction-family triad shipped: `gls-extraction-archive` (ZIP/MBOX/PST), `gls-extraction-ocr` (Tesseract via Tess4J), `gls-extraction-audio` (sync + async, OpenAI Whisper backend per CSV #46/#47). All four services in the family deployable via Compose. JWT and integration tests blocked across the family on JWKS infra + issue #7. Phases 1.2+ are open. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -1731,3 +1731,44 @@ Native-engine tests (`Tess4JOcrExtractionServiceTest`, real-binary health probe)
 - **JWT + integration tests** — blocked on JWKS infra and issue #7 respectively; same pattern as Tika / archive.
 
 **Next:** Audio service end-to-end (Whisper backend, async-capable per CSV #13). Closing the extraction-family triad and ending Phase 1.1 to the extent possible.
+
+## 2026-04-29 — Phase 1.1 — `gls-extraction-audio` end-to-end
+
+**Done:** Closes the Phase 1.1 extraction triad. Contract + module + sync + async paths + pluggable backend (OpenAI Whisper) + idempotency + audit + health + Dockerfile + Compose entry. Audio is the first v2 service to implement the `Prefer: respond-async` pattern from CSV #13.
+
+**Decisions logged:**
+
+- **CSV #46** — Audio backend: pluggable `AudioTranscriptionService` interface with two impls in this repo. `OpenAiWhisperService` calls OpenAI's `/v1/audio/transcriptions` (model `whisper-1`); auth via `OPENAI_API_KEY`. `NotConfiguredAudioTranscriptionService` (default) returns 503 `AUDIO_NOT_CONFIGURED`. Local `whisper.cpp` and Deepgram support deferred behind the same interface — both ship without a contract change. Hybrid choice (vs. forcing one stance) keeps the door open while delivering a working cloud backend; data-residency concerns acknowledged and left to deployment configuration.
+- **CSV #47** — Async semantics: single `POST /v1/extract` endpoint; without `Prefer: respond-async` returns 200 sync, with the header returns 202 + `Location: /v1/jobs/{nodeRunId}`. `GET /v1/jobs/{nodeRunId}` polls. Sync and async share one idempotency row in the `audio_jobs` collection — a `Prefer: respond-async` retry after a successful sync run returns the cached result via the poll URL. Async dispatch via Spring `@Async` to a bounded `audioAsyncExecutor` thread pool; the deployment unit stays one container per service per CSV #38.
+
+**What's wired (under `backend/gls-extraction-audio/`):**
+
+- **`source/`** + **`sink/`** — clones of the Tika source/sink layers; sink writes UTF-8 transcripts on the `gls-audio-text` bucket for the textRef path.
+- **`jobs/`** — `JobRecord` (Mongo `audio_jobs` with TTL), `JobRepository`, `JobStore` (combines idempotency + async-job lifecycle: `tryAcquire` returns ACQUIRED / RUNNING / COMPLETED / FAILED; `markRunning`, `markCompleted`, `markFailed`, `find`).
+- **`parse/`** — `AudioTranscriptionService` interface + `AudioResult` record + `OpenAiWhisperService` (multipart upload to OpenAI's API via Java's built-in `HttpClient`; 4xx → `AudioCorruptException`, 5xx / IO → `UncheckedIOException`) + `NotConfiguredAudioTranscriptionService` fallback + `AudioBackendConfig` (selects the impl from `gls.extraction.audio.provider`; falls back to not-configured when the API key is blank rather than failing startup). `AudioCorruptException` → 422; `AudioNotConfiguredException` → 503.
+- **`audit/AudioEvents`** — Tier 2 `EXTRACTION_*` events; metadata adds `provider`, `language`, `durationSeconds`.
+- **`health/`** — `MinioHealthIndicator` + `AudioBackendHealthIndicator` (UP when backend is ready, OUT_OF_SERVICE when `provider=none` or the API key is missing — `MetaController` mirrors this on the public `/actuator/health` response with a 503 status).
+- **`web/`** — `ExtractController` (handles sync, async, idempotency-cached, idempotency-running collisions in one method via the `JobAcquisition` switch); `JobController` (poll endpoint); `AudioExceptionHandler`; `MetaController`; `ExtractMetrics` with `gls_audio_*` series; `AsyncDispatcher` (the `@Async` proxy boundary lives in a separate bean from the controller because Spring AOP doesn't advise self-invocations); `AsyncConfig` (bounded `audioAsyncExecutor` thread pool). DEDUCTION mixin for the `oneOf` text payload.
+- **`application.yaml`** on port 8092. Defaults: `provider=none`; `inline-byte-ceiling=256KB`; `max-source-bytes=500MB`; `async.max-size=8`; `jobs.ttl=PT24H`. OpenAI endpoint + model + timeout overridable via env.
+- **`Dockerfile`** — multi-stage; same repo-root build pattern as Tika / archive / OCR. Healthcheck on `/actuator/health` over port 8092.
+- **`docker-compose.yml`** — new active block; passes `OPENAI_API_KEY` + `GLS_AUDIO_PROVIDER` from the host env.
+
+**Tests (27 in module; 234 reactor total):**
+
+- `AudioEventsTest` (4) — envelope shape; null-field omission; eventId pattern.
+- `NotConfiguredAudioTranscriptionServiceTest` (3) — provider id, ready flag, throws `AudioNotConfiguredException`.
+- `MetaControllerTest` (4) — capabilities; UP when backend ready; 503 OUT_OF_SERVICE when not; generated API contract.
+- `ExtractControllerTest` (11) — sync happy; async returns 202 + Location + `JobAccepted` body + dispatches to AsyncDispatcher; not-found + FAILED audit; backend-not-configured propagates; corrupt audio; source-too-large; in-flight collision sync (409) vs async (202); cached idempotency sync (returns cached) vs async (returns 202 with poll URL); generated API contract.
+- `JobControllerTest` (5) — 404 when missing; PENDING / COMPLETED / FAILED status shapes; generated API contract.
+
+Real-backend integration tests (Whisper round-trip with an `OPENAI_API_KEY`) are integration-test territory — blocked on issue #7. The unit suite covers everything that doesn't need a network round-trip.
+
+**Files changed:** 4 contract files + 1 Dockerfile + 1 README + 1 pom + 1 application.yaml + 25 source files + 5 test files + 4 reactor / BOM / compose / plan / log / CSV updates = ~42 files changed.
+
+**Open issues:**
+
+- **Local Whisper + Deepgram** — both deferred behind the `AudioTranscriptionService` interface; ship without contract change.
+- **Real-backend integration tests** — gated on issue #7 + an `OPENAI_API_KEY` for the test runner.
+- **JWT** — blocked on JWKS infra; family-wide.
+
+**Next:** Phase 1.1 substantively complete. Phases 1.2+ (classifier-router, BERT, SLM/LLM rework, hub wiring, …) are open. The handoff's substrate follow-ups (audit-relay live smoke, Rabbit circuit-breaker, load driver, Python audit module sketch) remain valid out-of-band tasks.
