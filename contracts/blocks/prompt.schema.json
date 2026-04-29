@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gls.local/contracts/blocks/prompt.schema.json",
+  "title": "PROMPT block content",
+  "description": "Carries the system prompt + user-prompt template + optional model config that the SLM / LLM workers execute. The `kind` discriminator groups prompts by purpose so the engine and admin UI can pick the right block at the right pipeline stage. Per architecture §3 — block library is the source of truth.",
+  "type": "object",
+  "additionalProperties": false,
+  "anyOf": [
+    { "required": ["systemPrompt"] },
+    { "required": ["userPromptTemplate"] }
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["CLASSIFICATION", "SCAN", "METADATA_EXTRACTION", "GENERAL"],
+      "default": "GENERAL",
+      "description": "What stage of the pipeline this prompt drives. CLASSIFICATION runs at the cascade tier; SCAN runs at stage ④ (PII / PHI / PCI / CUSTOM) keyed by `scanType`; METADATA_EXTRACTION runs after scans, keyed by `metadataSchemaId`; GENERAL is operator-defined ad-hoc usage."
+    },
+    "systemPrompt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "description": "System message sent verbatim to the model. At least one of `systemPrompt` / `userPromptTemplate` must be present."
+    },
+    "userPromptTemplate": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "description": "Mustache-style template for the user message. Supported placeholders include `{{documentText}}`, `{{categoryId}}`, `{{categoryName}}`, `{{sensitivity}}` — workers substitute before dispatch. At least one of `systemPrompt` / `userPromptTemplate` must be present."
+    },
+    "scanType": {
+      "type": "string",
+      "enum": ["PII", "PHI", "PCI", "CUSTOM"],
+      "description": "Required when `kind == SCAN`. Selects the scan family. PII / PHI / PCI gate downstream redaction policies; CUSTOM is operator-defined."
+    },
+    "metadataSchemaId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Required when `kind == METADATA_EXTRACTION`. References a `MetadataSchema` document; the prompt extracts that schema's fields from the document text."
+    },
+    "applicableCategoryIds": {
+      "type": "array",
+      "default": [],
+      "maxItems": 256,
+      "description": "Categories this prompt applies to. Empty = global (matches all categories). Non-empty = scoped to those category ids — same convention as the hub-component entities (CSV #31–34).",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional per-prompt model override. When absent, the worker uses its configured tier default (Anthropic Haiku for SLM, Anthropic Sonnet for LLM, the configured Ollama model for self-hosted).",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["ANTHROPIC", "OLLAMA"],
+          "description": "Backend that should run this prompt. Workers reject mismatched providers — an SLM worker won't run a prompt with `provider: OLLAMA` if the worker isn't configured for Ollama."
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Provider-specific model identifier (e.g. `claude-haiku-4-5`, `claude-sonnet-4-5`, `llama3.1:8b-instruct-q4_K_M`)."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature. 0 = deterministic; classification / scan prompts usually want low values."
+        },
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32768,
+          "description": "Hard cap on output tokens. Workers may reduce further to satisfy the per-replica budget."
+        }
+      }
+    },
+    "outputFormat": {
+      "type": "string",
+      "enum": ["JSON", "TEXT"],
+      "default": "JSON",
+      "description": "Expected response shape. JSON is the default for CLASSIFICATION / SCAN / METADATA_EXTRACTION — the worker enforces JSON-mode output where the provider supports it. TEXT is plain-text passthrough for GENERAL prompts."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "SCAN" } }, "required": ["kind"] },
+      "then": { "required": ["scanType"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "METADATA_EXTRACTION" } }, "required": ["kind"] },
+      "then": { "required": ["metadataSchemaId"] }
+    }
+  ]
+}

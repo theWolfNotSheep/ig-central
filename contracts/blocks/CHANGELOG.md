@@ -6,6 +6,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 (Block content schemas land alongside the phases that introduce each block type.)
 
+## [0.5.0] — 2026-04-29
+
+### Added
+
+- `prompt.schema.json` — PROMPT block content. Carries `systemPrompt` + `userPromptTemplate` (at least one required), an optional `kind` discriminator (`CLASSIFICATION` / `SCAN` / `METADATA_EXTRACTION` / `GENERAL`), `scanType` (required when `kind == SCAN`), `metadataSchemaId` (required when `kind == METADATA_EXTRACTION`), `applicableCategoryIds[]` (CSV #31–34 scope convention), optional `model` config (`provider`, `modelId`, `temperature`, `maxTokens`), and `outputFormat` (`JSON` default / `TEXT`). Phase 1.9 PR1 — schema lands now; the seeder for default scan PROMPT blocks per `PiiTypeDefinition` lands in this same PR; the engine consumes them at stage ④ in PR2.
+
+### Note
+
+- The PROMPT schema formalises a shape the SLM / LLM workers have been reading in practice (`systemPrompt`, `userPromptTemplate`). Existing blocks remain valid because both fields are optional individually (the `anyOf` requires at least one), and the new fields (`kind`, `scanType`, `metadataSchemaId`, `applicableCategoryIds`, `model`, `outputFormat`) all default to permissive values.
+
 ## [0.4.0] — 2026-04-29
 
 ### Added

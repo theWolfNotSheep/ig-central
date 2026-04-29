@@ -159,6 +159,19 @@ public class PackImportService {
             results.add(policySeedResult);
         }
 
+        // Phase 1.9 PR1 — seed a SCAN-kind PROMPT block per
+        // PiiTypeDefinition the operator has installed. The seed gives
+        // POLICY-block authors a real PROMPT block id to drop into
+        // requiredScans[].ref; the cascade router executes the prompt
+        // at stage ④ (PR2). Idempotent: the seed only creates blocks
+        // for PII types that don't yet have a corresponding scan
+        // PROMPT block.
+        ComponentResult scanPromptSeedResult = seedScanPromptBlocksForPiiTypes(ctx);
+        if (scanPromptSeedResult.created() > 0 || scanPromptSeedResult.updated() > 0
+                || scanPromptSeedResult.skipped() > 0) {
+            results.add(scanPromptSeedResult);
+        }
+
         int totalCreated = results.stream().mapToInt(ComponentResult::created).sum();
         int totalUpdated = results.stream().mapToInt(ComponentResult::updated).sum();
         int totalSkipped = results.stream().mapToInt(ComponentResult::skipped).sum();
@@ -793,6 +806,116 @@ public class PackImportService {
         }
         return new ComponentResult("POLICY_BLOCKS_SEED", "auto-seed",
                 created, 0, skipped, 0, details);
+    }
+
+    // ── Scan PROMPT block seeding ────────────────────
+
+    /**
+     * Phase 1.9 PR1. After all components are imported, seed a
+     * {@code SCAN}-kind PROMPT block per {@link PiiTypeDefinition}
+     * that doesn't already have one. POLICY-block authors reference
+     * the seeded block id from {@code requiredScans[].ref}; the
+     * cascade router executes the prompt at stage ④ (PR2).
+     *
+     * <p>Block name convention: {@code scan-pii-${key}} where
+     * {@code key} is the lowercased {@code PiiTypeDefinition.key}.
+     * The seed inherits {@code applicableCategoryIds} from the PII
+     * type (CSV #31 scope), so a category-scoped PII type produces
+     * a category-scoped scan PROMPT block.
+     *
+     * <p>Iterates {@code piiTypeRepo.findAll()} (not just imported
+     * keys), so operators upgrading from a Phase 1.7 install pick up
+     * scan blocks for pre-existing PII types on the next pack
+     * install. Idempotent: blocks with the deterministic name are
+     * left alone on re-runs.
+     */
+    private ComponentResult seedScanPromptBlocksForPiiTypes(ImportContext ctx) {
+        if (ctx.mode == ImportMode.PREVIEW) {
+            return new ComponentResult("SCAN_PROMPT_BLOCKS_SEED", "auto-seed",
+                    0, 0, 0, 0,
+                    List.of("Preview mode — scan PROMPT block seeding skipped"));
+        }
+        int created = 0, skipped = 0;
+        List<String> details = new ArrayList<>();
+        List<PiiTypeDefinition> piiTypes;
+        try {
+            piiTypes = piiTypeRepo.findAll();
+        } catch (Exception e) {
+            log.warn("Could not list PII types for scan PROMPT seeding (non-fatal): {}", e.getMessage());
+            return new ComponentResult("SCAN_PROMPT_BLOCKS_SEED", "auto-seed",
+                    0, 0, 0, 0, List.of("PII type listing failed: " + e.getMessage()));
+        }
+
+        for (PiiTypeDefinition pii : piiTypes) {
+            if (pii.getKey() == null || pii.getKey().isBlank()) continue;
+            String blockName = "scan-pii-" + pii.getKey().toLowerCase(Locale.ROOT);
+            if (pipelineBlockRepo.findByName(blockName).isPresent()) {
+                skipped++;
+                continue;
+            }
+
+            PipelineBlock block = new PipelineBlock();
+            block.setName(blockName);
+            block.setDescription("SCAN PROMPT auto-seeded for PII type " + pii.getKey()
+                    + " (" + pii.getDisplayName() + "). Phase 1.9 / CSV #36. "
+                    + "POLICY blocks reference this id from requiredScans[].ref.");
+            block.setType(PipelineBlock.BlockType.PROMPT);
+            block.setActive(true);
+            block.setActiveVersion(1);
+
+            Map<String, Object> content = new LinkedHashMap<>();
+            content.put("kind", "SCAN");
+            content.put("scanType", "PII");
+            content.put("systemPrompt", buildScanSystemPrompt(pii));
+            content.put("userPromptTemplate", "{{documentText}}");
+            content.put("outputFormat", "JSON");
+            content.put("applicableCategoryIds",
+                    pii.getApplicableCategoryIds() == null
+                            ? List.of()
+                            : new ArrayList<>(pii.getApplicableCategoryIds()));
+
+            PipelineBlock.BlockVersion v1 = new PipelineBlock.BlockVersion(
+                    1, content,
+                    "Auto-seeded by PackImportService (pack=" + ctx.packSlug + ", piiType=" + pii.getKey() + ").",
+                    "pack-import:" + ctx.packSlug,
+                    ctx.importedAt);
+            block.setVersions(new ArrayList<>(List.of(v1)));
+            block.setCreatedAt(ctx.importedAt);
+            block.setCreatedBy("pack-import:" + ctx.packSlug);
+            block.setUpdatedAt(ctx.importedAt);
+            block.setSourcePackSlug(ctx.packSlug);
+            block.setSourcePackVersion(ctx.packVersion);
+            block.setImportedAt(ctx.importedAt);
+
+            pipelineBlockRepo.save(block);
+            created++;
+            details.add("Seeded SCAN PROMPT block: " + blockName);
+        }
+
+        if (created > 0) {
+            log.info("Seeded {} SCAN PROMPT block(s) for PII types ({} pre-existing skipped)",
+                    created, skipped);
+        }
+        return new ComponentResult("SCAN_PROMPT_BLOCKS_SEED", "auto-seed",
+                created, 0, skipped, 0, details);
+    }
+
+    static String buildScanSystemPrompt(PiiTypeDefinition pii) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are a PII detection assistant. Examine the supplied document ");
+        sb.append("text and determine whether it contains ");
+        sb.append(pii.getDisplayName() == null ? pii.getKey() : pii.getDisplayName());
+        sb.append(".\n\n");
+        if (pii.getDescription() != null && !pii.getDescription().isBlank()) {
+            sb.append("Definition: ").append(pii.getDescription()).append('\n');
+        }
+        if (pii.getExamples() != null && !pii.getExamples().isEmpty()) {
+            sb.append("Examples: ").append(String.join(", ", pii.getExamples())).append('\n');
+        }
+        sb.append("\nRespond with strict JSON of the form:\n");
+        sb.append("{\"found\": <true|false>, \"instances\": [{\"value\": \"...\", \"context\": \"...\"}], \"confidence\": <0.0..1.0>}\n");
+        sb.append("If no instances are present, return found=false and an empty instances array.");
+        return sb.toString();
     }
 
     // ── Taxonomy Categories ──────────────────────────

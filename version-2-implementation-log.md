@@ -2817,3 +2817,61 @@ Existing `PackImportServiceTest` (PR2 of Phase 1.7) still passes — the constru
 **Phase 1.8 status:** **all four plan checkboxes ticked.** PR1 (enum + schema), PR2 (resolver + typed view), PR3 (engine wire-in), PR4 (pack seeding). Phase 1.8 complete.
 
 **Next:** Phase 1.9 Stage ④ scan dispatch (consumes the policy fields the engine stashes in shared context); OR `.env.example` updates; OR legacy `gls-llm-orchestration` retirement; OR Phase 1.10+.
+
+## 2026-04-29 — Phase 1.9 PR1 — PROMPT block schema + scan PROMPT seeder
+
+**Done:** First PR of Phase 1.9. Two pieces, contract-first.
+
+1. `contracts/blocks/prompt.schema.json` — formal JSON Schema 2020-12 for the PROMPT block content. The SLM and LLM workers have been reading `systemPrompt` + `userPromptTemplate` in practice since Phase 1.5; the schema captures that minimum, plus the new fields stage ④ needs:
+   - `kind` discriminator: `CLASSIFICATION` / `SCAN` / `METADATA_EXTRACTION` / `GENERAL` (default).
+   - `scanType` (`PII` / `PHI` / `PCI` / `CUSTOM`) — required when `kind == SCAN`, enforced via `allOf` + `if/then`.
+   - `metadataSchemaId` — required when `kind == METADATA_EXTRACTION`, same pattern.
+   - `applicableCategoryIds[]` — same scope convention as the hub-component entities (CSV #31–34). Empty = global.
+   - Optional `model` config: `provider` (`ANTHROPIC` / `OLLAMA`), `modelId`, `temperature`, `maxTokens`. Workers reject mismatched providers.
+   - `outputFormat`: `JSON` (default) / `TEXT`. Stage ④ scans + classification want JSON-mode output.
+   - Existing PROMPT blocks remain valid: both `systemPrompt` and `userPromptTemplate` are individually optional (an `anyOf` requires at least one), and all new fields default to permissive values.
+   - `contracts/blocks/VERSION` → 0.5.0; CHANGELOG + README updated.
+
+2. `PackImportService.seedScanPromptBlocksForPiiTypes(ctx)` — new helper, runs after `seedPolicyBlocksForCategories` in `importPack`. For every `PiiTypeDefinition` in the local DB, creates a `kind=SCAN` PROMPT block named `scan-pii-${piiTypeKey.toLowerCase()}` if one doesn't already exist. Inherits `applicableCategoryIds` from the PII type (CSV #31 scope), so a category-scoped PII type produces a category-scoped scan PROMPT block. The seeded `systemPrompt` is built from the PII type's `displayName` / `description` / `examples` and instructs the model to return strict JSON `{found, instances[], confidence}` — the shape the cascade router will parse at PR2 dispatch time.
+
+**Decisions logged:** None new (all behaviour aligns with existing CSV #36 — Stage ④ scan dispatch via PROMPT blocks).
+
+**Why iterate `piiTypeRepo.findAll()` instead of `ctx.imported`:**
+
+Operators upgrading from a Phase 1.7 install pick up scan blocks for pre-existing PII types on the next pack install. The seed is idempotent (skips when the deterministic block name already exists), so this is safe to run on every pack install.
+
+**Why a deterministic block name (`scan-pii-${key}`):**
+
+Same pattern as `policy-${categoryId}` (Phase 1.8 PR4) and `default-router`. POLICY-block authors get a single stable id to reference from `requiredScans[].ref`; admin tooling looks up by name; re-imports don't drift.
+
+**What this leaves for PR2 (engine dispatch):**
+
+- `PolicyBlockResolver` already returns the `requiredScans[]` from the typed `PolicyBlock`; the engine has the count stashed in `policyRequiredScanCount` but not the refs themselves. PR2 will plumb the actual `requiredScans` list (or scan refs) through the shared context.
+- A new dispatcher (probably in `gls-app-assembly` or a shared engine module) iterates the resolved scan refs, resolves each as a PROMPT block id, and calls the cascade router. Aggregates results.
+- Block `ref` resolution: try as PROMPT block id first; fall back to PiiTypeDefinition.key only if the block doesn't exist. The seed makes the first path always succeed in practice.
+
+**Tests:**
+
+`PackImportServiceTest` gains 5 focused tests covering the static `buildScanSystemPrompt(PiiTypeDefinition)` helper:
+
+- includes displayName when present
+- falls back to key when displayName is null
+- omits "Definition:" line when description is blank
+- omits "Examples:" line when examples is empty or null
+- emits the strict JSON response contract (`found`, `instances`, `confidence`, `found=false`)
+
+Plus offline JSON Schema 2020-12 meta-validation of `prompt.schema.json` (run via `jsonschema` Python lib): schema is meta-valid; positive samples (minimal `systemPrompt` only, scan, metadata-extraction, classification with model + applicableCategoryIds) all validate; negative samples (missing `scanType` for SCAN, missing `metadataSchemaId` for METADATA_EXTRACTION, empty body, unknown property) all fail with the expected reason.
+
+Reactor: 450 → 455 Java tests in `gls-app-assembly`. Full backend reactor green.
+
+**Contracts touched:** `contracts/blocks/prompt.schema.json` (new), `contracts/blocks/VERSION` (0.4.0 → 0.5.0), `contracts/blocks/CHANGELOG.md`, `contracts/blocks/README.md`.
+
+**Files changed:** 4 contract files + `PackImportService.java` + `PackImportServiceTest.java` + plan / log = 8 files.
+
+**Open issues / deferred:**
+
+- **PHI / PCI scan PROMPT blocks** — only PII types are seeded today. PHI / PCI types live in the same `pii_type_definitions` collection (different `category` field), or in a sibling collection — needs review with the hub schema before PR2 / PR3 broaden the seeder.
+- **Operator overrides** — operators editing the seeded `systemPrompt` from the admin UI must publish a new version, not edit the v1 in place. The PROMPT block versioning (CSV #41 / Phase 0.10 Mongock) handles this when the admin UI's block editor lands.
+- **Schema coverage in CI** — Spectral lints `contracts/**/*.yaml` (OpenAPI), but JSON Schema files under `contracts/blocks/` aren't validated against their meta-schema in CI. The local Python check in this PR proves the schema is meta-valid; promoting that to a CI step is a small follow-up.
+
+**Next:** Phase 1.9 PR2 — engine Stage ④ dispatch. Plumb the resolved `requiredScans[]` through the engine's shared context; add a dispatcher that iterates each scan, resolves its `ref` as a PROMPT block id, and calls `gls-classifier-router` for execution. Aggregate results into a new context key for PR3 (metadata extraction) and PR4 (enforcement handoff).

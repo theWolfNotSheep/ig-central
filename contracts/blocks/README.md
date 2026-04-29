@@ -17,7 +17,7 @@ Block content is dynamic — different block types have different schemas. Stori
 
 ## Content (target — populated alongside the block types that need them)
 
-- `prompt.schema.json` — PROMPT block (system prompt + user template + model config).
+- `prompt.schema.json` — PROMPT block (system prompt + user template + optional model config + `kind` discriminator that groups prompts by purpose: CLASSIFICATION / SCAN / METADATA_EXTRACTION / GENERAL). Phase 1.9 PR1 ✓ (v0.5.0).
 - `regex-set.schema.json` — REGEX_SET block (patterns + types + confidence).
 - `extractor.schema.json` — EXTRACTOR block (text extraction config).
 - `router.schema.json` — ROUTER block (cascade thresholds, fallback policy). Phase 1.2 ✓ (v0.2.0).
