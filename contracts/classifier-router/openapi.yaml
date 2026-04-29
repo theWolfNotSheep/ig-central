@@ -1,7 +1,7 @@
 openapi: 3.1.1
 info:
   title: ig-central — Classifier Router
-  version: 0.1.0
+  version: 0.2.0
   contact:
     name: ig-central engineering
     url: https://github.com/theWolfNotSheep/ig-central
@@ -38,6 +38,9 @@ servers:
 tags:
   - name: classify
     description: Cascade dispatch (classification + scans + metadata).
+  - name: jobs
+    description: |
+      Async cascade — `Prefer: respond-async` poll surface.
   - name: meta
     description: Capabilities + health.
 
@@ -51,29 +54,40 @@ paths:
       tags: [classify]
       summary: Run a PROMPT / BERT_CLASSIFIER block against extracted text.
       description: |
-        Synchronous endpoint per CSV #13 default. Caller supplies the
-        extracted text payload (inline or by reference per CSV #19),
-        the `nodeRunId` the result is keyed on, and the `block`
-        coordinate (id + optional version per CSV #14 — version absent
-        means use the active version).
+        Caller supplies the extracted text payload (inline or by
+        reference per CSV #19), the `nodeRunId` the result is keyed on,
+        and the `block` coordinate (id + optional version per CSV #14 —
+        version absent means use the active version).
 
         The router runs the cascade defined by the ROUTER block
         referenced on the PROMPT block, returning the first tier whose
         confidence clears its threshold. Tier-of-decision is reported
         on the response so observers can see the cascade's behaviour.
 
-        **Phase 1.2 first cut.** This version returns a deterministic
-        mock — `tierOfDecision=LLM`, a fixed result body shaped by the
-        block's expected output type, and `confidence=0.5`. Wired
-        cascade lands as Phases 1.4 (BERT) / 1.5 (SLM) / 1.6 (LLM)
-        complete.
+        **Sync vs async (CSV #13 / #47).** Without
+        `Prefer: respond-async`, the call blocks until the cascade
+        completes and returns 200 with the result. With
+        `Prefer: respond-async`, the call returns 202 immediately with
+        `Location: /v1/jobs/{nodeRunId}` and a `JobAccepted` body; the
+        cascade proceeds in the background. Poll the job URL for
+        status + result.
 
-        **Idempotency:** repeated requests with the same `nodeRunId`
+        **Idempotency.** Repeated requests with the same `nodeRunId`
         within the 24h TTL window return the same result without
-        re-running the cascade (CSV #16).
+        re-running the cascade (CSV #16). Sync and async share the
+        same job row, so a `Prefer: respond-async` retry after a
+        completed sync run returns the cached result via the poll URL.
       parameters:
         - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
         - $ref: '../_shared/common-headers.yaml#/components/parameters/IdempotencyKey'
+        - name: Prefer
+          in: header
+          schema:
+            type: string
+            enum: ["respond-async"]
+          description: |
+            Set to `respond-async` to dispatch the cascade
+            asynchronously and return 202. Absent or empty → sync.
       requestBody:
         required: true
         content:
@@ -82,11 +96,26 @@ paths:
               $ref: '#/components/schemas/ClassifyRequest'
       responses:
         '200':
-          description: Cascade succeeded.
+          description: Cascade succeeded (sync path).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ClassifyResponse'
+        '202':
+          description: |
+            Cascade accepted; job dispatched. Poll
+            `Location` for status + result.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri
+              description: Job poll URL — `/v1/jobs/{nodeRunId}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAccepted'
         '409':
           $ref: '../_shared/idempotency.yaml#/components/responses/InFlight'
         '422':
@@ -104,6 +133,39 @@ paths:
           $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
         '5XX':
           $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/jobs/{nodeRunId}:
+    get:
+      operationId: getJob
+      tags: [jobs]
+      summary: Poll an async cascade job.
+      description: |
+        Returns the current state of an async cascade dispatched via
+        `POST /v1/classify` with `Prefer: respond-async`. Status is one
+        of `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`. When
+        `COMPLETED`, the same response shape as the sync 200 is
+        included on the `result` field.
+      parameters:
+        - name: nodeRunId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: Job state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+        '404':
+          description: No job exists for this nodeRunId.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
 
   /v1/capabilities:
     get:
@@ -309,6 +371,49 @@ components:
             Set when the tier failed and the cascade fell through to
             the next; the router doesn't surface the failure as a
             request-level error unless every tier fails.
+
+    JobAccepted:
+      type: object
+      required: [nodeRunId, status, pollUrl]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING]
+        pollUrl:
+          type: string
+          format: uri
+          description: |
+            Echoes the `Location` header — relative URL clients can
+            resolve against the service base.
+
+    JobStatus:
+      type: object
+      required: [nodeRunId, status]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        result:
+          description: Present when `status=COMPLETED`. Same shape as the sync 200.
+          $ref: '#/components/schemas/ClassifyResponse'
+        errorCode:
+          type: string
+          description: |
+            Present when `status=FAILED`. Same taxonomy as the sync
+            error path's `code` extension (e.g. `ROUTER_BLOCK_NOT_FOUND`,
+            `ROUTER_LLM_TIMEOUT`, `ROUTER_LLM_FAILED`).
+        errorMessage:
+          type: string
 
     HealthResponse:
       type: object

@@ -1,6 +1,5 @@
 package co.uk.wolfnotsheep.router.web;
 
-import co.uk.wolfnotsheep.router.idempotency.IdempotencyInFlightException;
 import co.uk.wolfnotsheep.router.parse.BertBlockUnknownException;
 import co.uk.wolfnotsheep.router.parse.LlmJobFailedException;
 import co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException;
@@ -29,10 +28,16 @@ public class RouterExceptionHandler {
                 "Block id / version did not resolve", e.getMessage());
     }
 
-    @ExceptionHandler(IdempotencyInFlightException.class)
-    public ResponseEntity<ProblemDetail> handleInFlight(IdempotencyInFlightException e) {
+    @ExceptionHandler(JobInFlightException.class)
+    public ResponseEntity<ProblemDetail> handleInFlight(JobInFlightException e) {
         return problem(HttpStatus.CONFLICT, "IDEMPOTENCY_IN_FLIGHT",
                 "A classify call with this nodeRunId is still in flight", e.getMessage());
+    }
+
+    @ExceptionHandler(JobNotFoundException.class)
+    public ResponseEntity<ProblemDetail> handleJobNotFound(JobNotFoundException e) {
+        return problem(HttpStatus.NOT_FOUND, "ROUTER_JOB_NOT_FOUND",
+                "No router job exists for this nodeRunId", e.getMessage());
     }
 
     @ExceptionHandler(LlmJobTimeoutException.class)

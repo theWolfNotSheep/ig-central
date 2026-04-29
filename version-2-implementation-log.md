@@ -2003,3 +2003,49 @@ Existing tests unchanged; the `CascadeBackendConfig` refactor doesn't affect exi
 **Phase 1.4 status:** two of five plan checkboxes ticked. `gls-bert-inference` (PR1), `BERT_CLASSIFIER` block schema (PR1), and cascade wire-in (PR2) are now green. Trainer + per-category enable remain.
 
 **Next:** `gls-bert-trainer` Python sketch (closes the trainer checkbox); OR async surface for the router (`Prefer: respond-async` mirroring the audio service); OR Phase 1.5 SLM worker; OR ROUTER block threshold reading + the BERT_CLASSIFIER block resolution path so PROMPT blocks can also exercise BERT.
+
+## 2026-04-29 — Phase 1.4 PR3 — router async surface (`Prefer: respond-async`)
+
+**Done:** Closes the "async surface for the router" open issue carried in the Phase 1.2 PR1 / PR2 / 1.3 / 1.4 PR2 entries. The cascade router now supports `Prefer: respond-async` on `POST /v1/classify` (CSV #13 / #47). Without the header the call blocks and returns 200; with the header the call returns 202 with `Location: /v1/jobs/{nodeRunId}` and the cascade runs on a bounded `routerAsyncExecutor` thread pool. Sync and async share the same `router_jobs` row, so a `Prefer: respond-async` retry after a completed sync run returns the cached result via the poll URL — same idempotency semantics as `gls-extraction-audio`.
+
+**Decisions logged:** None new — implements CSV #13 (sync/async response model, DECIDED) and CSV #47 (Whisper-style async, DECIDED) for the router service.
+
+**Contracts touched:**
+
+- **`contracts/classifier-router/`** — bumped to v0.2.0. Added `Prefer` header parameter on `POST /v1/classify`; new 202 response with `Location` + `JobAccepted` body; new `GET /v1/jobs/{nodeRunId}` operation returning `JobStatus` (`PENDING` / `RUNNING` / `COMPLETED` / `FAILED`; `COMPLETED` carries the same `ClassifyResponse` shape as the sync 200). New `JobAccepted` and `JobStatus` schemas. Backwards compatible — sync clients that don't send `Prefer` see no behaviour change.
+
+**What's wired:**
+
+- **`co.uk.wolfnotsheep.router.jobs`** (new package) — `JobState` (PENDING / RUNNING / COMPLETED / FAILED), `JobRecord` (Mongo-mapped, `@Document(collection = "router_jobs")`, TTL-indexed `expiresAt`), `JobAcquisition` (ACQUIRED / RUNNING / COMPLETED / FAILED variants carrying the existing row when present), `JobRepository` (Spring Data Mongo), `JobStore` (single-writer state machine with `tryAcquire` / `markRunning` / `markCompleted` / `markFailed` / `find`). The shape mirrors `gls-extraction-audio`'s `JobStore` deliberately — observers and operational tooling treat the two services identically.
+- **Old `co.uk.wolfnotsheep.router.idempotency` package removed.** `IdempotencyStore`, `IdempotencyRecord`, `IdempotencyOutcome`, `IdempotencyRepository`, `IdempotencyInFlightException` all superseded by the new `jobs` package. The old `router_idempotency` Mongo collection is replaced by `router_jobs`; no migration story is required for dev data, but the property name changed (`gls.router.idempotency.ttl` → `gls.router.jobs.ttl`).
+- **`AsyncConfig`** (new) — `routerAsyncExecutor` `@Bean`, `ThreadPoolTaskExecutor` (core 4, max 8, queue 32 by default; tunable via `gls.router.async.*`). Bounded to keep a misbehaving cascade from saturating the replica.
+- **`AsyncDispatcher`** (new) — `@Component` with a single `@Async("routerAsyncExecutor")` method that re-enters the controller via `ObjectProvider<ClassifyController>`. The proxy boundary lives in a separate bean from the controller because Spring's AOP doesn't advise self-invocations; same pattern as `gls-extraction-audio`.
+- **`JobController`** (new) — `@RestController implements JobsApi`. `GET /v1/jobs/{nodeRunId}` reads the `JobStore`, maps the row to a `JobStatus` body, deserialises the cached `resultJson` into a `ClassifyResponse` for COMPLETED rows, surfaces `errorCode` / `errorMessage` for FAILED rows. Throws `JobNotFoundException` for unknown ids.
+- **`JobInFlightException`** (new) — replaces `IdempotencyInFlightException`; same 409 mapping but lives in `web/` next to the other web exceptions for consistency.
+- **`JobNotFoundException`** (new) — 404 `ROUTER_JOB_NOT_FOUND`.
+- **`ClassifyController`** (refactored) — gains the `Prefer` header parameter and a new `runAsync` package-private method; switches sync/async based on `prefer`. `tryAcquire` outcomes are now ACQUIRED / RUNNING / COMPLETED / FAILED (not just CACHED / IN_FLIGHT / ACQUIRED): RUNNING + sync raises 409, RUNNING + async returns 202 pointing at the existing row; COMPLETED + sync returns the cached body, COMPLETED + async returns 202; FAILED behaves like RUNNING for sync (re-raise), like ACQUIRED-equivalent for async (return 202 so the poller sees the failure shape via the job surface). The error-mapping table shifts: `IdempotencyInFlightException` → `JobInFlightException`.
+- **`RouterExceptionHandler`** — drops the old idempotency handler, adds `JobInFlightException` (409 `IDEMPOTENCY_IN_FLIGHT`) and `JobNotFoundException` (404 `ROUTER_JOB_NOT_FOUND`).
+- **`GlsClassifierRouterApplication`** — `@EnableAsync` so `@Async` annotations actually advise.
+- **`application.yaml`** — `gls.router.jobs.ttl` (default `PT24H`) replaces `gls.router.idempotency.ttl`. New `gls.router.async.{core-size, max-size, queue-capacity}` for the executor.
+
+**Why a refactor instead of a parallel surface:**
+
+The audio service explicitly pairs sync idempotency with async-job state in the same row (CSV #47). Trying to keep two parallel stores in the router (the existing `router_idempotency` for sync + a new `router_jobs` for async) would have meant the cached response on a sync run wouldn't satisfy a later `Prefer: respond-async` retry — the contract would diverge from audio for no reason. Lifting audio's `JobStore` shape verbatim keeps the two services symmetric: same Mongo TTL strategy, same lifecycle transitions, same poll surface.
+
+**Tests (8 new in module; 301 reactor total):**
+
+- `ClassifyControllerTest` (9, was 6) — added: `respond_async_returns_202_with_Location_and_dispatches_in_background` (sync side-effects don't fire on the dispatch thread); `respond_async_after_completed_run_returns_202_pointing_at_existing_row` (no re-dispatch when the row is COMPLETED); `respond_async_with_running_row_returns_202_without_redispatch`. Existing tests adjusted to the new `JobStore` API (`JobAcquisition` instead of `IdempotencyOutcome`, `markCompleted` instead of `cacheResult`, the new constructor signature).
+- `JobControllerTest` (5, new) — unknown nodeRunId → `JobNotFoundException`; PENDING row (no result, no errors); RUNNING row (`startedAt` populated, no `completedAt`); COMPLETED row (deserialised `ClassifyResponse` on the body); FAILED row (`errorCode` + `errorMessage` populated, no result).
+
+Existing tests in the audio / orchestrator modules are unchanged because the contract bump is additive — `Prefer` is optional, so existing sync clients (including `ClassifierRouterClient` in `gls-app-assembly`) keep working without modification.
+
+**Files changed:** 9 new source files (`jobs/JobState`, `jobs/JobRecord`, `jobs/JobAcquisition`, `jobs/JobRepository`, `jobs/JobStore`, `web/AsyncConfig`, `web/AsyncDispatcher`, `web/JobController`, `web/JobInFlightException`, `web/JobNotFoundException`) + 5 deleted (`idempotency/*`) + 4 modified (`web/ClassifyController`, `web/RouterExceptionHandler`, `GlsClassifierRouterApplication`, `application.yaml`) + 3 contract files (`openapi.yaml`, `VERSION`, `CHANGELOG.md`) + 2 new test files / 1 modified test file + plan / log = ~22 files.
+
+**Open issues / deferred:**
+
+- **JobAccepted vs ClassifyResponse return type narrowing** — the generated `ClassifyApi.classify(...)` interface narrows the return type to `ClassifyResponse`. The 202 path ships a `JobAccepted` body via an unchecked cast (same workaround as `gls-extraction-audio`). The OpenAPI generator's Spring template doesn't yet support distinct response types per status code without a schema unionisation; the workaround is contained at the cast site.
+- **`@Async` on a plain `@Component`** — the dispatcher is a `@Component`, not a `@Service` or `@Configuration`. Spring's AOP advises any proxy-eligible bean, so this is fine; the audio service uses the same shape.
+- **Mongo collection rename** — `router_idempotency` is left behind on the dev cluster after deploy. Acceptable for dev; if the data ever ships to a non-dev environment a Mongock change unit can clean it up.
+- **Cancel async job** — no `DELETE /v1/jobs/{nodeRunId}` yet. Audio doesn't have one either; the LLM-tier timeout already bounds runaway jobs.
+
+**Next:** `gls-bert-trainer` Python sketch (closes the trainer checkbox); OR Phase 1.5 SLM worker; OR ROUTER block threshold reading + per-category enable to start using BERT in production-shape; OR cancel-async / async-status webhook follow-ups (mirroring upcoming audio service work).

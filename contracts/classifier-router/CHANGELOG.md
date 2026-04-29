@@ -4,6 +4,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-04-29
+
+### Added
+
+- `Prefer: respond-async` semantics on `POST /v1/classify` (CSV #13 / #47). Without the header the call blocks and returns 200 with the cascade result. With `respond-async`, the call returns 202 with `Location: /v1/jobs/{nodeRunId}` and a `JobAccepted` body; the cascade proceeds in the background.
+- `GET /v1/jobs/{nodeRunId}` — poll the state of an async cascade. Returns `PENDING` / `RUNNING` / `COMPLETED` / `FAILED`; `COMPLETED` carries the same `ClassifyResponse` shape as the sync 200.
+- `JobAccepted` and `JobStatus` schemas. Sync and async paths share the same idempotency row, so a `Prefer: respond-async` retry after a completed sync run returns the cached result via the poll URL.
+
+### Notes
+
+- Backwards compatible — sync clients that don't send `Prefer` see no behaviour change. New 202 + `/v1/jobs` are additive.
+
 ## [0.1.0] — 2026-04-29
 
 ### Added

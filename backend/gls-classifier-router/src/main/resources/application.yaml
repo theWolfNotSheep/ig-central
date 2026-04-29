@@ -7,8 +7,19 @@ server:
 
 gls:
   router:
-    idempotency:
-      ttl: ${GLS_ROUTER_IDEMPOTENCY_TTL:PT24H}
+    jobs:
+      # TTL for the router_jobs collection (Mongo TTL index on
+      # JobRecord.expiresAt). Idempotency cache + async-job poll
+      # surface share rows; the TTL governs both. Phase 1.4 PR3
+      # supersedes the old gls.router.idempotency.ttl property.
+      ttl: ${GLS_ROUTER_JOBS_TTL:PT24H}
+    async:
+      # Bounded thread pool for the Prefer: respond-async path
+      # (CSV #47). Tune up if a representative load profile shows
+      # cascade jobs queueing.
+      core-size: ${GLS_ROUTER_ASYNC_CORE:4}
+      max-size: ${GLS_ROUTER_ASYNC_MAX:8}
+      queue-capacity: ${GLS_ROUTER_ASYNC_QUEUE:32}
     cascade:
       llm:
         # When true, LlmDispatchCascadeService dispatches via Rabbit
