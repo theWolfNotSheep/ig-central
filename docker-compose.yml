@@ -408,6 +408,33 @@ services:
     logging: *default-logging
     networks: [gls]
 
+  gls-extraction-ocr:                                     # Phase 1.1
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-extraction-ocr
+    restart: unless-stopped
+    build:
+      # Repo-root context. OCR_LANGUAGES build-arg can be set via
+      # `docker compose build --build-arg OCR_LANGUAGES="eng fra deu"`.
+      context: .
+      dockerfile: backend/gls-extraction-ocr/Dockerfile
+      args:
+        OCR_LANGUAGES: ${OCR_LANGUAGES:-eng}
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      GLS_OCR_SINK_BUCKET: ${GLS_OCR_SINK_BUCKET:-gls-ocr-text}
+    depends_on:
+      mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    logging: *default-logging
+    networks: [gls]
+
   # gls-classifier-router:                                # Phase 1
   #   container_name: ${COMPOSE_PROJECT_NAME:-gls}-classifier-router
   #   restart: unless-stopped

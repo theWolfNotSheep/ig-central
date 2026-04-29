@@ -241,7 +241,7 @@ Clone the Tika pattern.
   - [x] Tests — unit only (37 in module). Integration tests blocked on issue #7.
   - [x] Dockerfile + Compose entry.
   - [x] Per-service README.
-- [ ] **`gls-extraction-ocr`** — Tesseract or Document AI (decide and log in CSV); GPU-tolerant if needed.
+- [x] **`gls-extraction-ocr`** — Tesseract via Tess4J (CSV #45). Contract + module + impl + Dockerfile (apt-installs `tesseract-ocr` + per-build language packs) + Compose entry. JWT and integration tests blocked (same as Tika / archive).
 - [ ] **`gls-extraction-audio`** — Whisper or Deepgram (decide and log); long-running, requires `Prefer: respond-async` (per A1 decision).
 - [x] Mime-detection logic — where does it live? Decision: at ingest in `gls-api` / `gls-connectors` using Tika's detector. Log in CSV. (CSV #42 — DECIDED.)
 

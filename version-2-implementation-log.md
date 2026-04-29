@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | In progress (1.1 underway) | 2026-04-29 | — | 1.1 — `gls-extraction-archive`: contract + module + ZIP/MBOX/PST impl + MinIO source/sink + idempotency + audit + health + metrics + Dockerfile + Compose + 37 unit tests landed. JWT (JWKS-blocked), integration tests (#7-blocked), PST attachments still outstanding. OCR + Audio services upcoming. |
+| 1   | In progress (1.1 underway) | 2026-04-29 | — | 1.1 — `gls-extraction-archive` (ZIP/MBOX/PST) + `gls-extraction-ocr` (Tesseract via Tess4J) shipped end-to-end. Audio service upcoming. JWT + integration tests blocked. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -1694,3 +1694,40 @@ Spring context is not loaded — pure POJO tests with mocked source / sink / ide
 - **Integration tests** — gated on issue #7. A small fixture PST (≤ 100 KB, generated once via Outlook and checked in) gives us happy-path coverage when the gate lifts.
 
 **Next:** OCR service end-to-end (Tesseract via Tess4J — separate CSV decision). Then audio service end-to-end (Whisper, async-capable). Closing out Phase 1.1 to the extent possible without JWT / integration-test infrastructure.
+
+## 2026-04-29 — Phase 1.1 — `gls-extraction-ocr` end-to-end
+
+**Done:** Second extraction-family service ships end-to-end. Contract + module + impl + Dockerfile + Compose entry land in a single PR (cloning the archive service's PR cadence). Idempotency, audit, health, metrics, RFC 7807 error mapping, Jackson DEDUCTION mixin for the `oneOf` text payload — all wired against the same patterns as Tika.
+
+**Decisions logged:** CSV #45 (Topology, §Plan-1.1) — OCR engine = Tesseract via Tess4J 5.13.0. Three reasons against managed OCR (Document AI / Textract): Compose-only stance per CSV #38 conflicts with hard cloud-vendor coupling; cost (managed OCR is per-page); data residency (corporate-records OCR sends sensitive content over the wire). Trade-offs: native binary on the runtime image (handled via apt) and accuracy plateau on very low-quality scans (mitigation: a future `gls-extraction-ocr-cloud` variant can ship behind the same contract). Per-request `languages` array selects from installed Tesseract language packs.
+
+**What's wired (under `backend/gls-extraction-ocr/`):**
+
+- **`source/`** — clone of the Tika source layer. Same `MinioDocumentSource` with `@Observed minio.fetch` and ETag verification. Domain exceptions map to RFC 7807 in the handler.
+- **`sink/`** — UTF-8 text sink (mirrors Tika's; not a binary children sink — OCR produces text). Object key `ocr/<nodeRunId>.txt`.
+- **`idempotency/`** — full Tika-style store on the `ocr_idempotency` Mongo collection with 24h TTL.
+- **`audit/OcrEvents`** — Tier 2 `EXTRACTION_COMPLETED` / `_FAILED` (homogeneous family eventTypes); metadata adds `languages` + `pageCount`.
+- **`parse/`** — `OcrExtractionService` interface + `Tess4JOcrExtractionService` impl. Tess4J's `Tesseract` loads libtesseract via JNA on first call; controller materialises the source stream to a temp file and runs `doOCR(File)` so PDF + image inputs follow the same path. Native-library load failure surfaces as `UncheckedIOException` for a 503 (readiness gate flips DOWN). Language errors → `OcrLanguageUnsupportedException` for a 422 with `OCR_LANGUAGE_UNSUPPORTED`.
+- **`health/`** — `MinioHealthIndicator` + `TesseractHealthIndicator` (checks tessdata directory exists with at least one `.traineddata` file + Tess4J instantiable; surfaces installed language packs as a detail).
+- **`web/`** — `ExtractController` (idempotency → source → ocr.run → response shape + cache + audit; pre-flight source-size cap throws `DocumentTooLargeException` for `OCR_TOO_LARGE` / 413; Jackson DEDUCTION mixin for the `oneOf` text payload, same pattern as Tika); `OcrExceptionHandler` (RFC 7807 mapping with `code` extensions: `DOCUMENT_NOT_FOUND`, `DOCUMENT_ETAG_MISMATCH`, `OCR_CORRUPT`, `OCR_LANGUAGE_UNSUPPORTED`, `OCR_TOO_LARGE`, `IDEMPOTENCY_IN_FLIGHT`, `OCR_SOURCE_UNAVAILABLE`); `MetaController`; `ExtractMetrics` (`gls_ocr_*`).
+- **`Dockerfile`** — multi-stage from `eclipse-temurin:25-jdk` to `eclipse-temurin:25-jre`. Runtime image installs `tesseract-ocr` via apt; per-language packs (`tesseract-ocr-fra`, `tesseract-ocr-deu`, …) installed via the `OCR_LANGUAGES` build-arg (default `eng`). `TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata` baked in. Healthcheck on `/actuator/health` over port 8091.
+- **`docker-compose.yml`** — new active block `gls-extraction-ocr` with `args.OCR_LANGUAGES` honoured from the `OCR_LANGUAGES` env var on the host (`OCR_LANGUAGES="eng fra deu" docker compose build gls-extraction-ocr`). Mongo + Rabbit + MinIO health-gated.
+- **`application.yaml`** on port 8091. Idempotency TTL `PT24H`; inline-byte-ceiling 256 KB; max-source-bytes 256 MB; tessdata path env-overridable.
+
+**Tests (17 in module; 207 reactor total):**
+
+- `OcrEventsTest` (4) — completed/failed envelope shape; null-language omission; eventId pattern.
+- `MetaControllerTest` (3) — capabilities + health + generated API contract.
+- `ExtractControllerTest` (10) — happy inline + textRef branches; not-found + FAILED audit; corrupt → `OCR_CORRUPT`; language-unsupported → `OCR_LANGUAGE_UNSUPPORTED`; source too large → `OCR_TOO_LARGE`; COMPLETED audit shape; in-flight short-circuit; cached replay; generated API contract.
+
+Native-engine tests (`Tess4JOcrExtractionServiceTest`, real-binary health probe) are integration-test territory — blocked on issue #7 plus the runtime-image build. Once unblocked, a Testcontainers fixture using the `gls-extraction-ocr` image gives end-to-end coverage including a sample PNG OCR'd through Tesseract.
+
+**Files changed:** 4 contracts files + 1 Dockerfile + 1 README + 1 pom + 1 application.yaml + 24 source files + 3 test files + 4 reactor / BOM / compose / plan / log / CSV updates = 39 files changed.
+
+**Open issues:**
+
+- **PDF page count metric** — `OcrResult.pageCount` is null even for multi-page PDFs. Pulling pdfbox into the parser would expose it; deferred until we need that metric concretely (the contract advertises it as optional).
+- **GPU OCR** — Tesseract is CPU-only. The architecture said "GPU-tolerant if needed"; not needed yet, deferred. A future `gls-extraction-ocr-gpu` variant can swap the engine while keeping the contract.
+- **JWT + integration tests** — blocked on JWKS infra and issue #7 respectively; same pattern as Tika / archive.
+
+**Next:** Audio service end-to-end (Whisper backend, async-capable per CSV #13). Closing the extraction-family triad and ending Phase 1.1 to the extent possible.
