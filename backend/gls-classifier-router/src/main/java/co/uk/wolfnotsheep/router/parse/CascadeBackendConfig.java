@@ -45,19 +45,27 @@ public class CascadeBackendConfig {
             MockCascadeService mock,
             ObjectProvider<LlmDispatchCascadeService> llmProvider,
             ObjectProvider<BertHttpDispatcher> bertDispatcherProvider,
-            ObjectProvider<SlmHttpDispatcher> slmDispatcherProvider) {
+            ObjectProvider<SlmHttpDispatcher> slmDispatcherProvider,
+            ObjectProvider<RouterPolicyResolver> policyProvider) {
 
         LlmDispatchCascadeService llm = llmProvider.getIfAvailable();
         CascadeService cascade = llm != null ? llm : mock;
 
+        // Policy supplier — uses the resolver when wired (production),
+        // falls back to RouterPolicy.DEFAULT when not (unit tests that
+        // don't stand up Mongo).
+        RouterPolicyResolver resolver = policyProvider.getIfAvailable();
+        java.util.function.Supplier<RouterPolicy> policy =
+                resolver != null ? resolver::current : () -> RouterPolicy.DEFAULT;
+
         SlmHttpDispatcher slmDispatcher = slmDispatcherProvider.getIfAvailable();
         if (slmDispatcher != null) {
-            cascade = new SlmOrchestratorCascadeService(slmDispatcher, cascade);
+            cascade = new SlmOrchestratorCascadeService(slmDispatcher, cascade, policy);
         }
 
         BertHttpDispatcher bertDispatcher = bertDispatcherProvider.getIfAvailable();
         if (bertDispatcher != null) {
-            cascade = new BertOrchestratorCascadeService(bertDispatcher, cascade);
+            cascade = new BertOrchestratorCascadeService(bertDispatcher, cascade, policy);
         }
 
         return cascade;

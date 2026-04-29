@@ -2350,3 +2350,46 @@ The actual training run requires a GPU + a populated samples collection (and ten
 **Phase 1.4 status:** **all five plan checkboxes ticked.** PR1 (inference module + BERT_CLASSIFIER schema), PR2 (BERT cascade wire-in), PR3 (skipped — block schema landed in PR1), PR4 (this PR — trainer sketch). The "wire bert-inference into the cascade" + "enable BERT for top-1 category" items lit up as flag flips once the trainer's first artefact is published.
 
 **Next:** Phase 1.6 LLM worker rework (lift `gls-llm-orchestration` into the new HTTP contract shape — same shape SLM already exposes); OR ROUTER block threshold reading + per-category enable; OR `.env.example` + service-template README updates; OR `gls-bert-trainer` Compose / k8s Job manifest.
+
+## 2026-04-29 — Phase 1.4 / 1.5 follow-up — ROUTER block threshold reading
+
+**Done:** The cascade orchestrators (BERT and SLM) now read per-tier thresholds + enabled flags from the active `default-router` ROUTER block in Mongo and apply them: a tier's confidence below its `accept` threshold falls through to the inner cascade; a tier with `enabled=false` is skipped without dispatching at all. Closes the "ROUTER block threshold reading" deferred item carried in the BERT 1.4 PR2 and SLM 1.5 PR3 logs.
+
+**Decisions logged:** None new — implements the cascade-tuning shape already encoded in `contracts/blocks/router.schema.json`.
+
+**What's wired:**
+
+- **`RouterPolicy`** (new record) — parsed shape: `(bert, slm, llm)` each carrying `(enabled, accept)`. `RouterPolicy.DEFAULT` matches the seeded `default-router` block (BERT/SLM accept = 1.01 functionally disabled, LLM accept = 0.0 always accept).
+- **`RouterPolicyResolver`** (new `@Component`) — reads `default-router` from `pipeline_blocks` via `MongoTemplate.findOne(Document.class)`. Caches the parsed policy with a configurable TTL (default 60s); on Mongo lookup failure / missing block / malformed content, returns `RouterPolicy.DEFAULT` and logs at WARN.
+- **`BertOrchestratorCascadeService`** — new constructor overload takes `Supplier<RouterPolicy>`. Two new gates: tier disabled → skip dispatch entirely (`TIER_DISABLED` trace step); below threshold → fall through (`BELOW_THRESHOLD` trace step carrying the actual confidence so observers see near-misses).
+- **`SlmOrchestratorCascadeService`** — same pattern for `policy.slm()`.
+- **`CascadeBackendConfig`** — `cascadeService()` factory now takes an `ObjectProvider<RouterPolicyResolver>` and passes a `Supplier<RouterPolicy>` to both orchestrators. Falls back to `() -> RouterPolicy.DEFAULT` when the resolver isn't wired (unit tests that don't stand up Mongo).
+- **`application.yaml`** — two new keys under `gls.router.policy.*`: `block-name` (default `default-router`), `refresh-seconds` (default 60).
+
+**Why a `Supplier<RouterPolicy>` instead of injecting `RouterPolicy` directly:**
+
+A direct `RouterPolicy` injection would freeze the policy at orchestrator construction time. With the `Supplier`, the orchestrator calls `policy.get()` per request and the resolver's TTL cache decides when to re-read Mongo. Operators can tune thresholds via the admin UI (when that lands) and the cascade picks up the change within `refresh-seconds`. No restart required.
+
+**Why the legacy 2-arg constructors stay:**
+
+Existing tests construct orchestrators without a policy. The 2-arg constructor delegates to the 3-arg with `() -> RouterPolicy.DEFAULT`, so old tests keep working but now go through the threshold path with the conservative default. Happy-path tests use the 3-arg constructor with a permissive policy (`accept=0.0`).
+
+**Tests (11 new in module; 375 reactor total):**
+
+- `RouterPolicyResolverTest` (7) — happy parse; missing block → DEFAULT; Mongo throws → DEFAULT; missing `tiers` key → DEFAULT; cache hit within refresh interval; `invalidateCache` forces re-read; partial tiers (only `bert` configured, SLM/LLM fall back to DEFAULT).
+- `BertOrchestratorCascadeServiceTest` (was 5, now 7) — added: below-threshold falls through with `errorCode=BELOW_THRESHOLD`; disabled tier skips dispatch entirely (`errorCode=TIER_DISABLED`, no `infer` call).
+- `SlmOrchestratorCascadeServiceTest` (was 6, now 8) — same two new tests for SLM.
+
+The previous 364-reactor test suite is unchanged. Router module count: 57 → 68.
+
+**Files changed:** 2 new source files + 3 modified + `application.yaml` + 1 new test file + 2 modified test files + log = 10 files.
+
+**Open issues / deferred:**
+
+- **`categoryOverrides` per-category tuning** — schema's `categoryOverrides[]` not yet parsed. Lands when the admin UI's category editor lets operators set them.
+- **Per-request ROUTER block selection** — `ClassifyRequest.cascadeHints.{forceTier, maxCostUnits}` still ignored.
+- **`costBudget.maxCostUnits` enforcement** — schema declares it; not honoured yet. Meaningful when multiple successful tiers happen per request.
+- **Cache invalidation on block save** — could subscribe to `gls.config.changed` events for the ROUTER block to drop the operator-tuning round-trip from ~30s avg to ~0.
+- **Real Mongo integration test for the resolver** — gated on issue #7.
+
+**Next:** Phase 1.6 LLM worker rework; OR per-category overrides + cascadeHints handling; OR `costBudget.maxCostUnits` enforcement; OR `.env.example` updates.
