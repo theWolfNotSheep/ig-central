@@ -2780,3 +2780,40 @@ The new helper is covered structurally by:
 **Phase 1.8 status:** **three of four plan checkboxes ticked.** PR1 (enum + schema), PR2 (resolver + typed view), PR3 (engine wire-in). PR4 (per-category pack-install seeding) is the last item — small.
 
 **Next:** Phase 1.8 PR4 (per-category POLICY blocks seeded from imported pack); OR Phase 1.9 Stage ④ scan dispatch; OR `.env.example` updates; OR legacy retirement.
+
+## 2026-04-29 — Phase 1.8 PR4 — POLICY blocks auto-seeded at pack install
+
+**Done:** Phase 1.8 closes. `PackImportService` now seeds an empty POLICY block for every imported category that doesn't already have one. Block name convention: `policy-${categoryId}`. Idempotent — re-imports skip categories that already have a block.
+
+**Decisions logged:** None new.
+
+**What's wired:**
+
+- **`PackImportService` constructor** — gains `PipelineBlockRepository pipelineBlockRepo`.
+- **`seedPolicyBlocksForCategories(ctx)`** (new helper) — runs after the component-import loop in `importPack`. For each category without a pre-existing `policy-${categoryId}`-named block, creates one with empty content (`requiredScans`, `metadataSchemaIds`, `governancePolicyIds` all `[]`).
+- **Result reporting** — adds a `POLICY_BLOCKS_SEED` ComponentResult so the pack-install UI surfaces the count.
+- **PREVIEW mode** — skips the seeding (returns a skipped=N result with a "preview mode" detail line).
+
+**Why deterministic name `policy-${categoryId}`:**
+
+Same convention as `default-router`. One logical block, one stable name. Re-imports look up by name; admin tooling references by name. Using `categoryId` (not `categoryName`) means the name doesn't change if an admin renames the category.
+
+**Why empty content + populate-via-admin-UI vs. extracting from the pack:**
+
+The pack's `PIPELINE_BLOCKS` component type isn't fully wired today ("not yet supported"). When it lands, packs ship explicit POLICY blocks; the seed step then only covers categories the pack didn't include. For now, seeding empty blocks gives the engine + admin UI something to read; operators populate from there.
+
+**Tests (no new in module; 450 reactor unchanged):**
+
+Existing `PackImportServiceTest` (PR2 of Phase 1.7) still passes — the constructor change is autowired by Spring DI. End-to-end behaviour ("import N categories → N POLICY blocks created") needs Mongo + full import flow; gated on issue #7. Focused helper tests are a small follow-up once `PackImportService` gets a broader test harness (mocking 14+ repositories is heavier than this helper warrants).
+
+**Files changed:** 1 modified `PackImportService.java` + plan / log = 3 files.
+
+**Open issues / deferred:**
+
+- **Pack-supplied POLICY blocks** — once `PIPELINE_BLOCKS` import is fully wired, packs can ship explicit POLICY blocks that supersede the seed.
+- **Per-category default scans** — the seeded blocks are empty. A "default policy template" config could populate them; deferred until concrete demand.
+- **`policy-${categoryId}` collision with operator-named blocks** — unlikely; future PR can add a uniqueness check at the schema level.
+
+**Phase 1.8 status:** **all four plan checkboxes ticked.** PR1 (enum + schema), PR2 (resolver + typed view), PR3 (engine wire-in), PR4 (pack seeding). Phase 1.8 complete.
+
+**Next:** Phase 1.9 Stage ④ scan dispatch (consumes the policy fields the engine stashes in shared context); OR `.env.example` updates; OR legacy `gls-llm-orchestration` retirement; OR Phase 1.10+.
