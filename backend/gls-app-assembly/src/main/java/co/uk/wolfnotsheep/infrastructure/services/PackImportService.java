@@ -375,6 +375,14 @@ public class PackImportService {
         if (!legRefs.isEmpty()) {
             def.setLegislationIds(resolveLegislationRefs(legRefs, ctx));
         }
+
+        // Phase 1.7 / CSV #34. Preserve-on-missing — pack files that
+        // don't carry applicableCategoryIds leave the existing value
+        // alone (operator data wins).
+        List<String> incomingCategories = strListOrNull(item, "applicableCategoryIds");
+        if (incomingCategories != null) {
+            def.setApplicableCategoryIds(incomingCategories);
+        }
     }
 
     // ── Retention Schedules ──────────────────────────
@@ -493,6 +501,12 @@ public class PackImportService {
         tier.setSourcePackSlug(ctx.packSlug);
         tier.setSourcePackVersion(ctx.packVersion);
         tier.setImportedAt(ctx.importedAt);
+
+        // Phase 1.7 / CSV #32. Preserve-on-missing.
+        List<String> incomingCategories = strListOrNull(item, "applicableCategoryIds");
+        if (incomingCategories != null) {
+            tier.setApplicableCategoryIds(incomingCategories);
+        }
     }
 
     // ── Metadata Schemas ─────────────────────────────
@@ -616,6 +630,12 @@ public class PackImportService {
         def.setSourcePackSlug(ctx.packSlug);
         def.setSourcePackVersion(ctx.packVersion);
         def.setImportedAt(ctx.importedAt);
+
+        // Phase 1.7 / CSV #31. Preserve-on-missing.
+        List<String> incomingCategories = strListOrNull(item, "applicableCategoryIds");
+        if (incomingCategories != null) {
+            def.setApplicableCategoryIds(incomingCategories);
+        }
     }
 
     // ── Trait Definitions ────────────────────────────
@@ -668,6 +688,12 @@ public class PackImportService {
         def.setSourcePackSlug(ctx.packSlug);
         def.setSourcePackVersion(ctx.packVersion);
         def.setImportedAt(ctx.importedAt);
+
+        // Phase 1.7 / CSV #33. Preserve-on-missing.
+        List<String> incomingCategories = strListOrNull(item, "applicableCategoryIds");
+        if (incomingCategories != null) {
+            def.setApplicableCategoryIds(incomingCategories);
+        }
     }
 
     // ── Taxonomy Categories ──────────────────────────
@@ -1054,5 +1080,23 @@ public class PackImportService {
             return list.stream().map(Object::toString).collect(Collectors.toList());
         }
         return List.of();
+    }
+
+    /**
+     * Returns the list value for {@code key}, or {@code null} when the
+     * key is absent. Distinguishes "missing field" from "explicit empty
+     * array" — used by Phase 1.7's {@code applicableCategoryIds[]}
+     * preserve-on-missing semantics. A pack file without the field
+     * leaves the existing value alone; a pack file with `[]` resets it
+     * to global.
+     */
+    @SuppressWarnings("unchecked")
+    static List<String> strListOrNull(Map<String, Object> map, String key) {
+        if (!map.containsKey(key)) return null;
+        Object v = map.get(key);
+        if (v instanceof List<?> list) {
+            return list.stream().map(Object::toString).collect(Collectors.toList());
+        }
+        return null;
     }
 }

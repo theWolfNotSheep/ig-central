@@ -2627,3 +2627,36 @@ The migration's correctness is exercised by Mongock's own framework + the existi
 - **Admin UI category picker** — operators need a UI to set the field. Lands when the admin UI editor for each entity is in shape.
 
 **Next:** Phase 1.7 PR2 (`PackImportService` updates + `gls.config.changed` events); OR `.env.example` updates; OR per-category overrides in the cascade router; OR legacy `gls-llm-orchestration` retirement.
+
+## 2026-04-29 — Phase 1.7 PR2 — `PackImportService` preserve-on-missing for `applicableCategoryIds[]`
+
+**Done:** Phase 1.7 closes. `PackImportService` now respects `applicableCategoryIds[]` on import with preserve-on-missing semantics — pack files without the field leave the existing operator-set value alone. The `gls.config.changed` event firing was already wired by `GovernanceConfigChangeBridge` (Phase 0.7+), which auto-publishes for every Spring Data Mongo `AfterSaveEvent` on the four entity types.
+
+**Decisions logged:** None new.
+
+**What's wired:**
+
+- **`PackImportService.strListOrNull`** (new package-private helper) — returns the list value for `key`, or `null` when the key is absent. Distinguishes "missing field" (preserve existing) from "explicit empty array" (reset to global). The existing `strList` returns `[]` in both cases, which would force a reset on every re-import — wrong for our use case.
+- **`applySensitivity` / `applyStorageTier` / `applyPiiType` / `applyTrait`** — each gains: read incoming list, set field only when non-null. Pack files without the field leave the existing value alone.
+- **`GovernanceConfigChangeBridge`** (pre-existing) — bridges Spring Data Mongo `AfterSaveEvent` to `gls.config.changed` publishes. PackImportService's `repo.save(...)` triggers this for free.
+
+**Why preserve-on-missing:**
+
+Pack authors can't realistically know which deployments have already scoped a definition. Re-importing should refresh content fields (display names, regex patterns) without trampling operator-set scoping. Operators who want to reset ship a pack with explicit `applicableCategoryIds: []` — the helper treats that as "reset to global" (distinct from "key absent").
+
+**Tests (6 new in module; 441 reactor total):**
+
+- `PackImportServiceTest` (6, new) — `strListOrNull`: missing key → null; explicit `[]` → empty list; populated array → list of strings; non-string elements via toString; non-list value → null; explicit null value → null.
+
+Previous 435 reactor tests unchanged. App-assembly module: 10 → 16.
+
+**Files changed:** 1 modified `PackImportService.java` + 1 new test + plan / log = 4 files.
+
+**Open issues / deferred:**
+
+- **Full apply* method test coverage** — needs broader test harness (9+ repos to mock); gated on issue #7 alongside the broader PackImportService suite.
+- **Per-request consumption** — the field is populated but no caller filters by it yet. Lands with Stage ④ scan dispatch (Phase 1.9).
+
+**Phase 1.7 status:** **all six plan checkboxes ticked.** PR1 (entity fields + Mongock backfill), PR2 (preserve-on-missing). Event firing pre-existing via `GovernanceConfigChangeBridge`. Phase 1.7 complete.
+
+**Next:** Phase 1.8 `POLICY` block type + interpreter (CSV #35); OR Phase 1.9 Stage ④ scan dispatch; OR `.env.example` updates; OR per-category overrides in the cascade router; OR legacy `gls-llm-orchestration` retirement.
