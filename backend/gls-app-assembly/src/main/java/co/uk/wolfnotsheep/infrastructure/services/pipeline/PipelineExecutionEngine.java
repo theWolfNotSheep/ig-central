@@ -388,6 +388,14 @@ public class PipelineExecutionEngine {
         // the document + hand off to enforcement.
         dispatchMetadataExtraction(run, doc, ctx);
 
+        // Phase 1.9 PR4 — persist the aggregated stage ④ results
+        // onto the DocumentClassificationResult so downstream nodes
+        // (governance / enforcement / indexing) read them as part of
+        // the canonical record. Merges extracted metadata into
+        // `extractedMetadata` (string-coerced) and stores scan
+        // findings keyed by ref under `policyScanFindings`.
+        persistPolicyResults(doc, ctx);
+
         // Store classification as the current context for post-classification nodes
         ctx.put("currentClassification", "applied");
         run.setSharedContext(ctx);
@@ -1186,6 +1194,134 @@ public class PipelineExecutionEngine {
         m.put("error", r.error());
         m.put("durationMs", r.durationMs());
         return m;
+    }
+
+    /**
+     * Phase 1.9 PR4. Persist the stage ④ scan + extraction results
+     * onto the {@link DocumentClassificationResult} so downstream
+     * nodes read them as part of the canonical record. Reads
+     * {@code policyScanResults} + {@code policyExtractionResults}
+     * from shared context and:
+     *
+     * <ul>
+     *   <li>Merges every successful extraction's {@code extractedFields}
+     *       into the existing {@code extractedMetadata} map (string-
+     *       coerced for compatibility with the existing field type).
+     *       Existing keys are not overwritten — classification-time
+     *       metadata wins on conflict.
+     *   <li>Stores the raw scan results, keyed by scan ref, under
+     *       {@code policyScanFindings} on the classification result.
+     * </ul>
+     *
+     * <p>Tolerant of: no classification result on the document
+     * (returns silently), no scan or extraction results in ctx
+     * (skips the corresponding update), classification result lookup
+     * failures (logged, doesn't fail the pipeline).
+     */
+    @SuppressWarnings("unchecked")
+    private void persistPolicyResults(DocumentModel doc, java.util.Map<String, Object> ctx) {
+        String classResultId = doc.getClassificationResultId();
+        if (classResultId == null) return;
+
+        List<Map<String, Object>> scanResults =
+                (List<Map<String, Object>>) ctx.getOrDefault("policyScanResults", List.of());
+        List<Map<String, Object>> extractionResults =
+                (List<Map<String, Object>>) ctx.getOrDefault("policyExtractionResults", List.of());
+        if (scanResults.isEmpty() && extractionResults.isEmpty()) return;
+
+        DocumentClassificationResult result;
+        try {
+            result = classificationResultRepo.findById(classResultId).orElse(null);
+        } catch (Exception e) {
+            log.warn("[engine] policy results persist: classification result {} lookup failed: {}",
+                    classResultId, e.getMessage());
+            return;
+        }
+        if (result == null) {
+            log.warn("[engine] policy results persist: classification result {} not found", classResultId);
+            return;
+        }
+
+        boolean changed = false;
+        if (!extractionResults.isEmpty()) {
+            Map<String, String> merged = mergeExtractedFields(
+                    result.getExtractedMetadata(), extractionResults);
+            int added = merged.size() - (result.getExtractedMetadata() == null
+                    ? 0 : result.getExtractedMetadata().size());
+            if (added > 0) {
+                result.setExtractedMetadata(merged);
+                log.info("[engine] policy results persist: merged {} extracted field(s) onto {}",
+                        added, classResultId);
+                changed = true;
+            }
+        }
+
+        if (!scanResults.isEmpty()) {
+            Map<String, Object> findings = aggregateScanFindings(scanResults);
+            if (!findings.isEmpty()) {
+                result.setPolicyScanFindings(findings);
+                log.info("[engine] policy results persist: stored {} scan finding(s) on {}",
+                        findings.size(), classResultId);
+                changed = true;
+            }
+        }
+
+        if (!changed) return;
+        try {
+            classificationResultRepo.save(result);
+        } catch (RuntimeException e) {
+            log.warn("[engine] policy results persist: save failed for {}: {} — observe-only, continuing",
+                    classResultId, e.getMessage());
+        }
+    }
+
+    /**
+     * Merge {@code extractedFields} from successful extraction results
+     * into the existing {@code extractedMetadata} map. Existing keys
+     * are not overwritten — classification-time metadata wins on
+     * conflict. Extracted in package-private form for unit testing.
+     */
+    static Map<String, String> mergeExtractedFields(
+            Map<String, String> existing,
+            List<Map<String, Object>> extractionResults) {
+        Map<String, String> merged = existing == null
+                ? new java.util.LinkedHashMap<>()
+                : new java.util.LinkedHashMap<>(existing);
+        if (extractionResults == null) return merged;
+        for (Map<String, Object> r : extractionResults) {
+            if (r == null) continue;
+            if (Boolean.FALSE.equals(r.get("dispatched"))) continue;
+            if (r.get("error") != null) continue;
+            Object fieldsObj = r.get("extractedFields");
+            if (!(fieldsObj instanceof Map<?, ?> fields)) continue;
+            for (Map.Entry<?, ?> entry : fields.entrySet()) {
+                String key = entry.getKey() == null ? null : entry.getKey().toString();
+                if (key == null || key.isBlank()) continue;
+                if (merged.containsKey(key)) continue;
+                Object value = entry.getValue();
+                if (value == null) continue;
+                merged.put(key, value.toString());
+            }
+        }
+        return merged;
+    }
+
+    /**
+     * Build a {@code policyScanFindings} map keyed by scan {@code ref}
+     * from the per-scan result rows. Skips rows with null ref. Last
+     * row for a duplicate ref wins (the dispatcher dedupes upstream so
+     * duplicates are unexpected). Extracted for unit testing.
+     */
+    static Map<String, Object> aggregateScanFindings(List<Map<String, Object>> scanResults) {
+        Map<String, Object> findings = new java.util.LinkedHashMap<>();
+        if (scanResults == null) return findings;
+        for (Map<String, Object> r : scanResults) {
+            if (r == null) continue;
+            Object ref = r.get("ref");
+            if (ref == null) continue;
+            findings.put(ref.toString(), r);
+        }
+        return findings;
     }
 
     private void applyClassificationToDocument(DocumentModel doc, DocumentClassifiedEvent event) {
