@@ -16,10 +16,38 @@
     <description>
         Phase 1.5 SLM tier of the cascade. JVM service with two
         pluggable backends (Anthropic Haiku cloud, Ollama local).
-        Contract-first per contracts/slm-worker/openapi.yaml. First
-        cut ships the contract surface + a stub backend that returns
-        SLM_NOT_CONFIGURED until either backend is wired.
+        Contract-first per contracts/slm-worker/openapi.yaml.
     </description>
+
+    <properties>
+        <spring-ai.version>2.0.0-SNAPSHOT</spring-ai.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <repositories>
+        <repository>
+            <id>spring-snapshots</id>
+            <url>https://repo.spring.io/snapshot</url>
+            <releases><enabled>false</enabled></releases>
+        </repository>
+        <repository>
+            <id>central-portal-snapshots</id>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+            <releases><enabled>false</enabled></releases>
+            <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+    </repositories>
 
     <dependencies>
 
@@ -56,6 +84,22 @@
             <groupId>io.swagger.core.v3</groupId>
             <artifactId>swagger-annotations</artifactId>
             <version>2.2.30</version>
+        </dependency>
+
+        <!-- ==================== Spring AI (Anthropic / Ollama) ==================== -->
+
+        <!--
+          Spring AI starters wire the Anthropic and Ollama
+          ChatModel beans + auto-config. Selected at runtime via
+          `gls.slm.worker.backend=anthropic` / `=ollama`. The
+          starters are conditionally evaluated by Spring AI based on
+          the presence of the corresponding API-key / endpoint
+          properties, so a build that only sets ANTHROPIC_API_KEY
+          doesn't fail to start because Ollama isn't reachable.
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-anthropic</artifactId>
         </dependency>
 
         <!-- ==================== Tracing ==================== -->

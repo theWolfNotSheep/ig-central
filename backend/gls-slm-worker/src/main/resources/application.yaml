@@ -9,9 +9,15 @@ gls:
   slm:
     worker:
       # `none` (default) → NotConfiguredSlmService; every /v1/classify
-      # returns 503 SLM_NOT_CONFIGURED. `anthropic` and `ollama`
-      # (Phase 1.5 follow-ups) wire real backends.
+      # returns 503 SLM_NOT_CONFIGURED.
+      # `anthropic` (Phase 1.5 PR2) → AnthropicHaikuSlmService.
+      # Requires ANTHROPIC_API_KEY.
+      # `ollama` (Phase 1.5 PR3) → Ollama backend.
       backend: ${GLS_SLM_BACKEND:none}
+      anthropic:
+        model: ${GLS_SLM_ANTHROPIC_MODEL:claude-haiku-4-5}
+        temperature: ${GLS_SLM_ANTHROPIC_TEMPERATURE:0.1}
+        max-tokens: ${GLS_SLM_ANTHROPIC_MAX_TOKENS:1024}
       jobs:
         ttl: ${GLS_SLM_JOBS_TTL:PT24H}
       async:

@@ -2105,3 +2105,47 @@ The previous 301-reactor test suite (per the router-async-surface entry) is unch
 - **Cost budget** — per-day / per-call ceilings deferred to the same PR as the real Anthropic backend.
 
 **Next:** Real Anthropic Haiku backend (closes the SLM provider loop); OR `gls-bert-trainer` Python sketch (closes Phase 1.4's last open checkbox); OR Phase 1.6 LLM worker rework (lift `gls-llm-orchestration` into the new contract shape); OR ROUTER block threshold reading + per-category enable; OR Dockerfile + Compose for `gls-slm-worker` and `gls-bert-inference`.
+
+## 2026-04-29 — Phase 1.5 PR2 — Anthropic Haiku SLM backend
+
+**Done:** Real `AnthropicHaikuSlmService` lands behind the `SlmService` interface — when `gls.slm.worker.backend=anthropic` and `ANTHROPIC_API_KEY` is set, the worker dispatches to `claude-haiku-4-5` via Spring AI's `AnthropicChatModel` (the same starter `gls-llm-orchestration` already depends on). PROMPT block content is read from the `pipeline_blocks` Mongo collection through a minimal `PromptBlockResolver` that doesn't depend on `gls-governance` — keeps the worker decoupled from governance class evolution while reading the same source-of-truth row.
+
+**Decisions logged:** None new — implements CSV #2 (cascade dispatch is task-agnostic) for the SLM tier specifically.
+
+**What's wired:**
+
+- **`PromptBlockResolver`** (new) — reads `pipeline_blocks` via raw `MongoTemplate.findOne(Document.class)`. Validates `type=PROMPT`, picks the requested version (pinned or `activeVersion`), pulls `systemPrompt` + `userPromptTemplate` strings out of the version's content map. Falls back to `draftContent` when no published versions exist (covers seed / dev rows). Throws `BlockUnknownException` for missing block / wrong type / missing version / empty content.
+- **`AnthropicHaikuSlmService`** (new) — implements `SlmService`. On `classify`:
+  - Resolves the PROMPT block via the resolver.
+  - Substitutes `{{text}}` in the user template (or appends the text after a blank line if no placeholder is present).
+  - Calls Spring AI `ChatClient.builder(anthropicChatModel).build()` with `AnthropicChatOptions(model, temperature, maxTokens)`. `model` defaults to `claude-haiku-4-5` per the architecture doc + CLAUDE.md.
+  - Parses the response: if it's JSON (with optional `\`\`\`json\` fences stripped), extracts a result map + `confidence` + `rationale`. If it's plain text, wraps the text into a `{rationale}` map with default `confidence=0.5` so callers always get a stable shape.
+  - Surfaces `tokensIn` / `tokensOut` from `ChatResponse.getMetadata().getUsage()` for the controller's `costUnits` computation.
+  - On any `RuntimeException` from the SDK, wraps as `UncheckedIOException` so the cascade router maps it to `ROUTER_DEPENDENCY_UNAVAILABLE` and falls through to the LLM tier.
+- **`SlmBackendConfig`** (rewritten) — single `@Bean` factory now selects between the not-configured stub, the Anthropic backend, and (placeholder for) the Ollama backend. Uses `ObjectProvider<AnthropicChatModel>.getIfAvailable()` so the service starts cleanly even when `ANTHROPIC_API_KEY` is absent (the Spring AI starter only autoconfigures the model bean when the key is set; missing bean → graceful fallback to the stub with a WARN log).
+- **`pom.xml`** — adds the `spring-ai-starter-model-anthropic` dependency. Imports the `spring-ai-bom` (2.0.0-SNAPSHOT) and registers the Spring snapshot repos at the module level — same pattern as `gls-llm-orchestration` (Spring AI 2.x is still snapshot-only as of 2026-04).
+- **`application.yaml`** — new `gls.slm.worker.anthropic.{model, temperature, max-tokens}` properties (defaults: `claude-haiku-4-5`, `0.1`, `1024`).
+
+**Why a minimal `PromptBlockResolver` instead of pulling in `gls-governance`:**
+
+`gls-governance.PipelineBlock` carries metadata fields (description, metrics counters, import provenance, draft state, etc.) the SLM worker doesn't need. Depending on it would mean any governance class evolution forces a coordinated rebuild of the worker — exactly the cross-module coupling the v2 service split is meant to avoid. The Mongock change unit `V003_DefaultRouterBlock` already operates on the raw `pipeline_blocks` collection for the same reason (per the Phase 1.2 close-off entry). The resolver is a stable read-only projection of two string fields; if the governance shape changes, the worker only breaks if those two specific fields disappear.
+
+**Tests (17 new in module; 343 reactor total):**
+
+- `AnthropicHaikuSlmServiceTest` (9) — `renderUser` with `{{text}}` placeholder substitution; without placeholder (appends after blank line); with blank / null template (returns text only); `parseContent` of pure JSON (extracts result + confidence + rationale, strips them from the result map); JSON inside markdown code fences (strips fences); plain text (wraps as rationale with default confidence); blank/empty (zero confidence + empty rationale); JSON without `confidence` field defaults to 0.5; `activeBackend()` returns `ANTHROPIC_HAIKU`. The actual `chatModel.call()` round-trip requires the Anthropic SDK + an API key and is gated on issue #7 with the broader integration suite.
+- `PromptBlockResolverTest` (8) — resolves `activeVersion` when no version pinned; resolves a pinned version distinct from active; unknown block id → `BlockUnknownException`; wrong block type → `BlockUnknownException`; missing version → `BlockUnknownException`; empty content (neither systemPrompt nor userPromptTemplate) → `BlockUnknownException`; `draftContent` fallback when no `versions` array yet; blank / null block id → `BlockUnknownException`.
+
+The previous 326-reactor test suite (per the SLM PR1 entry) is unchanged. Module count goes from 25 → 42.
+
+**Files changed:** 3 new source files (`PromptBlockResolver`, `AnthropicHaikuSlmService`, plus the rewritten `SlmBackendConfig`) + 2 new test files + `pom.xml` + `application.yaml` + plan / log = 8 files.
+
+**Open issues / deferred:**
+
+- **MCP integration** — per CSV #1, each worker calls MCP itself. The current `ChatClient.builder(...).build()` skips the `.defaultToolCallbacks(toolCallbackProvider)` call that `gls-llm-orchestration`'s `LlmClientFactory` uses. Wiring MCP requires adding `spring-ai-starter-mcp-client` + a `gls-mcp-server` connection config; lands in a follow-up PR alongside the cascade wire-in (the cascade is the natural place to inject MCP context anyway).
+- **Cascade wire-in** — `gls-classifier-router` doesn't yet dispatch to `gls-slm-worker` for `PROMPT` blocks. Mirrors the BERT wire-in pattern (`SlmDispatchCascadeService` HTTP client + extension to the orchestrator that calls SLM between BERT and LLM). Lands once MCP is wired.
+- **Ollama backend** — Phase 1.5 PR3. Spring AI's Ollama starter follows the same shape as the Anthropic starter; the implementation will mirror this PR with `OllamaChatModel` + an `OllamaSlmService`.
+- **Cost budget** — per-day / per-call ceilings still deferred. The `costUnits` field is reported per-call but no enforcement gate exists yet.
+- **Real LLM call integration test** — needs an API key + outbound network. Same blocker as the existing `gls-llm-orchestration` integration tests; gated on issue #7.
+- **`AnthropicHaikuSlmService.isReady()`** — currently returns `true` whenever the bean exists. A real ping-style probe (e.g. a `/v1/messages` HEAD call) belongs with the broader health follow-up.
+
+**Next:** Cascade wire-in (mirrors the BERT 1.4 PR2 pattern: `SlmDispatchCascadeService` in `gls-classifier-router` + orchestrator branch); OR Ollama backend (Phase 1.5 PR3); OR MCP integration; OR `gls-bert-trainer` Python sketch; OR Phase 1.6 LLM worker rework.
