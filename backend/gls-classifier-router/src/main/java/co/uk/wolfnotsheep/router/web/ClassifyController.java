@@ -2,9 +2,8 @@ package co.uk.wolfnotsheep.router.web;
 
 import co.uk.wolfnotsheep.router.api.ClassifyApi;
 import co.uk.wolfnotsheep.router.audit.RouterEvents;
-import co.uk.wolfnotsheep.router.idempotency.IdempotencyInFlightException;
-import co.uk.wolfnotsheep.router.idempotency.IdempotencyOutcome;
-import co.uk.wolfnotsheep.router.idempotency.IdempotencyStore;
+import co.uk.wolfnotsheep.router.jobs.JobAcquisition;
+import co.uk.wolfnotsheep.router.jobs.JobStore;
 import co.uk.wolfnotsheep.router.model.BlockRef;
 import co.uk.wolfnotsheep.router.model.CascadeStep;
 import co.uk.wolfnotsheep.router.model.ClassifyRequest;
@@ -12,6 +11,7 @@ import co.uk.wolfnotsheep.router.model.ClassifyRequestText;
 import co.uk.wolfnotsheep.router.model.ClassifyRequestTextOneOf;
 import co.uk.wolfnotsheep.router.model.ClassifyRequestTextOneOf1;
 import co.uk.wolfnotsheep.router.model.ClassifyResponse;
+import co.uk.wolfnotsheep.router.model.JobAccepted;
 import co.uk.wolfnotsheep.router.parse.CascadeOutcome;
 import co.uk.wolfnotsheep.router.parse.CascadeService;
 import co.uk.wolfnotsheep.platformaudit.emit.AuditEmitter;
@@ -23,18 +23,23 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Implements {@link ClassifyApi}. Phase 1.2 first cut wires the
- * {@link CascadeService} (currently the deterministic mock); real
- * tiers fill in behind the same interface across 1.4–1.6.
+ * Implements {@link ClassifyApi}. Sync (200) without
+ * {@code Prefer: respond-async}, 202 with poll URL when the header is
+ * set (CSV #47). Sync and async share the {@link JobStore} row for
+ * idempotency — a sync request after a completed async run gets the
+ * cached response; a {@code Prefer: respond-async} after a completed
+ * sync run gets the COMPLETED job via the poll URL.
  */
 @RestController
 public class ClassifyController implements ClassifyApi {
@@ -43,25 +48,27 @@ public class ClassifyController implements ClassifyApi {
     private static final int BYTES_PER_COST_UNIT = 1024;
 
     private final CascadeService cascade;
-    private final IdempotencyStore idempotency;
+    private final JobStore jobs;
     private final ExtractMetrics metrics;
     private final ObjectMapper mapper;
     private final ObjectProvider<AuditEmitter> auditEmitterProvider;
+    private final AsyncDispatcher asyncDispatcher;
     private final String serviceName;
     private final String serviceVersion;
     private final String instanceId;
 
     public ClassifyController(
             CascadeService cascade,
-            IdempotencyStore idempotency,
+            JobStore jobs,
             ExtractMetrics metrics,
             ObjectMapper mapper,
             ObjectProvider<AuditEmitter> auditEmitterProvider,
+            AsyncDispatcher asyncDispatcher,
             @Value("${spring.application.name:gls-classifier-router}") String serviceName,
             @Value("${gls.router.build.version:0.0.1-SNAPSHOT}") String serviceVersion,
             @Value("${HOSTNAME:unknown}") String instanceId) {
         this.cascade = cascade;
-        this.idempotency = idempotency;
+        this.jobs = jobs;
         this.metrics = metrics;
         // The request-side `text` is a oneOf — the cached-response
         // reads need DEDUCTION-based subtype resolution. Same Jackson
@@ -69,6 +76,7 @@ public class ClassifyController implements ClassifyApi {
         this.mapper = mapper.copy()
                 .addMixIn(ClassifyRequestText.class, ClassifyRequestTextMixin.class);
         this.auditEmitterProvider = auditEmitterProvider;
+        this.asyncDispatcher = asyncDispatcher;
         this.serviceName = serviceName;
         this.serviceVersion = serviceVersion;
         this.instanceId = instanceId;
@@ -76,23 +84,57 @@ public class ClassifyController implements ClassifyApi {
 
     @Override
     public ResponseEntity<ClassifyResponse> classify(
-            String traceparent, ClassifyRequest request, String idempotencyKey) {
+            String traceparent, ClassifyRequest request, String idempotencyKey, String prefer) {
 
-        IdempotencyOutcome outcome = idempotency.tryAcquire(request.getNodeRunId());
-        switch (outcome.status()) {
-            case CACHED -> {
+        boolean async = prefer != null && prefer.toLowerCase().contains("respond-async");
+        JobAcquisition acq = jobs.tryAcquire(request.getNodeRunId());
+        return switch (acq.status()) {
+            case ACQUIRED -> async
+                    ? handleAsyncAcquired(traceparent, request)
+                    : handleSyncAcquired(traceparent, request, idempotencyKey);
+            case RUNNING -> async
+                    ? acceptedFor(request.getNodeRunId())
+                    : runningCollision(request.getNodeRunId());
+            case COMPLETED -> {
                 metrics.recordIdempotencyShortCircuit("cached");
-                return ResponseEntity.ok(deserialiseCached(outcome.cachedJson()));
+                if (async) {
+                    yield acceptedFor(request.getNodeRunId());
+                }
+                yield ResponseEntity.ok(deserialiseCached(acq.existing().resultJson()));
             }
-            case IN_FLIGHT -> {
-                metrics.recordIdempotencyShortCircuit("in_flight");
-                throw new IdempotencyInFlightException(request.getNodeRunId());
-            }
-            case ACQUIRED -> { /* fall through */ }
-        }
+            case FAILED -> async
+                    ? acceptedFor(request.getNodeRunId())
+                    : runningCollision(request.getNodeRunId());
+        };
+    }
 
+    private ResponseEntity<ClassifyResponse> runningCollision(String nodeRunId) {
+        metrics.recordIdempotencyShortCircuit("in_flight");
+        throw new JobInFlightException(nodeRunId);
+    }
+
+    @SuppressWarnings("unchecked")
+    private ResponseEntity<ClassifyResponse> acceptedFor(String nodeRunId) {
+        URI poll = URI.create("/v1/jobs/" + nodeRunId);
+        JobAccepted body = new JobAccepted();
+        body.setNodeRunId(nodeRunId);
+        body.setStatus(JobAccepted.StatusEnum.PENDING);
+        body.setPollUrl(poll);
+        // The contract advertises 200 returning ClassifyResponse and
+        // 202 returning JobAccepted. The generated interface narrows
+        // the return type to ClassifyResponse, so the 202 body lands
+        // as a raw JobAccepted via a cast — ResponseEntity.body is
+        // Object at runtime; Jackson serialises JobAccepted's fields
+        // cleanly.
+        return (ResponseEntity<ClassifyResponse>) (ResponseEntity<?>)
+                ResponseEntity.accepted().header(HttpHeaders.LOCATION, poll.toString()).body(body);
+    }
+
+    private ResponseEntity<ClassifyResponse> handleSyncAcquired(
+            String traceparent, ClassifyRequest request, String idempotencyKey) {
         io.micrometer.core.instrument.Timer.Sample timer = metrics.startTimer();
         try {
+            jobs.markRunning(request.getNodeRunId());
             ResponseEntity<ClassifyResponse> response = doClassify(traceparent, request, idempotencyKey);
             ClassifyResponse body = response.getBody();
             cacheCompleted(request.getNodeRunId(), body);
@@ -100,10 +142,34 @@ public class ClassifyController implements ClassifyApi {
                     ? null : body.getTierOfDecision().name());
             return response;
         } catch (RuntimeException failure) {
-            metrics.recordFailure(timer, errorCodeFor(failure));
-            idempotency.releaseOnFailure(request.getNodeRunId());
+            String code = errorCodeFor(failure);
+            metrics.recordFailure(timer, code);
+            jobs.markFailed(request.getNodeRunId(), code, safeMessage(failure));
             emitFailed(request, traceparent, failure);
             throw failure;
+        }
+    }
+
+    private ResponseEntity<ClassifyResponse> handleAsyncAcquired(
+            String traceparent, ClassifyRequest request) {
+        metrics.recordIdempotencyShortCircuit("async_dispatched");
+        asyncDispatcher.dispatch(request, traceparent);
+        return acceptedFor(request.getNodeRunId());
+    }
+
+    /**
+     * Background path. Package-private so {@link AsyncDispatcher}
+     * can {@code @Async}-invoke it without bypassing Spring's AOP.
+     */
+    void runAsync(ClassifyRequest request, String traceparent) {
+        try {
+            jobs.markRunning(request.getNodeRunId());
+            ResponseEntity<ClassifyResponse> response = doClassify(traceparent, request, null);
+            cacheCompleted(request.getNodeRunId(), response.getBody());
+        } catch (RuntimeException failure) {
+            String code = errorCodeFor(failure);
+            jobs.markFailed(request.getNodeRunId(), code, safeMessage(failure));
+            emitFailed(request, traceparent, failure);
         }
     }
 
@@ -201,10 +267,9 @@ public class ClassifyController implements ClassifyApi {
         if (response == null) return;
         try {
             String json = mapper.writeValueAsString(response);
-            idempotency.cacheResult(nodeRunId, json);
+            jobs.markCompleted(nodeRunId, json);
         } catch (JsonProcessingException e) {
-            log.warn("idempotency cache write failed for nodeRunId={}: {}",
-                    nodeRunId, e.getMessage());
+            log.warn("router cache write failed for nodeRunId={}: {}", nodeRunId, e.getMessage());
         }
     }
 
@@ -250,9 +315,13 @@ public class ClassifyController implements ClassifyApi {
     abstract static class ClassifyRequestTextMixin {
     }
 
+    private static String safeMessage(Throwable t) {
+        return t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+    }
+
     private static String errorCodeFor(Throwable cause) {
         if (cause instanceof BlockNotFoundException) return "ROUTER_BLOCK_NOT_FOUND";
-        if (cause instanceof IdempotencyInFlightException) return "IDEMPOTENCY_IN_FLIGHT";
+        if (cause instanceof JobInFlightException) return "IDEMPOTENCY_IN_FLIGHT";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException) return "ROUTER_LLM_TIMEOUT";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmJobFailedException) return "ROUTER_LLM_FAILED";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.BertBlockUnknownException) return "ROUTER_BERT_BLOCK_UNKNOWN";
