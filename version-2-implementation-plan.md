@@ -242,7 +242,7 @@ Clone the Tika pattern.
   - [x] Dockerfile + Compose entry.
   - [x] Per-service README.
 - [x] **`gls-extraction-ocr`** — Tesseract via Tess4J (CSV #45). Contract + module + impl + Dockerfile (apt-installs `tesseract-ocr` + per-build language packs) + Compose entry. JWT and integration tests blocked (same as Tika / archive).
-- [ ] **`gls-extraction-audio`** — Whisper or Deepgram (decide and log); long-running, requires `Prefer: respond-async` (per A1 decision).
+- [x] **`gls-extraction-audio`** — Whisper backend (CSV #46) with `Prefer: respond-async` semantics (CSV #47). Pluggable backend interface in this repo: `OpenAiWhisperService` (cloud) + `NotConfiguredAudioTranscriptionService` (default fallback). Sync + async paths share idempotency via the `audio_jobs` Mongo collection. JWT and integration tests blocked (same as Tika / archive / OCR).
 - [x] Mime-detection logic — where does it live? Decision: at ingest in `gls-api` / `gls-connectors` using Tika's detector. Log in CSV. (CSV #42 — DECIDED.)
 
 ### 1.2 `gls-classifier-router` (mock implementation)

@@ -1,0 +1,342 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Extraction (Audio)
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    Audio transcription. Pulls bytes from MinIO, runs the configured
+    transcription backend (CSV #46), returns text inline (≤ 256 KB)
+    or by reference (`textRef`) per CSV #19.
+
+    Supports the `Prefer: respond-async` semantics from CSV #13 / #47:
+    without the header, the call is synchronous (200); with the
+    header, the service returns 202 with `Location: /v1/jobs/{nodeRunId}`
+    pointing at the job-poll URL, and the transcription is dispatched
+    to a background worker.
+
+    Fourth per-service spec (Phase 1.1).
+
+    **Conventions referenced from `_shared/`:**
+    - Error envelope (RFC 7807 + extensions) — CSV #17.
+    - Service-account JWT — CSV #18.
+    - `traceparent` + `Idempotency-Key` + `Prefer` headers — CSV #16 / #20.
+    - `TextPayload` (inline-vs-`textRef`) — CSV #19.
+    - `Capabilities` shape — CSV #21.
+
+    **Supported mime types** (initial scope):
+    - `audio/mpeg`, `audio/mp4`, `audio/wav`, `audio/x-wav`,
+      `audio/flac`, `audio/ogg`, `audio/webm`.
+
+servers:
+  - url: http://gls-extraction-audio:8080
+    description: Internal Docker Compose hostname.
+  - url: http://localhost:8092
+    description: Local dev (override).
+
+tags:
+  - name: extraction
+    description: Audio transcription operations.
+  - name: jobs
+    description: Async job polling.
+  - name: meta
+    description: Capabilities + health.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/extract:
+    post:
+      operationId: extractAudio
+      tags: [extraction]
+      summary: Transcribe an audio file.
+      description: |
+        Without `Prefer: respond-async`, the call blocks until
+        transcription completes and returns 200 with the result.
+
+        With `Prefer: respond-async`, the call returns 202 immediately
+        with `Location: /v1/jobs/{nodeRunId}` and the body left empty;
+        the transcription proceeds in the background. Poll the job
+        URL for status + result.
+
+        **Idempotency.** Repeated requests with the same `nodeRunId`
+        within the 24h TTL window return the same result (CSV #16);
+        sync and async share the same idempotency row, so a
+        `Prefer: respond-async` retry after a completed sync run
+        returns the cached result via the poll URL.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/IdempotencyKey'
+        - name: Prefer
+          in: header
+          schema:
+            type: string
+            enum: ["respond-async"]
+          description: |
+            Set to `respond-async` to dispatch transcription
+            asynchronously and return 202. Absent or empty → sync.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractRequest'
+      responses:
+        '200':
+          description: Transcription succeeded (sync path).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractResponse'
+        '202':
+          description: |
+            Transcription accepted; job dispatched. Poll
+            `Location` for status + result.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri
+              description: Job poll URL — `/v1/jobs/{nodeRunId}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAccepted'
+        '409':
+          $ref: '../_shared/idempotency.yaml#/components/responses/InFlight'
+        '413':
+          description: Audio exceeds the configured size or duration ceiling.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '422':
+          description: Audio is corrupt, unparseable, or in an unsupported format.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '../_shared/retry.yaml#/components/responses/TooManyRequests'
+        '503':
+          description: |
+            Transcription provider is not configured (no
+            `OPENAI_API_KEY` set on this build, or `gls.extraction.audio.provider`
+            is `none`). Returned with `code=AUDIO_NOT_CONFIGURED`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/jobs/{nodeRunId}:
+    get:
+      operationId: getJob
+      tags: [jobs]
+      summary: Poll an async transcription job.
+      description: |
+        Returns the current state of an async transcription dispatched
+        via `POST /v1/extract` with `Prefer: respond-async`. Status is
+        one of `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`. When
+        `COMPLETED`, the same response shape as the sync path is
+        included on the `result` field.
+      parameters:
+        - name: nodeRunId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: Job state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+        '404':
+          description: No job exists for this nodeRunId.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Service capability advertisement.
+      responses:
+        '200':
+          description: Capabilities for this build.
+          content:
+            application/json:
+              schema:
+                $ref: '../_shared/capabilities.yaml#/components/schemas/Capabilities'
+
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [meta]
+      summary: Liveness + readiness probe.
+      security: []
+      responses:
+        '200':
+          description: Up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Down — provider unavailable / not configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    ExtractRequest:
+      type: object
+      required: [documentRef, nodeRunId]
+      additionalProperties: false
+      properties:
+        documentRef:
+          type: object
+          required: [bucket, objectKey]
+          additionalProperties: false
+          properties:
+            bucket:
+              type: string
+              minLength: 1
+              maxLength: 64
+            objectKey:
+              type: string
+              minLength: 1
+              maxLength: 1024
+            etag:
+              type: string
+        nodeRunId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        mimeType:
+          type: string
+          description: Caller hint; service re-detects via Tika.
+        language:
+          type: string
+          minLength: 2
+          maxLength: 5
+          pattern: '^[a-z]{2}(-[A-Z]{2})?$'
+          description: |
+            ISO 639-1 hint (e.g. `en`, `fr`, `en-GB`). Optional;
+            backends auto-detect when absent.
+        prompt:
+          type: string
+          maxLength: 1024
+          description: |
+            Optional prompt to bias the transcription (jargon /
+            speaker names). Backend-specific; honored where supported.
+
+    ExtractResponse:
+      type: object
+      required: [nodeRunId, text, detectedMimeType, costUnits]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+        text:
+          $ref: '../_shared/text-payload.yaml#/components/schemas/TextPayload'
+        detectedMimeType:
+          type: string
+          examples: [audio/mpeg, audio/wav]
+        language:
+          type: string
+          description: |
+            Detected (or echoed) language code. Backend-specific
+            semantics — OpenAI Whisper detects from audio.
+        durationSeconds:
+          type: number
+          format: float
+          minimum: 0
+          description: Audio duration in seconds, when known.
+        provider:
+          type: string
+          description: |
+            Transcription backend that handled this request
+            (e.g. `openai-whisper`).
+        durationMs:
+          type: integer
+          minimum: 0
+          description: End-to-end time on this service, milliseconds.
+        costUnits:
+          type: integer
+          minimum: 0
+          description: |
+            Cost-attribution unit per CSV #22. For audio, byte-count of
+            source data parsed divided by 1024. Zero for cache hits.
+
+    JobAccepted:
+      type: object
+      required: [nodeRunId, status, pollUrl]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING]
+        pollUrl:
+          type: string
+          format: uri
+          description: |
+            Echoes the `Location` header — relative URL clients can
+            resolve against the service base.
+
+    JobStatus:
+      type: object
+      required: [nodeRunId, status]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        result:
+          description: Present when `status=COMPLETED`. Same shape as the sync 200.
+          $ref: '#/components/schemas/ExtractResponse'
+        errorCode:
+          type: string
+          description: |
+            Present when `status=FAILED`. Same taxonomy as the sync
+            error path's `code` extension (e.g. `AUDIO_CORRUPT`,
+            `AUDIO_NOT_CONFIGURED`).
+        errorMessage:
+          type: string
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'
