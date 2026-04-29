@@ -1,0 +1,411 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Enforcement Worker
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    Post-classification enforcement stage (architecture §3 / §11.A).
+    Today the logic lives in the `gls-governance-enforcement` Spring
+    Boot module dependency on `gls-app-assembly`; Phase 1.10 splits
+    it out into a standalone deployable so the orchestrator calls it
+    over HTTP rather than invoking the in-process `EnforcementService`.
+
+    **Phase 1.10 first cut.** Contract lands now so the engine + admin
+    UI can integrate against the surface while the deployable wires
+    up. Real HTTP controllers + Dockerfile + compose entry land in
+    PR2.
+
+    **Conventions referenced from `_shared/`:**
+    - Error envelope (RFC 7807 + extensions) — CSV #17.
+    - Service-account JWT — CSV #18.
+    - `traceparent` + `Idempotency-Key` + `Prefer` headers — CSV #16 / #20.
+    - `Capabilities` shape — CSV #21.
+
+servers:
+  - url: http://gls-enforcement-worker:8080
+    description: Internal Docker Compose hostname.
+  - url: http://localhost:8097
+    description: Local dev (override).
+
+tags:
+  - name: enforce
+    description: Apply governance rules to a classified document.
+  - name: jobs
+    description: |
+      Async enforce — `Prefer: respond-async` poll surface.
+  - name: meta
+    description: Capabilities + health.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/enforce:
+    post:
+      operationId: enforce
+      tags: [enforce]
+      summary: Apply governance rules to a classified document.
+      description: |
+        Caller supplies a `DocumentClassifiedEvent` plus a
+        `nodeRunId`. The worker:
+
+        - copies the classification fields onto the document
+          (categoryId, categoryName, sensitivity, applied policies),
+        - computes the retention schedule + expected disposition
+          action (denormalising for offline audit),
+        - migrates the storage tier when the resolved policy
+          demands it,
+        - writes a Tier 2 `enforcement.applied` audit event.
+
+        **Sync vs async (CSV #13 / #47).** Without
+        `Prefer: respond-async`, blocks until enforcement completes
+        and returns 200 with the summary. With `Prefer: respond-async`,
+        returns 202 immediately with `Location: /v1/jobs/{nodeRunId}`
+        and a `JobAccepted` body.
+
+        **Idempotency.** Repeated requests with the same `nodeRunId`
+        within the 24h TTL window return the same summary without
+        re-running enforcement (CSV #16).
+
+        **Status side-effects.** The worker does **not** set the
+        document's status — that remains the caller's responsibility.
+        The summary reports what changed so the caller can flow into
+        humanReview / governance / index nodes appropriately.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/IdempotencyKey'
+        - name: Prefer
+          in: header
+          schema:
+            type: string
+            enum: ["respond-async"]
+          description: |
+            Set to `respond-async` to dispatch asynchronously and
+            return 202. Absent or empty → sync.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnforceRequest'
+      responses:
+        '200':
+          description: Enforcement applied (sync path).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnforceResponse'
+        '202':
+          description: |
+            Enforcement accepted; job dispatched. Poll `Location` for
+            status + result.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri
+              description: Job poll URL — `/v1/jobs/{nodeRunId}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAccepted'
+        '404':
+          description: |
+            The referenced `documentId` doesn't resolve. Returned with
+            `code=DOCUMENT_NOT_FOUND`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '409':
+          $ref: '../_shared/idempotency.yaml#/components/responses/InFlight'
+        '422':
+          description: |
+            The classification event is malformed (e.g. missing
+            `categoryId`). Returned with
+            `code=ENFORCEMENT_INVALID_INPUT`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '../_shared/retry.yaml#/components/responses/TooManyRequests'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/jobs/{nodeRunId}:
+    get:
+      operationId: getJob
+      tags: [jobs]
+      summary: Poll an async enforcement job.
+      description: |
+        Returns the current state of an async enforcement dispatched
+        via `POST /v1/enforce` with `Prefer: respond-async`. Status
+        is one of `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`. When
+        `COMPLETED`, the same response shape as the sync 200 is
+        included on the `result` field.
+      parameters:
+        - name: nodeRunId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: Job state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+        '404':
+          description: No job exists for this nodeRunId.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Service capability advertisement.
+      description: |
+        Standard `Capabilities` shape (CSV #21). Reports the
+        worker's supported feature set so clients (orchestrator,
+        admin UI) can negotiate without hardcoding.
+      responses:
+        '200':
+          description: Capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: '../_shared/capabilities.yaml#/components/schemas/Capabilities'
+
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [meta]
+      summary: Liveness + readiness probe.
+      description: |
+        Liveness reflects process state. Readiness flips UP only
+        when Mongo + object storage are reachable.
+      security: []
+      responses:
+        '200':
+          description: Up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Not ready (Mongo or object storage unreachable).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    EnforceRequest:
+      type: object
+      required: [nodeRunId, classification]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            Pipeline-node run id per architecture §6.11. Idempotency
+            key (CSV #16).
+        classification:
+          $ref: '#/components/schemas/ClassificationEvent'
+        policyContext:
+          type: object
+          additionalProperties: false
+          description: |
+            Optional pre-resolved policy context from the engine
+            (Phase 1.9 PR4 stashes these on the classification
+            result; the worker can re-resolve from Mongo if absent).
+          properties:
+            policyCategoryId:
+              type: string
+              maxLength: 64
+            governancePolicyIds:
+              type: array
+              maxItems: 64
+              items:
+                type: string
+                minLength: 1
+                maxLength: 64
+
+    ClassificationEvent:
+      type: object
+      required: [documentId, classificationResultId, categoryId, classifiedAt]
+      additionalProperties: false
+      description: |
+        Slimmed-down view of the engine's `DocumentClassifiedEvent`.
+        The worker re-fetches the full classification result from
+        Mongo via `classificationResultId`; this envelope just carries
+        the keys it needs to find + correlate.
+      properties:
+        documentId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        classificationResultId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        categoryId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        categoryName:
+          type: string
+          maxLength: 128
+        sensitivityLabel:
+          type: string
+          enum: [PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED]
+        tags:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+            maxLength: 128
+        applicablePolicyIds:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        retentionScheduleId:
+          type: string
+          maxLength: 64
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        requiresHumanReview:
+          type: boolean
+        classifiedAt:
+          type: string
+          format: date-time
+
+    EnforceResponse:
+      type: object
+      required: [nodeRunId, documentId, applied]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+        documentId:
+          type: string
+        applied:
+          $ref: '#/components/schemas/AppliedSummary'
+        durationMs:
+          type: integer
+          minimum: 0
+
+    AppliedSummary:
+      type: object
+      additionalProperties: false
+      description: |
+        Summary of what enforcement actually changed. Each field is
+        optional; absence means the worker didn't touch that aspect.
+      properties:
+        appliedPolicyIds:
+          type: array
+          description: Policies that were resolved + applied.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        retentionScheduleId:
+          type: string
+          maxLength: 64
+        retentionPeriodText:
+          type: string
+          maxLength: 256
+        retentionTrigger:
+          type: string
+          enum: [CREATION, CLASSIFICATION, EVENT_BASED, MANUAL_REVIEW]
+        expectedDispositionAction:
+          type: string
+          enum: [DESTROY, ARCHIVE, REVIEW, TRANSFER]
+        storageTierBefore:
+          type: string
+          maxLength: 64
+        storageTierAfter:
+          type: string
+          maxLength: 64
+        storageMigrated:
+          type: boolean
+          description: |
+            True if the document's bytes were moved between buckets.
+            False when storage tier didn't change or no migration was
+            necessary.
+        auditEventId:
+          type: string
+          maxLength: 64
+          description: Tier 2 audit event id emitted by this enforcement.
+
+    JobAccepted:
+      type: object
+      required: [nodeRunId, status, pollUrl]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING]
+        pollUrl:
+          type: string
+          format: uri
+
+    JobStatus:
+      type: object
+      required: [nodeRunId, status]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        result:
+          description: Present when `status=COMPLETED`. Same shape as the sync 200.
+          $ref: '#/components/schemas/EnforceResponse'
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'

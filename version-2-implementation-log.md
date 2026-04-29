@@ -3021,3 +3021,54 @@ Reactor: 484 → 497 in `gls-app-assembly`. Full backend reactor green.
 **Phase 1.9 status:** **all four plan checkboxes ticked.** PR1 (PROMPT schema + scan PROMPT seeder), PR2 (engine scan dispatch), PR3 (metadata extraction seeder + dispatch), PR4 (results persistence). Phase 1.9 complete with the gating + audit deferrals noted above.
 
 **Next:** Phase 1.10 (`gls-enforcement-worker` split) is the natural next step. Or close-off follow-ups on Phase 1.9: blocking-failure gating PR, `ScanRouterClient` rename to `RouterPromptClient`, block-id-vs-name reconciliation across the seeders.
+
+## 2026-04-29 — Phase 1.10 PR1 — Enforcement worker contract
+
+**Done:** First PR of Phase 1.10. Lays the contract for the upcoming `gls-enforcement-worker` deployable. The `gls-governance-enforcement` Spring Boot module already exists with its own `@SpringBootApplication`, but no Dockerfile / compose entry — today the orchestrator calls `EnforcementService.enforce` in-process via the dependency. Phase 1.10 carves it out so the engine calls it over HTTP.
+
+**Contracts touched:**
+
+- `contracts/enforcement-worker/VERSION` — new, `0.1.0`.
+- `contracts/enforcement-worker/CHANGELOG.md` — new.
+- `contracts/enforcement-worker/README.md` — new.
+- `contracts/enforcement-worker/openapi.yaml` — new, OpenAPI 3.1.1.
+
+**Surface:**
+
+- `POST /v1/enforce` — sync + async (`Prefer: respond-async`). Request carries a `nodeRunId` (idempotency key per CSV #16) plus a `ClassificationEvent` envelope (the keys the worker needs: `documentId`, `classificationResultId`, `categoryId`, `sensitivityLabel`, etc — the worker re-fetches the full classification result from Mongo). Optional `policyContext.governancePolicyIds` carries the Phase 1.9 `policyGovernancePolicyIds` so the worker doesn't re-resolve.
+- Response: `EnforceResponse` with `AppliedSummary` (applied policy ids, retention schedule + period text + trigger + expected disposition action, storage tier before/after + whether bytes migrated, audit event id).
+- `GET /v1/jobs/{nodeRunId}` — async poll surface (same pattern as audio / SLM / LLM / classifier-router).
+- `GET /v1/capabilities`, `GET /actuator/health` — standard meta surface.
+
+**Error envelope:**
+
+RFC 7807 + extensions per CSV #17. Specific codes carved out:
+
+- `404 DOCUMENT_NOT_FOUND` — referenced documentId doesn't resolve.
+- `422 ENFORCEMENT_INVALID_INPUT` — classification event malformed (e.g. missing `categoryId`).
+- `409` via shared `idempotency.yaml` (in-flight conflict).
+- `429` via shared `retry.yaml`.
+- `4XX` / `5XX` catch-all via shared error envelope.
+
+**Why a slim `ClassificationEvent` envelope rather than the full `DocumentClassificationResult`:**
+
+The orchestrator already has the classified event in hand (it just received it from the LLM worker). Re-serialising the full classification result is redundant — the worker re-fetches by `classificationResultId` to get the canonical record. The slim envelope keeps the request body small + the contract decoupled from the internal Mongo shape.
+
+**Why `policyContext` is optional:**
+
+The Phase 1.9 PR4 stash on the classification result (`extractedMetadata`, `policyScanFindings`) lives in Mongo. The worker reads them directly. But `policyGovernancePolicyIds` was only stashed in the engine's shared context, not persisted (it's resolved each pipeline run from the POLICY block). When the engine calls the worker, passing `policyContext.governancePolicyIds` saves a Mongo round-trip; absence falls through to the worker re-resolving via the `PolicyBlockResolver` it inherits from `gls-governance`.
+
+**Spectral lint:** clean (1 warning fixed by adding a description to `getCapabilities`).
+
+**Decisions logged:** None new (mirrors the established async-pattern + error-envelope decisions from earlier phases).
+
+**Files changed:** 4 contract files + plan + log = 6 files.
+
+**Open issues / deferred:**
+
+- **Generator wiring** — `contracts-smoke` only validates `hello-world`. Adding enforcement-worker's spec to the smoke generator (so `gls-enforcement-worker`'s controllers are generated against the contract) is a follow-up step, same as the slm-worker / llm-worker pattern.
+- **PR2 follow-on** — implement HTTP controllers on the existing `gls-governance-enforcement` Spring Boot app (it currently only has a Rabbit consumer). Add Dockerfile + compose entry.
+- **PR3 follow-on** — engine cutover. Add an HTTP client similar to `ClassifierRouterClient` and call it from `PipelineExecutionEngine` after classification, behind a `pipeline.enforcement-worker.enabled` feature flag. Rabbit path stays as fallback until the cutover proves out.
+- **Tier 2 audit emission** — `AppliedSummary.auditEventId` is contracted but until `gls-platform-audit` library completes (Phase 0.7 outstanding), the worker emits via the legacy `AuditEventRepository` and reports the legacy id.
+
+**Next:** Phase 1.10 PR2 — HTTP controllers + Dockerfile + compose entry on the existing `gls-governance-enforcement` module. Wires the contracted surface to the in-place `EnforcementService` (no logic move; just an HTTP veneer + idempotent job-store like the other workers).
