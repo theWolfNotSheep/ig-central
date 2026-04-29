@@ -51,6 +51,8 @@ public class ClassifyController implements ClassifyApi {
     private final ObjectMapper mapper;
     private final ObjectProvider<AuditEmitter> auditEmitterProvider;
     private final AsyncDispatcher asyncDispatcher;
+    private final co.uk.wolfnotsheep.llmworker.backend.CostBudgetTracker budgetTracker;
+    private final co.uk.wolfnotsheep.llmworker.backend.RateLimitGate rateLimitGate;
     private final String serviceName;
     private final String serviceVersion;
     private final String instanceId;
@@ -62,6 +64,8 @@ public class ClassifyController implements ClassifyApi {
             ObjectMapper mapper,
             ObjectProvider<AuditEmitter> auditEmitterProvider,
             AsyncDispatcher asyncDispatcher,
+            co.uk.wolfnotsheep.llmworker.backend.CostBudgetTracker budgetTracker,
+            co.uk.wolfnotsheep.llmworker.backend.RateLimitGate rateLimitGate,
             @Value("${spring.application.name:gls-llm-worker}") String serviceName,
             @Value("${gls.llm.worker.build.version:0.0.1-SNAPSHOT}") String serviceVersion,
             @Value("${HOSTNAME:unknown}") String instanceId) {
@@ -72,6 +76,8 @@ public class ClassifyController implements ClassifyApi {
                 .addMixIn(ClassifyRequestText.class, ClassifyRequestTextMixin.class);
         this.auditEmitterProvider = auditEmitterProvider;
         this.asyncDispatcher = asyncDispatcher;
+        this.budgetTracker = budgetTracker;
+        this.rateLimitGate = rateLimitGate;
         this.serviceName = serviceName;
         this.serviceVersion = serviceVersion;
         this.instanceId = instanceId;
@@ -164,12 +170,26 @@ public class ClassifyController implements ClassifyApi {
         String text = inlineText(request.getText());
         long byteCount = text == null ? 0L : text.getBytes(StandardCharsets.UTF_8).length;
 
-        Instant started = Instant.now();
-        LlmResult result = backend.classify(blockId, blockVersion, text);
-        long durationMs = Duration.between(started, Instant.now()).toMillis();
+        // Cost budget gate — checked before any work, throws 429 if
+        // the daily token cap has already been hit.
+        budgetTracker.checkBudget();
 
-        emitCompleted(request, traceparent, result, byteCount, durationMs);
-        return toApi(request, result, byteCount, durationMs);
+        // Rate-limit semaphore — bounds concurrent in-flight calls.
+        // Acquired here, released via try-with-resources so an
+        // exception during the backend call doesn't leak permits.
+        try (var ignored = rateLimitGate.acquire()) {
+            Instant started = Instant.now();
+            LlmResult result = backend.classify(blockId, blockVersion, text);
+            long durationMs = Duration.between(started, Instant.now()).toMillis();
+
+            // Record consumed tokens against the daily budget so
+            // tomorrow's first call (or any call after the cap is
+            // hit) gets a clean 429.
+            budgetTracker.recordUsage(result.tokensIn(), result.tokensOut());
+
+            emitCompleted(request, traceparent, result, byteCount, durationMs);
+            return toApi(request, result, byteCount, durationMs);
+        }
     }
 
     private static ClassifyResponse toApi(ClassifyRequest request, LlmResult result,
@@ -265,6 +285,8 @@ public class ClassifyController implements ClassifyApi {
     private static String errorCodeFor(Throwable cause) {
         if (cause instanceof LlmNotConfiguredException) return "LLM_NOT_CONFIGURED";
         if (cause instanceof BlockUnknownException) return "LLM_BLOCK_UNKNOWN";
+        if (cause instanceof co.uk.wolfnotsheep.llmworker.backend.BudgetExceededException) return "LLM_BUDGET_EXCEEDED";
+        if (cause instanceof co.uk.wolfnotsheep.llmworker.backend.RateLimitExceededException) return "LLM_RATE_LIMITED";
         if (cause instanceof JobInFlightException) return "IDEMPOTENCY_IN_FLIGHT";
         if (cause instanceof java.io.UncheckedIOException) return "LLM_DEPENDENCY_UNAVAILABLE";
         return "LLM_UNEXPECTED";

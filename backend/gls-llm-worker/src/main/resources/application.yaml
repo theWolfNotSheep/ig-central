@@ -39,6 +39,16 @@ gls:
         core-size: ${GLS_LLM_ASYNC_CORE:4}
         max-size: ${GLS_LLM_ASYNC_MAX:8}
         queue-capacity: ${GLS_LLM_ASYNC_QUEUE:32}
+      budget:
+        # Daily token cap (tokensIn + tokensOut). 0 disables. Hits
+        # the next call with 429 LLM_BUDGET_EXCEEDED until UTC midnight.
+        # Per-replica only — cluster-wide budgets need a backing store.
+        daily-token-cap: ${GLS_LLM_BUDGET_DAILY_TOKEN_CAP:0}
+      rate-limit:
+        # Concurrent in-flight call cap. 0 disables. Returns 429
+        # LLM_RATE_LIMITED when no permit is available within wait-ms.
+        permits: ${GLS_LLM_RATE_LIMIT_PERMITS:0}
+        wait-ms: ${GLS_LLM_RATE_LIMIT_WAIT_MS:0}
 
 management:
   endpoints:

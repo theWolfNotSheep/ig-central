@@ -284,8 +284,8 @@ Per CSV #2 (DECIDED hybrid).
 
 - [x] Move existing `gls-llm-orchestration` logic into the new `gls-llm-worker` shape (sync entry point + async path retained). Phase 1.6 PR1 (module + contract + stub) and PR2 (real Anthropic + Ollama backends via Spring AI starters; same shape as SLM PR2/PR4). MCP integration via `spring-ai-starter-mcp-client` per CSV #1 — every backend hands the configured `ToolCallbackProvider` beans to its ChatClient builder. Default model `claude-sonnet-4-5` for Anthropic, `qwen2.5:32b` for Ollama (matches the legacy orchestrator's defaults).
 - [x] Conform to new contract (RFC 7807 errors, idempotency, traceparent). Phase 1.6 PR1 — `contracts/llm-worker/openapi.yaml` v0.1.0 mirrors `gls-slm-worker`'s shape: `POST /v1/classify` with sync + `Prefer: respond-async`, `GET /v1/jobs/{nodeRunId}`, `GET /v1/capabilities`, `GET /actuator/health`. Same `JobStore` lifecycle as the rest of the v2 services.
-- [ ] Cost budget gate: per-day spending cap, configurable.
-- [ ] Rate-limit semaphore per replica.
+- [x] Cost budget gate: per-day spending cap, configurable. Phase 1.6 PR4 — `CostBudgetTracker` (in-memory atomic counter resetting at UTC midnight). `gls.llm.worker.budget.daily-token-cap` (default 0 = disabled). When the running daily total crosses the cap, the next call gets 429 `LLM_BUDGET_EXCEEDED` with a `Retry-After: <seconds-until-midnight-UTC>` header.
+- [x] Rate-limit semaphore per replica. Phase 1.6 PR4 — `RateLimitGate` (bounded fair `Semaphore`). `gls.llm.worker.rate-limit.permits` (default 0 = disabled), `wait-ms` (default 0). When no permit is available within the wait window, returns 429 `LLM_RATE_LIMITED` with `Retry-After: 1`.
 
 ### 1.7 Hub-component-to-taxonomy wiring (CSV #31–34)
 

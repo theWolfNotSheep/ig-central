@@ -60,6 +60,8 @@ class ClassifyControllerTest {
                 mapper,
                 providerOf(auditEmitter),
                 asyncDispatcher,
+                /* budget */ new co.uk.wolfnotsheep.llmworker.backend.CostBudgetTracker(0L),
+                /* rateLimit */ new co.uk.wolfnotsheep.llmworker.backend.RateLimitGate(0, 0L),
                 "gls-llm-worker", "0.0.1-SNAPSHOT", "test-instance");
     }
 
@@ -198,6 +200,8 @@ class ClassifyControllerTest {
                 mapper,
                 providerOf(auditEmitter),
                 asyncDispatcher,
+                new co.uk.wolfnotsheep.llmworker.backend.CostBudgetTracker(0L),
+                new co.uk.wolfnotsheep.llmworker.backend.RateLimitGate(0, 0L),
                 "gls-llm-worker", "0.0.1-SNAPSHOT", "test-instance");
 
         assertThatThrownBy(() -> withStub.classify(
