@@ -2969,3 +2969,55 @@ Reactor: 470 → 484 in `gls-app-assembly`. Full backend reactor green.
 - **MIME-type filtering** — `MetadataSchema.linkedMimeTypes` isn't yet used by the dispatcher. Phase 1.9 dispatch runs every schema referenced by the POLICY block regardless of doc MIME type. A follow-up can short-circuit when the doc's MIME type is set + not in the schema's allow-list.
 
 **Next:** Phase 1.9 PR4 — final piece. Persist scan + extraction results onto the document (or `DocumentClassificationResult`), gate the pipeline on blocking scan failures (`SCAN_FAILED` status + retry path), emit Tier 2 audit events for each scan + extraction outcome, and hand off the consolidated state to the enforcement stage.
+
+## 2026-04-29 — Phase 1.9 PR4 — Stage ④ result persistence onto classification record
+
+**Done:** Final PR of Phase 1.9 (with two deferred follow-ups). The engine now persists the aggregated stage ④ results onto the `DocumentClassificationResult` so downstream nodes — governance, enforcement, indexing — read them as part of the canonical record, not from in-process shared context.
+
+**What's wired:**
+
+- **`DocumentClassificationResult.policyScanFindings`** (new field, `Map<String, Object>`). Keyed by scan ref; each value is the per-scan result row from PR2 (`{scanType, ref, blocking, dispatched, tierOfDecision, confidence, result, error, durationMs}`). Mongo handles the new field transparently — existing rows simply have `null`.
+
+- **`PipelineExecutionEngine.persistPolicyResults`** (new helper). Runs inline after `dispatchMetadataExtraction`. Reads `policyScanResults` + `policyExtractionResults` from shared context. For extractions: merges `extractedFields` of every successful row into the existing `DocumentClassificationResult.extractedMetadata` map (string-coerced — non-string values like `42`, `99.5`, `true` become `"42"`, `"99.5"`, `"true"`), but does **not** overwrite existing keys: classification-time metadata wins on conflict. For scans: builds a fresh `policyScanFindings` map keyed by ref. Saves the result only when something changed.
+
+- **Aggregation helpers as static, package-private.** `mergeExtractedFields(existing, results)` and `aggregateScanFindings(results)` are pure functions extracted from `persistPolicyResults` for direct unit testing without spinning up the full engine.
+
+- **Fail-soft semantics.** Missing `classificationResultId` on the doc → silent return. Empty results → silent return. Repo lookup or save throws → logged + skipped. Same observe-only stance as PR2 + PR3.
+
+**Why classification-time metadata wins on conflict:**
+
+The classification call already extracts metadata fields where the model has high confidence — these are the canonical values. Stage ④'s extraction pass is a refinement: it covers fields the classifier-time prompt didn't ask for (because the schema is per-category, looked up after classification). Re-extracting a field that classification already populated risks overwriting a high-confidence value with a lower-confidence one. Preserving the classification-time value matches the rule "first writer wins for canonical fields."
+
+**Why a new field for scans rather than overloading `extractedMetadata`:**
+
+`extractedMetadata` is `Map<String, String>` — a flat view designed for Elasticsearch indexing (KEYWORD-typed structured fields). Scan results are nested (`{found, instances[], confidence}`); flattening them would lose the per-scan confidence + instance positioning that downstream consumers (governance enforcement, redaction tooling, audit) need. A separate `Map<String, Object>` keyed by ref keeps the two concerns cleanly separated.
+
+**Tests:**
+
+`PipelineExecutionEnginePolicyResultsTest` — 13 focused tests:
+
+`mergeExtractedFields` (8): null/empty inputs, pass-through when no extractions, additive merge from successful rows, no-overwrite of existing keys, skip rows where `dispatched=false` or `error≠null`, string coercion of non-string values, skip null/blank keys, skip rows with non-map `extractedFields`.
+
+`aggregateScanFindings` (5): null/empty inputs, key-by-ref pass-through, skip rows with null ref, last-row-wins for duplicate refs.
+
+Reactor: 484 → 497 in `gls-app-assembly`. Full backend reactor green.
+
+**Contracts touched:** None. The `DocumentClassificationResult` collection is internal to `gls-governance` — no external consumers depend on a specific shape today (admin UI reads it via `gls-governance` services).
+
+**Files changed:**
+
+- `DocumentClassificationResult.java` — new `policyScanFindings` field + getter/setter.
+- `PipelineExecutionEngine.java` — new `persistPolicyResults` helper, two extracted static helpers, new wire-in call after `dispatchMetadataExtraction`.
+- `PipelineExecutionEnginePolicyResultsTest.java` (new).
+- Plan + log = 5 files.
+
+**Open issues / deferred:**
+
+- **Blocking scan failure gating** (deferred from PR4 scope). Currently the engine continues even when a scan with `blocking=true` fails. Promoting that to a hard `SCAN_FAILED` document status with a retry path is a separate behavioural change — gates need a status enum addition, retry semantics, and an admin-UI surface. Tracked as a small follow-up PR; the data is already persisted under `policyScanFindings` so the gating PR just needs to read it.
+- **Tier 2 audit emission for each scan + extraction** (deferred). The `gls-platform-audit` library still has gaps (Phase 0.7 status) — leader election (ShedLock) + circuit breaker + comprehensive metrics are outstanding. Once that lands, `PolicyScanDispatcher` and `MetadataExtractionDispatcher` each emit a `policy.scan.dispatched` / `policy.metadata.extracted` Tier 2 event per outcome.
+- **MIME-type filtering on extraction** — same deferral as PR3.
+- **Visual-DAG node form-factor** — same deferral as PR2 / PR3. The inline-call shape is now concrete enough across PR2–PR4 to promote to a real visual-node type in a future Phase 1.9.5 / phase-2 PR.
+
+**Phase 1.9 status:** **all four plan checkboxes ticked.** PR1 (PROMPT schema + scan PROMPT seeder), PR2 (engine scan dispatch), PR3 (metadata extraction seeder + dispatch), PR4 (results persistence). Phase 1.9 complete with the gating + audit deferrals noted above.
+
+**Next:** Phase 1.10 (`gls-enforcement-worker` split) is the natural next step. Or close-off follow-ups on Phase 1.9: blocking-failure gating PR, `ScanRouterClient` rename to `RouterPromptClient`, block-id-vs-name reconciliation across the seeders.

@@ -56,6 +56,14 @@ public class DocumentClassificationResult {
     /** Structured metadata the LLM extracted (e.g. {"vendor": "ACME", "amount": "15000"}). */
     private Map<String, String> extractedMetadata;
 
+    /**
+     * Phase 1.9 PR4 / CSV #36. Policy-driven Stage ④ scan outcomes,
+     * keyed by scan ref. Each value is the scan's raw result map
+     * ({@code {found, instances, confidence}} for SCAN PROMPT blocks).
+     * Empty / null = no policy-driven scans ran for this document.
+     */
+    private Map<String, Object> policyScanFindings;
+
     /** IDs of governance policies the LLM determined apply to this document. */
     private List<String> applicablePolicyIds;
 
@@ -133,6 +141,9 @@ public class DocumentClassificationResult {
 
     public Map<String, String> getExtractedMetadata() { return extractedMetadata; }
     public void setExtractedMetadata(Map<String, String> extractedMetadata) { this.extractedMetadata = extractedMetadata; }
+
+    public Map<String, Object> getPolicyScanFindings() { return policyScanFindings; }
+    public void setPolicyScanFindings(Map<String, Object> policyScanFindings) { this.policyScanFindings = policyScanFindings; }
 
     public List<String> getApplicablePolicyIds() { return applicablePolicyIds; }
     public void setApplicablePolicyIds(List<String> applicablePolicyIds) { this.applicablePolicyIds = applicablePolicyIds; }
