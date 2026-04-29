@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * Cascade orchestrator that fronts an inner {@link CascadeService}
@@ -33,10 +34,19 @@ public class SlmOrchestratorCascadeService implements CascadeService {
 
     private final SlmHttpDispatcher dispatcher;
     private final CascadeService inner;
+    private final Supplier<RouterPolicy> policy;
 
     public SlmOrchestratorCascadeService(SlmHttpDispatcher dispatcher, CascadeService inner) {
+        this(dispatcher, inner, () -> RouterPolicy.DEFAULT);
+    }
+
+    public SlmOrchestratorCascadeService(
+            SlmHttpDispatcher dispatcher,
+            CascadeService inner,
+            Supplier<RouterPolicy> policy) {
         this.dispatcher = dispatcher;
         this.inner = inner;
+        this.policy = policy;
     }
 
     @Override
@@ -47,7 +57,16 @@ public class SlmOrchestratorCascadeService implements CascadeService {
             return inner.run(blockId, blockVersion, blockType, text);
         }
 
+        RouterPolicy.TierPolicy slmPolicy = policy.get().slm();
         long byteCount = text == null ? 0L : text.getBytes(StandardCharsets.UTF_8).length;
+
+        if (!slmPolicy.enabled()) {
+            CascadeOutcome.TraceStep skipStep = new CascadeOutcome.TraceStep(
+                    "SLM", false, null, 0L, 0L, "TIER_DISABLED");
+            CascadeOutcome innerOutcome = inner.run(blockId, blockVersion, blockType, text);
+            return prependTrace(innerOutcome, skipStep, byteCount);
+        }
+
         long started = System.currentTimeMillis();
 
         SlmInferenceResult result;
@@ -66,6 +85,17 @@ public class SlmOrchestratorCascadeService implements CascadeService {
         // to the controller where it maps to 422.
 
         long durationMs = System.currentTimeMillis() - started;
+
+        if (result.confidence() < slmPolicy.accept()) {
+            log.debug("router: SLM confidence {} below threshold {} — escalating",
+                    result.confidence(), slmPolicy.accept());
+            CascadeOutcome.TraceStep slmStep = new CascadeOutcome.TraceStep(
+                    "SLM", false, result.confidence(), durationMs,
+                    result.costUnits(), "BELOW_THRESHOLD");
+            CascadeOutcome innerOutcome = inner.run(blockId, blockVersion, blockType, text);
+            return prependTrace(innerOutcome, slmStep, byteCount);
+        }
+
         Map<String, Object> resultMap = new LinkedHashMap<>(result.result());
         resultMap.put("confidence", result.confidence());
         if (result.modelId() != null) resultMap.put("modelId", result.modelId());

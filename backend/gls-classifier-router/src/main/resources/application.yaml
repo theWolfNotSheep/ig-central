@@ -48,6 +48,15 @@ gls:
         enabled: ${GLS_ROUTER_SLM_ENABLED:false}
         url: ${GLS_ROUTER_SLM_URL:http://gls-slm-worker:8080}
         timeout-ms: ${GLS_ROUTER_SLM_TIMEOUT_MS:60000}
+    policy:
+      # ROUTER block name to load tier thresholds from. The block is
+      # seeded by Mongock V003_DefaultRouterBlock as `default-router`.
+      # Per-request ROUTER block selection (via the request's
+      # cascadeHints) is a follow-up.
+      block-name: ${GLS_ROUTER_POLICY_BLOCK_NAME:default-router}
+      # Cache TTL for the parsed policy. Tune down for snappier admin-
+      # UI tuning at the cost of a Mongo round-trip on the cache miss.
+      refresh-seconds: ${GLS_ROUTER_POLICY_REFRESH_SECONDS:60}
 
 management:
   endpoints:

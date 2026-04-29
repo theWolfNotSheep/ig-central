@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * Cascade orchestrator that fronts an inner {@link CascadeService}
@@ -36,10 +37,19 @@ public class BertOrchestratorCascadeService implements CascadeService {
 
     private final BertHttpDispatcher dispatcher;
     private final CascadeService inner;
+    private final Supplier<RouterPolicy> policy;
 
     public BertOrchestratorCascadeService(BertHttpDispatcher dispatcher, CascadeService inner) {
+        this(dispatcher, inner, () -> RouterPolicy.DEFAULT);
+    }
+
+    public BertOrchestratorCascadeService(
+            BertHttpDispatcher dispatcher,
+            CascadeService inner,
+            Supplier<RouterPolicy> policy) {
         this.dispatcher = dispatcher;
         this.inner = inner;
+        this.policy = policy;
     }
 
     @Override
@@ -50,7 +60,18 @@ public class BertOrchestratorCascadeService implements CascadeService {
             return inner.run(blockId, blockVersion, blockType, text);
         }
 
+        RouterPolicy.TierPolicy bertPolicy = policy.get().bert();
         long byteCount = text == null ? 0L : text.getBytes(StandardCharsets.UTF_8).length;
+
+        // Tier disabled by policy — fall through immediately without
+        // even calling BERT.
+        if (!bertPolicy.enabled()) {
+            CascadeOutcome.TraceStep skipStep = new CascadeOutcome.TraceStep(
+                    "BERT", false, null, 0L, 0L, "TIER_DISABLED");
+            CascadeOutcome innerOutcome = inner.run(blockId, blockVersion, blockType, text);
+            return prependTrace(innerOutcome, skipStep, byteCount);
+        }
+
         long started = System.currentTimeMillis();
 
         BertInferenceResult result;
@@ -69,6 +90,20 @@ public class BertOrchestratorCascadeService implements CascadeService {
         // to the controller where it maps to 422.
 
         long durationMs = System.currentTimeMillis() - started;
+
+        // Threshold check — if BERT's confidence is below the policy's
+        // accept threshold, treat as fallthrough so the next tier gets
+        // a chance.
+        if (result.confidence() < bertPolicy.accept()) {
+            log.debug("router: BERT confidence {} below threshold {} — escalating",
+                    result.confidence(), bertPolicy.accept());
+            CascadeOutcome.TraceStep bertStep = new CascadeOutcome.TraceStep(
+                    "BERT", false, result.confidence(), durationMs,
+                    byteCount / 1024, "BELOW_THRESHOLD");
+            CascadeOutcome innerOutcome = inner.run(blockId, blockVersion, blockType, text);
+            return prependTrace(innerOutcome, bertStep, byteCount);
+        }
+
         Map<String, Object> resultMap = new LinkedHashMap<>();
         resultMap.put("label", result.label());
         resultMap.put("confidence", result.confidence());

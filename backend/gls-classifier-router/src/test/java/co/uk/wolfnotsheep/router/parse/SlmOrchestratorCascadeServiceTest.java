@@ -17,6 +17,13 @@ import static org.mockito.Mockito.when;
 
 class SlmOrchestratorCascadeServiceTest {
 
+    private static RouterPolicy permissivePolicy() {
+        return new RouterPolicy(
+                new RouterPolicy.TierPolicy(true, 0.0f),
+                new RouterPolicy.TierPolicy(true, 0.0f),
+                new RouterPolicy.TierPolicy(true, 0.0f));
+    }
+
     @Test
     void prompt_block_returns_SLM_outcome_when_dispatcher_succeeds() {
         SlmHttpDispatcher dispatcher = mock(SlmHttpDispatcher.class);
@@ -28,7 +35,7 @@ class SlmOrchestratorCascadeServiceTest {
         CascadeService inner = new MockCascadeService();
 
         SlmOrchestratorCascadeService orchestrator =
-                new SlmOrchestratorCascadeService(dispatcher, inner);
+                new SlmOrchestratorCascadeService(dispatcher, inner, () -> permissivePolicy());
 
         CascadeOutcome outcome = orchestrator.run("block-1", 3, "PROMPT", "the doc");
 
@@ -115,6 +122,58 @@ class SlmOrchestratorCascadeServiceTest {
     }
 
     @Test
+    void below_threshold_falls_through_to_inner_with_BELOW_THRESHOLD_code() {
+        SlmHttpDispatcher dispatcher = mock(SlmHttpDispatcher.class);
+        when(dispatcher.classify(anyString(), any(), any(), anyString()))
+                .thenReturn(new SlmInferenceResult(
+                        Map.of("category", "HR"), 0.5f, "ANTHROPIC_HAIKU",
+                        "claude-haiku-4-5", 100L, 20L, 1L));
+        CascadeService inner = mock(CascadeService.class);
+        when(inner.run(anyString(), any(), anyString(), anyString()))
+                .thenReturn(new CascadeOutcome(
+                        "LLM", 0.9f, Map.of("category", "HR Letter"),
+                        null, java.util.List.of(), java.util.List.of(), 1L, 100L));
+
+        // Strict policy: SLM must clear 0.85.
+        RouterPolicy strict = new RouterPolicy(
+                new RouterPolicy.TierPolicy(true, 0.0f),
+                new RouterPolicy.TierPolicy(true, 0.85f),
+                new RouterPolicy.TierPolicy(true, 0.0f));
+        SlmOrchestratorCascadeService orchestrator =
+                new SlmOrchestratorCascadeService(dispatcher, inner, () -> strict);
+
+        CascadeOutcome outcome = orchestrator.run("block-1", 3, "PROMPT", "the doc");
+
+        assertThat(outcome.tierOfDecision()).isEqualTo("LLM");
+        assertThat(outcome.trace().get(0).tier()).isEqualTo("SLM");
+        assertThat(outcome.trace().get(0).accepted()).isFalse();
+        assertThat(outcome.trace().get(0).errorCode()).isEqualTo("BELOW_THRESHOLD");
+    }
+
+    @Test
+    void disabled_tier_skips_dispatch_entirely() {
+        SlmHttpDispatcher dispatcher = mock(SlmHttpDispatcher.class);
+        CascadeService inner = mock(CascadeService.class);
+        when(inner.run(anyString(), any(), anyString(), anyString()))
+                .thenReturn(new CascadeOutcome(
+                        "MOCK", 0.5f, Map.of(), null,
+                        java.util.List.of(), java.util.List.of(), 0L, 0L));
+
+        RouterPolicy disabled = new RouterPolicy(
+                new RouterPolicy.TierPolicy(true, 0.0f),
+                new RouterPolicy.TierPolicy(false, 0.0f),
+                new RouterPolicy.TierPolicy(true, 0.0f));
+        SlmOrchestratorCascadeService orchestrator =
+                new SlmOrchestratorCascadeService(dispatcher, inner, () -> disabled);
+
+        CascadeOutcome outcome = orchestrator.run("block-1", 3, "PROMPT", "x");
+
+        verify(dispatcher, never()).classify(anyString(), any(), any(), anyString());
+        assertThat(outcome.tierOfDecision()).isEqualTo("MOCK");
+        assertThat(outcome.trace().get(0).errorCode()).isEqualTo("TIER_DISABLED");
+    }
+
+    @Test
     void SlmBlockUnknownException_propagates_does_not_fall_through() {
         SlmHttpDispatcher dispatcher = mock(SlmHttpDispatcher.class);
         when(dispatcher.classify(anyString(), any(), any(), anyString()))
@@ -122,7 +181,7 @@ class SlmOrchestratorCascadeServiceTest {
         CascadeService inner = mock(CascadeService.class);
 
         SlmOrchestratorCascadeService orchestrator =
-                new SlmOrchestratorCascadeService(dispatcher, inner);
+                new SlmOrchestratorCascadeService(dispatcher, inner, () -> permissivePolicy());
 
         assertThatThrownBy(() -> orchestrator.run("block-1", 3, "PROMPT", "x"))
                 .isInstanceOf(SlmBlockUnknownException.class)
@@ -144,12 +203,14 @@ class SlmOrchestratorCascadeServiceTest {
                         Map.of("category", "HR"), 0.8f, "ANTHROPIC_HAIKU",
                         "claude-haiku-4-5", 100L, 20L, 1L));
 
+        java.util.function.Supplier<RouterPolicy> policy = () -> permissivePolicy();
         // BERT_CLASSIFIER block: BERT tier tries (fallthrough), then
         // SLM bypasses (BERT_CLASSIFIER not handled by SLM), inner is
         // the mock.
         CascadeService chain = new BertOrchestratorCascadeService(
                 bertDispatcher,
-                new SlmOrchestratorCascadeService(slmDispatcher, new MockCascadeService()));
+                new SlmOrchestratorCascadeService(slmDispatcher, new MockCascadeService(), policy),
+                policy);
 
         CascadeOutcome bertCall = chain.run("block-1", 3, "BERT_CLASSIFIER", "the doc");
         assertThat(bertCall.tierOfDecision()).isEqualTo("MOCK");

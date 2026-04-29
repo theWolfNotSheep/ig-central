@@ -15,6 +15,16 @@ import static org.mockito.Mockito.when;
 
 class BertOrchestratorCascadeServiceTest {
 
+    private static RouterPolicy permissivePolicy() {
+        // Accept threshold 0.0 = every result lands; existing tests
+        // pre-date the policy reading so they were written for the
+        // accept-everything case.
+        return new RouterPolicy(
+                new RouterPolicy.TierPolicy(true, 0.0f),
+                new RouterPolicy.TierPolicy(true, 0.0f),
+                new RouterPolicy.TierPolicy(true, 0.0f));
+    }
+
     @Test
     void bert_classifier_block_returns_BERT_outcome_when_dispatcher_succeeds() {
         BertHttpDispatcher dispatcher = mock(BertHttpDispatcher.class);
@@ -23,7 +33,7 @@ class BertOrchestratorCascadeServiceTest {
         CascadeService inner = new MockCascadeService();
 
         BertOrchestratorCascadeService orchestrator =
-                new BertOrchestratorCascadeService(dispatcher, inner);
+                new BertOrchestratorCascadeService(dispatcher, inner, () -> permissivePolicy());
 
         CascadeOutcome outcome = orchestrator.run("block-1", 3, "BERT_CLASSIFIER", "the doc");
 
@@ -110,6 +120,60 @@ class BertOrchestratorCascadeServiceTest {
 
         verify(inner, times(1)).run("block-1", null, null, "the doc");
         verify(dispatcher, never()).infer(anyString(), any(), any(), anyString());
+    }
+
+    @Test
+    void below_threshold_falls_through_to_inner_with_BELOW_THRESHOLD_code() {
+        BertHttpDispatcher dispatcher = mock(BertHttpDispatcher.class);
+        when(dispatcher.infer(anyString(), any(), any(), anyString()))
+                .thenReturn(new BertInferenceResult("hr_letter", 0.6f, "2026.04.0"));
+        CascadeService inner = mock(CascadeService.class);
+        when(inner.run(anyString(), any(), anyString(), anyString()))
+                .thenReturn(new CascadeOutcome(
+                        "MOCK", 0.5f, java.util.Map.of("category", "MOCK_CATEGORY"),
+                        null, java.util.List.of(), java.util.List.of(),
+                        0L, 0L));
+
+        // Strict policy: BERT must clear 0.92.
+        RouterPolicy strict = new RouterPolicy(
+                new RouterPolicy.TierPolicy(true, 0.92f),
+                new RouterPolicy.TierPolicy(true, 0.0f),
+                new RouterPolicy.TierPolicy(true, 0.0f));
+        BertOrchestratorCascadeService orchestrator =
+                new BertOrchestratorCascadeService(dispatcher, inner, () -> strict);
+
+        CascadeOutcome outcome = orchestrator.run("block-1", 3, "BERT_CLASSIFIER", "the doc");
+
+        // 0.6 below 0.92 → fall through to inner.
+        assertThat(outcome.tierOfDecision()).isEqualTo("MOCK");
+        assertThat(outcome.trace().get(0).tier()).isEqualTo("BERT");
+        assertThat(outcome.trace().get(0).accepted()).isFalse();
+        assertThat(outcome.trace().get(0).errorCode()).isEqualTo("BELOW_THRESHOLD");
+        assertThat(outcome.trace().get(0).confidence()).isEqualTo(0.6f);
+    }
+
+    @Test
+    void disabled_tier_skips_dispatch_entirely() {
+        BertHttpDispatcher dispatcher = mock(BertHttpDispatcher.class);
+        CascadeService inner = mock(CascadeService.class);
+        when(inner.run(anyString(), any(), anyString(), anyString()))
+                .thenReturn(new CascadeOutcome(
+                        "MOCK", 0.5f, java.util.Map.of(),
+                        null, java.util.List.of(), java.util.List.of(), 0L, 0L));
+
+        // BERT disabled.
+        RouterPolicy disabled = new RouterPolicy(
+                new RouterPolicy.TierPolicy(false, 0.0f),
+                new RouterPolicy.TierPolicy(true, 0.0f),
+                new RouterPolicy.TierPolicy(true, 0.0f));
+        BertOrchestratorCascadeService orchestrator =
+                new BertOrchestratorCascadeService(dispatcher, inner, () -> disabled);
+
+        CascadeOutcome outcome = orchestrator.run("block-1", 3, "BERT_CLASSIFIER", "x");
+
+        verify(dispatcher, never()).infer(anyString(), any(), any(), anyString());
+        assertThat(outcome.tierOfDecision()).isEqualTo("MOCK");
+        assertThat(outcome.trace().get(0).errorCode()).isEqualTo("TIER_DISABLED");
     }
 
     @Test
