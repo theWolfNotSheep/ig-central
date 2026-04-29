@@ -313,7 +313,7 @@ Per CSV #2 (DECIDED hybrid).
 ### 1.10 `gls-enforcement-worker` split
 
 - [ ] Split out from monolith into its own deployable.
-- [ ] Same contract surface as Phase 0.5 reference; happy + per-service errors only.
+- [x] Same contract surface as Phase 0.5 reference; happy + per-service errors only. Phase 1.10 PR1: `contracts/enforcement-worker/openapi.yaml` v0.1.0 — `POST /v1/enforce` (sync + async via `Prefer: respond-async`), `GET /v1/jobs/{nodeRunId}`, `GET /v1/capabilities`, `/actuator/health`. `EnforceRequest` / `ClassificationEvent` / `EnforceResponse` / `AppliedSummary` schemas mirror the existing `EnforcementService.enforce` shape; `policyContext` carries the Phase 1.9 `governancePolicyIds` so the worker doesn't re-resolve. Spectral clean.
 - [ ] Rollback: feature flag.
 
 ### 1.11 `gls-indexing-worker` (NEW)
