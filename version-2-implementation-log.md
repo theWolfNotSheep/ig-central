@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | Not started | — | — | |
+| 1   | In progress (1.1 underway) | 2026-04-29 | — | 1.1 — `gls-extraction-archive` module + contract landed (CSV #43 fan-out responsibility decided). Generated stub compiles. Per-format walkers, MinIO source/sink, idempotency, audit, tests, Dockerfile in follow-up PRs that mirror Tika's 0.5.2–0.5.6. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -1573,3 +1573,41 @@ Several PR descriptions in this session said "Hub-side publishers still pending"
 **Decision lock pattern note:** this is the 23rd decision accepted-as-written across the project (per the audit-decisions log entry). Reviewable + reversible per the standard CSV decision rules in `CLAUDE.md`. Phase 1.1 begins proper now that the routing prerequisite is locked.
 
 **Next:** Phase 1.1 sub-services proper — `gls-extraction-archive`, `gls-extraction-ocr`, `gls-extraction-audio`. Each is its own clone of the `gls-extraction-tika` pattern (now codified in `docs/service-template.md`).
+
+## 2026-04-29 — Phase 1.1 — `gls-extraction-archive` module + contract
+
+**Done:** First Phase 1 service ships its contract + Maven module skeleton, cloning the 0.5.1 pattern. `contracts/extraction-archive/openapi.yaml` declares three operations — `POST /v1/extract`, `GET /v1/capabilities`, `GET /actuator/health` — referencing `_shared/` for the error envelope (CSV #17), service JWT (CSV #18), `traceparent` + `Idempotency-Key` headers (CSV #16 / #20), in-flight 409, 429 retry, `Capabilities` (CSV #21). The `gls-extraction-archive` Maven module is wired into the reactor; the BOM gains a fresh `gls.extraction.archive.version` per-deployable property (and renames the existing `gls.extraction.version` → `gls.extraction.tika.version` for parity — both still default to `${gls.version}`). The OpenAPI generator runs against the new spec on build and emits 15 source files (`ExtractionApi`, `MetaApi`, `ExtractRequest`, `ExtractResponse`, `ChildDocument`, `ChildDocumentDocumentRef`, `HealthResponse`, capabilities models) under `target/generated-sources/openapi/`. Reactor still 153 / 153 unit tests green.
+
+**Decisions logged:** CSV #43 (Domain Model, §Plan-1.1) — archive fan-out responsibility + recursion depth: caller owns fan-out (one-level walk per invocation; children returned inline; orchestrator commits child `DocumentModel` rows and publishes per-child `gls.documents.ingested` events). Nested archives re-route through this service on a fresh `nodeRunId` via the normal pipeline path, not a recursion stack inside the service.
+
+**Why CSV #43 lands at "caller owns fan-out":**
+
+- Keeps the archive service stateless (no Mongo writes for child `DocumentModel`s, no Rabbit publish), matching the Tika pattern of *parser returns artifact, orchestrator owns side effects*. Failure semantics are simpler — a failed archive request leaves zero half-created child documents because the per-child `DocumentModel` + ingest event commit happens in `gls-app-assembly`'s existing transaction-safe path, not in this service.
+- Aligns with CSV #42's stance ("api is the single source of truth for the canonical mime") — the same boundary that owns canonical mime owns canonical ingest.
+- One-level-per-invocation bounds time and memory deterministically and gives every nested archive its own `nodeRunId` (so retries, idempotency, and audit work the same as for top-level uploads). Cost is one extra hop per nesting level — cheap relative to the cost of getting fan-out wrong.
+
+**What's wired:**
+
+- `contracts/extraction-archive/openapi.yaml` (new) — three operations. Idempotency on `nodeRunId` per CSV #16; cost-attribution `costUnits` per CSV #22. Idiomatic `ExtractRequest` / `ExtractResponse` shape; `ChildDocument` carries `documentRef` (where the child landed in MinIO), `fileName`, `size`, `detectedMimeType`, optional `archivePath`. 4XX / 5XX catch-alls keep the spec lint-clean while concrete codes (413 / 422 / 429 / 409) document the unhappy paths the implementation must recognise — the 413 envelope's `code` extension identifies *which* configured cap was hit (size / child-count / nesting depth) for zip-bomb defence.
+- `contracts/extraction-archive/VERSION` (new) — `0.1.0`.
+- `contracts/extraction-archive/CHANGELOG.md` (new) — initial entry.
+- `contracts/extraction-archive/README.md` (new) — operation summary + behaviour notes (one-level walk, caller owns fan-out, bounded scope) + cross-references.
+- `backend/gls-extraction-archive/pom.xml` (new) — declares deps on `gls-platform-audit` (audit emission lands with the impl PR), spring-boot-starter-webmvc / actuator / data-mongodb / amqp, Tika 3.1.0 (core + standard parsers — covers ZIP and MBOX out of the box; PST adds `java-libpst` or equivalent in the PST-walker PR), MinIO 8.5.14, jakarta.validation, swagger-annotations 2.2.30, micrometer-tracing-bridge-otel, spring-aop + aspectjweaver. Same generator config as Tika (`interfaceOnly=true`, `useSpringBoot3=true`, `useJakartaEe=true`, `skipDefaultInterface=true`, `openApiNullable=false`, `useTags=true`).
+- `backend/gls-extraction-archive/README.md` (new) — points at the contract; lists what's deferred to follow-up PRs (matches Tika's 0.5.1 README shape).
+- `backend/pom.xml` — added `gls-extraction-archive` to `<modules>`.
+- `backend/bom/pom.xml` — renamed `gls.extraction.version` → `gls.extraction.tika.version`; added `gls.extraction.archive.version`; updated the `gls-extraction-tika` dependency entry's version property; added the `gls-extraction-archive` dependency entry. Both properties default to `${gls.version}` per the policy in `CLAUDE.md` → Independent Deployable Versions.
+
+**Verification:**
+
+- `./mvnw -pl gls-extraction-archive -am compile` clean — generator runs, 15 source files emitted, javac green.
+- `./mvnw test` clean — full reactor builds, 153 / 153 unit tests pass (no archive tests yet — module skeleton).
+
+**Files changed:** 4 new files under `contracts/extraction-archive/`; 2 new files under `backend/gls-extraction-archive/`; 2 modified poms (reactor + BOM); CSV; plan; status board; this log entry.
+
+**Open issues:** None blocking the next archive PR. Tracked elsewhere:
+
+- **PST walker dependency** — Tika's PST coverage is partial; `java-libpst` (or equivalent) is the standard route. Lands with the PST walker implementation, not in the skeleton pom.
+- **Archive caps** — per-archive size, max child count, max nesting depth are runtime-configurable. Defaults set when the implementation lands; configuration source is `application.yaml` per the existing pattern.
+- **Generated-stub commit policy** — the Tika service does not commit `target/generated-sources/openapi/` (CLAUDE.md → API Contracts says generated artefacts go under `contracts/<service>/generated/`). Mirroring Tika's behaviour for now; the policy gap was noted on the Tika 0.5.1 entry and remains a separate workstream.
+
+**Next:** Phase 1.1 (archive) implementation PR — generated server stub + parser dispatch (ZIP via Commons Compress, MBOX via Tika's `MboxParser`) + MinIO source / sink + nodeRunId idempotency. PST walker is its own follow-up. Mirrors Tika's 0.5.2 boundary.

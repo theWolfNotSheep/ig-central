@@ -1,0 +1,323 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Extraction (Archive)
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    Synchronous archive unpacking. Pulls bytes from MinIO, walks the
+    archive one level deep, lands each direct child as a fresh MinIO
+    object, and returns the list of child `documentRef`s. The caller
+    (orchestrator / `gls-app-assembly`) creates the child
+    `DocumentModel` rows and publishes the per-child
+    `gls.documents.ingested` events — recursion through nested archives
+    happens through the normal pipeline routing (a `.zip` containing
+    `.mbox` re-routes the `.mbox` back through this service on its own
+    request, with its own `nodeRunId`). Decision: CSV #43.
+
+    Second per-service spec (Phase 1.1). Clones the pattern set by
+    `contracts/extraction/openapi.yaml` and `docs/service-template.md`.
+
+    **Conventions referenced from `_shared/`:**
+    - Error envelope (RFC 7807 + extensions) — CSV #17.
+    - Service-account JWT — CSV #18.
+    - `traceparent` + `Idempotency-Key` headers — CSV #16 / #20.
+    - `Capabilities` shape — CSV #21.
+
+    **Supported archive types** (initial scope):
+    - `application/zip`
+    - `application/mbox` (RFC 4155)
+    - `application/vnd.ms-outlook` (`.pst`)
+
+servers:
+  - url: http://gls-extraction-archive:8080
+    description: Internal Docker Compose hostname.
+  - url: http://localhost:8090
+    description: Local dev (override).
+
+tags:
+  - name: extraction
+    description: Archive unpack operations.
+  - name: meta
+    description: Capabilities + health.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/extract:
+    post:
+      operationId: extractArchive
+      tags: [extraction]
+      summary: Unpack an archive by MinIO reference.
+      description: |
+        Synchronous endpoint. Caller supplies a `documentRef` pointing at
+        a MinIO object plus the `nodeRunId` that owns this extraction.
+        Service streams the bytes, walks the archive **one level deep**,
+        uploads each direct child to MinIO under the configured outputs
+        bucket, and returns the list of child references plus an
+        archive-level summary.
+
+        Nested archives are not unpacked transitively — each child that
+        is itself an archive is returned as a child `documentRef` with
+        `detectedMimeType` set, and the orchestrator re-routes it
+        through this service on its own request. Per-child idempotency,
+        retries, and audit follow the same path as fresh ingest.
+
+        **Idempotency:** repeated requests with the same `nodeRunId`
+        within the 24h TTL window return the same child list without
+        re-walking the archive (CSV #16).
+
+        **Bounded scope:** the implementation enforces a per-archive
+        size ceiling, max child count, and max recursion depth (the
+        depth check rejects archives nested deeper than configured —
+        zip-bomb defence). Exceeding any cap returns `413` with the
+        cap that was hit in the error envelope's `code` extension.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractRequest'
+      responses:
+        '200':
+          description: Unpack succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExtractResponse'
+        '409':
+          $ref: '../_shared/idempotency.yaml#/components/responses/InFlight'
+        '413':
+          description: |
+            Archive exceeds a configured ceiling — total size, child
+            count, or nesting depth. The `code` extension on the error
+            envelope identifies which cap was hit.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '422':
+          description: Archive is corrupt, password-protected, or unreadable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '../_shared/retry.yaml#/components/responses/TooManyRequests'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Service capability advertisement.
+      description: |
+        Per CSV #21, every service exposes `/v1/capabilities` so callers
+        can negotiate features before calling. Returns the supported
+        archive mime types, the configured caps (max archive size, max
+        children, max nesting depth), and any feature flags set on this
+        build.
+      responses:
+        '200':
+          description: Capabilities for this build.
+          content:
+            application/json:
+              schema:
+                $ref: '../_shared/capabilities.yaml#/components/schemas/Capabilities'
+
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [meta]
+      summary: Liveness + readiness probe.
+      description: |
+        Spring Boot Actuator health endpoint. Liveness reflects process
+        state; readiness checks the archive parsers initialised + MinIO
+        reachable. Detailed component health is exposed under
+        `/actuator/health/{component}` when `show-components: always`.
+      security: []
+      responses:
+        '200':
+          description: Up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Down — readiness component failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    ExtractRequest:
+      type: object
+      required: [documentRef, nodeRunId]
+      additionalProperties: false
+      properties:
+        documentRef:
+          type: object
+          required: [bucket, objectKey]
+          additionalProperties: false
+          description: MinIO pointer to the source archive.
+          properties:
+            bucket:
+              type: string
+              minLength: 1
+              maxLength: 64
+            objectKey:
+              type: string
+              minLength: 1
+              maxLength: 1024
+            etag:
+              type: string
+              description: Optional MinIO ETag — when present, the service verifies it before unpack.
+        nodeRunId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            Pipeline-node run id per architecture §6.11. Idempotency key
+            for repeated unpack of the same node run (CSV #16).
+        mimeType:
+          type: string
+          description: |
+            Caller's hint at the archive mime type. The service
+            re-detects via Tika regardless and uses whichever is more
+            specific.
+        outputBucket:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            Optional override for the MinIO bucket children are landed
+            in. Default is the service-configured outputs bucket.
+
+    ExtractResponse:
+      type: object
+      required:
+        - nodeRunId
+        - detectedMimeType
+        - childCount
+        - children
+        - costUnits
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+          description: Echo of the request's nodeRunId.
+        detectedMimeType:
+          type: string
+          description: Tika's detected mime type for the archive itself. Authoritative.
+          examples:
+            - application/zip
+            - application/mbox
+            - application/vnd.ms-outlook
+        archiveType:
+          type: string
+          enum: [zip, mbox, pst]
+          description: Logical archive family — what walker handled the bytes.
+        childCount:
+          type: integer
+          minimum: 0
+          description: Number of direct children produced.
+        children:
+          type: array
+          maxItems: 10000
+          description: |
+            Direct children landed in MinIO. Order is the archive's
+            natural traversal order (ZIP central directory, mbox stream
+            order, PST folder traversal). Children that are themselves
+            archives are returned as-is; the caller re-routes them
+            through this service on a fresh `nodeRunId`.
+          items:
+            $ref: '#/components/schemas/ChildDocument'
+        durationMs:
+          type: integer
+          minimum: 0
+          description: End-to-end unpack time, milliseconds.
+        costUnits:
+          type: integer
+          minimum: 0
+          description: |
+            Cost-attribution unit per CSV #22. For archive unpack this
+            is the byte-count of source data parsed, divided by 1024.
+            Zero for cache hits (idempotent re-emission).
+
+    ChildDocument:
+      type: object
+      required: [documentRef, fileName, size, detectedMimeType]
+      additionalProperties: false
+      description: |
+        A single child landed by the archive walk. `documentRef` points
+        at the freshly written MinIO object; the caller is expected to
+        promote this into a `DocumentModel` row and publish the
+        corresponding `gls.documents.ingested` event.
+      properties:
+        documentRef:
+          type: object
+          required: [bucket, objectKey]
+          additionalProperties: false
+          properties:
+            bucket:
+              type: string
+              minLength: 1
+              maxLength: 64
+            objectKey:
+              type: string
+              minLength: 1
+              maxLength: 1024
+            etag:
+              type: string
+              description: MinIO ETag of the written child object.
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: |
+            Original entry name as it appeared in the archive.
+            Path separators are preserved as-is (no normalisation) so
+            archive structure is reconstructable.
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Uncompressed byte length of the child.
+        detectedMimeType:
+          type: string
+          description: |
+            Tika-detected mime type of the child's bytes. Used by the
+            orchestrator to route the child to the right extractor on
+            its own ingest event.
+        archivePath:
+          type: string
+          description: |
+            Path within the source archive (for nested-walker context).
+            Example: `attachments/contract.pdf` for an mbox child.
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties: true
+          description: |
+            Per-component health breakdown when `show-components` is set to `always`.
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'
