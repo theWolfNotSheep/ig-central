@@ -2227,3 +2227,44 @@ The previous 355-reactor test suite (per the SLM PR3 entry) is unchanged. Module
 **Phase 1.5 status:** **four of five plan checkboxes ticked.** PR1 (module + contract), PR2 (Anthropic backend), PR3 (cascade wire-in), PR4 (Ollama backend) all green. Remaining: MCP integration; per-category threshold tuning (gated on a representative eval set).
 
 **Next:** MCP integration (cross-cutting — covers BERT, SLM, and the eventual LLM-rework simultaneously); OR `gls-bert-trainer` Python sketch (closes Phase 1.4); OR Phase 1.6 LLM worker rework; OR Dockerfile + Compose rollout for `gls-slm-worker` and `gls-bert-inference`.
+
+## 2026-04-29 — Phase 1.5 PR5 — MCP integration in `gls-slm-worker`
+
+**Done:** SLM worker now passes MCP tool callbacks to its ChatClient calls per CSV #1 ("each worker calls MCP itself"). Spring AI's `spring-ai-starter-mcp-client` auto-configures one `ToolCallbackProvider` bean per declared MCP connection; `SlmBackendConfig` collects all of them via `ObjectProvider<ToolCallbackProvider>.stream()` and hands them to both backends through a new constructor overload. The ChatClient builder calls `.defaultToolCallbacks(...)` only when there's at least one provider — missing MCP server → starter logs WARN, no tools registered, SLM call still works.
+
+Closes the Phase 1.5 "MCP integration" plan checkbox. **Phase 1.5 is now five of five.**
+
+**Decisions logged:** None new. Implements CSV #1 for the SLM tier; same pattern `gls-llm-orchestration`'s `LlmClientFactory` already uses.
+
+**What's wired:**
+
+- **`pom.xml`** — adds `spring-ai-starter-mcp-client` (Spring AI BOM already imported in PR2).
+- **`AnthropicHaikuSlmService`** — new 7-arg constructor takes `ToolCallbackProvider[]`. The 6-arg constructor delegates with an empty array so existing callers + tests keep working unchanged. The `ChatClient.Builder` is now mutated step-by-step: `.defaultToolCallbacks(...)` is called only when the array is non-empty.
+- **`OllamaSlmService`** — same pattern (6-arg + 7-arg constructors).
+- **`SlmBackendConfig`** — new `ObjectProvider<ToolCallbackProvider>` parameter; the factory collects all providers via `.stream().toArray(ToolCallbackProvider[]::new)`, passes the array through, and logs whether MCP is wired (count) or not.
+- **`application.yaml`** — adds `spring.ai.mcp.client.{type, sse.connections.governance.url}` (matches the orchestrator's pattern; default `http://gls-mcp-server:8081`, overridable via `GLS_MCP_SERVER_URL`).
+
+**Why a constructor overload instead of mutating the existing one:**
+
+The existing 6-arg constructors are used by tests + the original `SlmBackendConfig` factory. Adding the `ToolCallbackProvider[]` as a 7th positional arg would break every call site. With the overload, tests + legacy callers go through the 6-arg variant (which forwards to the 7-arg with an empty array); the production factory uses the 7-arg directly. No test churn.
+
+**Tests (2 new in module; 364 reactor total):**
+
+- `AnthropicHaikuSlmServiceTest` (was 9, now 11) — added: constructor accepts a `ToolCallbackProvider[]` (one mock provider) and reports the right `activeBackend`; constructor handles a `null` array (defaults to empty internally).
+- `OllamaSlmServiceTest` unchanged — structural mirroring means the same coverage applies.
+- The actual `defaultToolCallbacks(...)` invocation against a real ChatClient builder + a running MCP server is gated on issue #7.
+
+The previous 362-reactor test suite (per the SLM PR4 entry) is unchanged. Module count goes from 49 → 51.
+
+**Files changed:** 3 modified source files + `pom.xml` + `application.yaml` + 1 modified test file + plan / log = 7 files.
+
+**Open issues / deferred:**
+
+- **Real MCP round-trip integration test** — needs a running `gls-mcp-server`, the SLM worker, plus a configured backend. Same blocker as the rest of the v2 cross-service tests; gated on issue #7.
+- **MCP client error handling** — Spring AI's MCP client surfaces tool failures as `RuntimeException` from the ChatClient. Today caught and wrapped as `UncheckedIOException` → `SLM_DEPENDENCY_UNAVAILABLE` 503. A finer-grained `MCP_TOOL_FAILED` code might be useful for ops dashboards. Deferred.
+- **Per-category MCP scoping** — every classification gets the full MCP toolset today. Per-category restrictions (e.g. PII-scan blocks shouldn't have access to `update_classification` tools) belong with the future `POLICY` block work in Phase 1.8.
+- **MCP integration in BERT-tier** — BERT inference doesn't take a system prompt, so there's nothing for MCP to inject into. The CSV requirement applies to LLM-style workers only.
+
+**Phase 1.5 status:** **five of five plan checkboxes ticked.** PR1 (module + contract), PR2 (Anthropic backend), PR3 (cascade wire-in), PR4 (Ollama backend), PR5 (MCP integration). The remaining "tune slmAcceptThreshold per category" work is gated on the trainer + a representative eval set; not on this phase's critical path.
+
+**Next:** `gls-bert-trainer` Python sketch (closes Phase 1.4); OR Phase 1.6 LLM worker rework (lift `gls-llm-orchestration` into the new contract shape — same shape SLM already exposes); OR Dockerfile + Compose rollout for the new v2 services; OR ROUTER block threshold reading + per-category enable.

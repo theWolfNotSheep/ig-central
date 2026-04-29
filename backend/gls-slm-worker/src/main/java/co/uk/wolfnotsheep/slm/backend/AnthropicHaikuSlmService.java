@@ -10,6 +10,7 @@ import org.springframework.ai.anthropic.AnthropicChatOptions;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.tool.ToolCallbackProvider;
 
 import java.io.UncheckedIOException;
 import java.util.Iterator;
@@ -58,6 +59,7 @@ public class AnthropicHaikuSlmService implements SlmService {
     private final double temperature;
     private final int maxTokens;
     private final ObjectMapper mapper;
+    private final ToolCallbackProvider[] toolCallbackProviders;
 
     public AnthropicHaikuSlmService(
             AnthropicChatModel chatModel,
@@ -66,12 +68,27 @@ public class AnthropicHaikuSlmService implements SlmService {
             double temperature,
             int maxTokens,
             ObjectMapper mapper) {
+        this(chatModel, blockResolver, modelId, temperature, maxTokens, mapper,
+                new ToolCallbackProvider[0]);
+    }
+
+    public AnthropicHaikuSlmService(
+            AnthropicChatModel chatModel,
+            PromptBlockResolver blockResolver,
+            String modelId,
+            double temperature,
+            int maxTokens,
+            ObjectMapper mapper,
+            ToolCallbackProvider[] toolCallbackProviders) {
         this.chatModel = chatModel;
         this.blockResolver = blockResolver;
         this.modelId = modelId == null || modelId.isBlank() ? "claude-haiku-4-5" : modelId;
         this.temperature = temperature;
         this.maxTokens = maxTokens;
         this.mapper = mapper;
+        this.toolCallbackProviders = toolCallbackProviders == null
+                ? new ToolCallbackProvider[0]
+                : toolCallbackProviders;
     }
 
     @Override
@@ -80,7 +97,11 @@ public class AnthropicHaikuSlmService implements SlmService {
         String userMessage = renderUser(prompt.userPromptTemplate(), text);
         String systemMessage = prompt.systemPrompt() == null ? "" : prompt.systemPrompt();
 
-        ChatClient client = ChatClient.builder(chatModel).build();
+        ChatClient.Builder builder = ChatClient.builder(chatModel);
+        if (toolCallbackProviders.length > 0) {
+            builder = builder.defaultToolCallbacks(toolCallbackProviders);
+        }
+        ChatClient client = builder.build();
         ChatResponse response;
         try {
             response = client.prompt()

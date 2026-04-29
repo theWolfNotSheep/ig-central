@@ -2,8 +2,10 @@ package co.uk.wolfnotsheep.slm.backend;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.tool.ToolCallbackProvider;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 /**
  * Unit tests for the deterministic parts of
@@ -110,6 +112,25 @@ class AnthropicHaikuSlmServiceTest {
     @Test
     void activeBackend_is_ANTHROPIC_HAIKU() {
         AnthropicHaikuSlmService svc = underTest();
+        assertThat(svc.activeBackend()).isEqualTo(SlmBackendId.ANTHROPIC_HAIKU);
+    }
+
+    @Test
+    void constructor_accepts_tool_callbacks_for_MCP_integration() {
+        // Sanity check: the seven-arg constructor (with
+        // ToolCallbackProvider[]) wires cleanly. Real tool-invocation
+        // testing requires a running MCP server + Anthropic SDK
+        // round-trip and is gated on issue #7.
+        ToolCallbackProvider[] tools = new ToolCallbackProvider[] { mock(ToolCallbackProvider.class) };
+        AnthropicHaikuSlmService svc = new AnthropicHaikuSlmService(
+                null, null, "claude-haiku-4-5", 0.1, 1024, mapper, tools);
+        assertThat(svc.activeBackend()).isEqualTo(SlmBackendId.ANTHROPIC_HAIKU);
+    }
+
+    @Test
+    void constructor_handles_null_tool_callbacks_array() {
+        AnthropicHaikuSlmService svc = new AnthropicHaikuSlmService(
+                null, null, "claude-haiku-4-5", 0.1, 1024, mapper, null);
         assertThat(svc.activeBackend()).isEqualTo(SlmBackendId.ANTHROPIC_HAIKU);
     }
 }

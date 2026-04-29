@@ -10,6 +10,7 @@ import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.ollama.api.OllamaChatOptions;
+import org.springframework.ai.tool.ToolCallbackProvider;
 
 import java.io.UncheckedIOException;
 import java.util.Iterator;
@@ -42,6 +43,7 @@ public class OllamaSlmService implements SlmService {
     private final double temperature;
     private final int numCtx;
     private final ObjectMapper mapper;
+    private final ToolCallbackProvider[] toolCallbackProviders;
 
     public OllamaSlmService(
             OllamaChatModel chatModel,
@@ -50,12 +52,27 @@ public class OllamaSlmService implements SlmService {
             double temperature,
             int numCtx,
             ObjectMapper mapper) {
+        this(chatModel, blockResolver, modelId, temperature, numCtx, mapper,
+                new ToolCallbackProvider[0]);
+    }
+
+    public OllamaSlmService(
+            OllamaChatModel chatModel,
+            PromptBlockResolver blockResolver,
+            String modelId,
+            double temperature,
+            int numCtx,
+            ObjectMapper mapper,
+            ToolCallbackProvider[] toolCallbackProviders) {
         this.chatModel = chatModel;
         this.blockResolver = blockResolver;
         this.modelId = modelId == null || modelId.isBlank() ? "llama3.1:8b" : modelId;
         this.temperature = temperature;
         this.numCtx = numCtx;
         this.mapper = mapper;
+        this.toolCallbackProviders = toolCallbackProviders == null
+                ? new ToolCallbackProvider[0]
+                : toolCallbackProviders;
     }
 
     @Override
@@ -64,7 +81,11 @@ public class OllamaSlmService implements SlmService {
         String userMessage = renderUser(prompt.userPromptTemplate(), text);
         String systemMessage = prompt.systemPrompt() == null ? "" : prompt.systemPrompt();
 
-        ChatClient client = ChatClient.builder(chatModel).build();
+        ChatClient.Builder builder = ChatClient.builder(chatModel);
+        if (toolCallbackProviders.length > 0) {
+            builder = builder.defaultToolCallbacks(toolCallbackProviders);
+        }
+        ChatClient client = builder.build();
         ChatResponse response;
         try {
             response = client.prompt()
