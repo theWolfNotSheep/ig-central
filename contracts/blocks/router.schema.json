@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gls.local/contracts/blocks/router.schema.json",
+  "title": "ROUTER block content",
+  "description": "Cascade policy carried by a `ROUTER` PipelineBlock. The classifier-router reads this block to decide which tier (BERT → SLM → LLM) handles each request and at what threshold. Per architecture §3 / §8.1 and CSV #2.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tiers"],
+  "properties": {
+    "tiers": {
+      "type": "object",
+      "description": "Per-tier acceptance thresholds + enabled flags. Confidence ≥ accept short-circuits the cascade and the tier becomes `tierOfDecision` on the response.",
+      "additionalProperties": false,
+      "required": ["bert", "slm", "llm"],
+      "properties": {
+        "bert": { "$ref": "#/$defs/TierConfig" },
+        "slm": { "$ref": "#/$defs/TierConfig" },
+        "llm": { "$ref": "#/$defs/TierConfig" }
+      }
+    },
+    "fallback": {
+      "type": "object",
+      "description": "What the router does when every enabled tier falls through (confidence below its accept threshold) or every tier errors out.",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["LLM_FLOOR", "ROUTER_SHORT_CIRCUIT"],
+          "default": "LLM_FLOOR",
+          "description": "`LLM_FLOOR`: return the LLM tier's result even if it didn't clear its threshold (the historical behaviour — LLM is the cascade's floor). `ROUTER_SHORT_CIRCUIT`: return the configured `defaultResult` without invoking any model. Used when every tier is intentionally disabled."
+        },
+        "defaultResult": {
+          "type": "object",
+          "description": "Block-shaped fallback payload returned when `strategy=ROUTER_SHORT_CIRCUIT`. The router doesn't constrain the shape — that belongs to the consuming PROMPT / BERT_CLASSIFIER block.",
+          "additionalProperties": true
+        }
+      }
+    },
+    "categoryOverrides": {
+      "type": "array",
+      "maxItems": 256,
+      "description": "Per-category overrides. Key matches `result.categoryId` produced by an upstream tier; the override applies for the next stage (e.g. PII / PHI / PCI scans + metadata extraction triggered by the same router for that category).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["categoryId", "tiers"],
+        "properties": {
+          "categoryId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "tiers": {
+            "$ref": "#/properties/tiers"
+          }
+        }
+      }
+    },
+    "costBudget": {
+      "type": "object",
+      "description": "Optional cost ceiling per cascade run.",
+      "additionalProperties": false,
+      "properties": {
+        "maxCostUnits": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Stop the cascade if the next tier's cost would push the running total past this. CSV #22 unit (1024 source bytes ≈ 1 unit)."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "TierConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "accept"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "When `false`, the router skips this tier entirely. Used to disable a tier without removing it from the cascade definition."
+        },
+        "accept": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1.01,
+          "description": "Confidence threshold this tier must clear to short-circuit the cascade. Set `> 1.0` (e.g. `1.01`) to functionally disable acceptance — every result falls through to the next tier. Phase 1.2 default seeds use `1.01` everywhere so the cascade is conservative until tuning lands."
+        },
+        "modelRef": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Optional pointer to a model artefact the tier should use. For BERT this is a MinIO path to an ONNX model (per Phase 1.4). For SLM / LLM it's a model id (e.g. `claude-haiku-4-5`)."
+        },
+        "timeout": {
+          "type": "string",
+          "format": "duration",
+          "description": "ISO-8601 duration. Tier-specific dispatch timeout; absent means use the router's global default."
+        }
+      }
+    }
+  }
+}
