@@ -289,10 +289,10 @@ Per CSV #2 (DECIDED hybrid).
 
 ### 1.7 Hub-component-to-taxonomy wiring (CSV #31–34)
 
-- [ ] **PiiTypeDefinition** gains `applicableCategoryIds[]`. Migration: existing definitions → empty array (= global, current behaviour).
-- [ ] **StorageTier** gains `applicableCategoryIds[]`.
-- [ ] **TraitDefinition** gains `applicableCategoryIds[]`.
-- [ ] **SensitivityDefinition** promoted to first-class entity. Migration: existing enum values seed entities with `applicableCategoryIds=[]`.
+- [x] **PiiTypeDefinition** gains `applicableCategoryIds[]`. Migration: existing definitions → empty array (= global, current behaviour). Phase 1.7 PR1 — field added to `gls-governance` model + Mongock `V004_BackfillApplicableCategoryIds` populates `[]` on every pre-1.7 row.
+- [x] **StorageTier** gains `applicableCategoryIds[]`. Phase 1.7 PR1 — same shape; same Mongock backfill.
+- [x] **TraitDefinition** gains `applicableCategoryIds[]`. Phase 1.7 PR1 — same shape; same Mongock backfill.
+- [x] **SensitivityDefinition** promoted to first-class entity. Migration: existing enum values seed entities with `applicableCategoryIds=[]`. Phase 1.7 PR1 — `SensitivityDefinition` was already a `@Document` collection (so the "promote" half is pre-existing); this PR adds `applicableCategoryIds` and the V004 backfill restores the `[]` default for any pre-1.7 row.
 - [ ] Hub `PackImportService` updated to preserve `applicableCategoryIds[]` on import.
 - [ ] Hub `PackImportService` fires `gls.config.changed` events for affected component types (per CSV #30).
 

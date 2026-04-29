@@ -5,6 +5,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -26,6 +27,14 @@ public class PiiTypeDefinition {
     private String category;
     private boolean active;
     private List<String> examples;
+
+    /**
+     * Phase 1.7 / CSV #31. Categories this PII type applies to.
+     * Empty array = global (applies to all categories — the
+     * pre-1.7 default behaviour that the Mongock backfill restores
+     * for existing rows). Non-empty = scoped to those category ids.
+     */
+    private List<String> applicableCategoryIds = new ArrayList<>();
 
     private ApprovalStatus approvalStatus;
     private String submittedBy;
@@ -92,4 +101,9 @@ public class PiiTypeDefinition {
 
     public Instant getImportedAt() { return importedAt; }
     public void setImportedAt(Instant importedAt) { this.importedAt = importedAt; }
+
+    public List<String> getApplicableCategoryIds() { return applicableCategoryIds; }
+    public void setApplicableCategoryIds(List<String> applicableCategoryIds) {
+        this.applicableCategoryIds = applicableCategoryIds == null ? new ArrayList<>() : applicableCategoryIds;
+    }
 }

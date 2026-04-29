@@ -5,6 +5,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -30,6 +31,13 @@ public class TraitDefinition {
 
     private boolean suppressPii; // If true, PII detection results are treated as informational only
     private boolean active;
+
+    /**
+     * Phase 1.7 / CSV #33. Categories this trait applies to. Empty
+     * = global (current behaviour). Non-empty = scoped to those
+     * category ids.
+     */
+    private List<String> applicableCategoryIds = new ArrayList<>();
 
     // Import provenance
     private String sourcePackSlug;
@@ -73,4 +81,9 @@ public class TraitDefinition {
 
     public Instant getImportedAt() { return importedAt; }
     public void setImportedAt(Instant importedAt) { this.importedAt = importedAt; }
+
+    public List<String> getApplicableCategoryIds() { return applicableCategoryIds; }
+    public void setApplicableCategoryIds(List<String> applicableCategoryIds) {
+        this.applicableCategoryIds = applicableCategoryIds == null ? new ArrayList<>() : applicableCategoryIds;
+    }
 }
