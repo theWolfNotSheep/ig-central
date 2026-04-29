@@ -2566,3 +2566,28 @@ The previous 424-reactor test suite is unchanged. LLM worker module: 40 → 51.
 **Phase 1.6 status:** **all four plan checkboxes ticked.** PR1 (contract + skeleton), PR2 (Anthropic + Ollama + MCP), PR3 (cascade router cut-over), PR4 (cost budget + rate limit). Phase 1.6 is complete.
 
 **Next:** Legacy `gls-llm-orchestration` retirement (the Rabbit dispatcher's last consumer is the cascade router which now prefers HTTP — once the new path is verified in non-dev, the legacy module can be deleted); OR Phase 1.7 Hub-component-to-taxonomy wiring; OR Dockerfile + Compose for `gls-llm-worker`; OR per-category overrides + cascadeHints handling.
+
+## 2026-04-29 — Phase 1.6 follow-up — Dockerfile + Compose entry for gls-llm-worker
+
+**Done:** Container image definition + Compose entry for `gls-llm-worker`. Same multi-stage shape as `gls-bert-inference` and `gls-slm-worker`. Closes the deferred operational item from Phase 1.6 PR1.
+
+**Decisions logged:** None new.
+
+**What's wired:**
+
+- **`backend/gls-llm-worker/Dockerfile`** — multi-stage build, exposes 8096, healthcheck `/actuator/health`. Same shape as `gls-bert-inference/Dockerfile` and `gls-slm-worker/Dockerfile`.
+- **`docker-compose.yml`** — adds `gls-llm-worker` service (depends on mongo + mcp-server). Defaults: `GLS_LLM_BACKEND=none` (stub), `GLS_LLM_ANTHROPIC_MODEL=claude-sonnet-4-5`, `GLS_LLM_OLLAMA_MODEL=qwen2.5:32b`. Cost budget + rate limit exposed via `GLS_LLM_BUDGET_DAILY_TOKEN_CAP` / `GLS_LLM_RATE_LIMIT_PERMITS` / `GLS_LLM_RATE_LIMIT_WAIT_MS`. All default 0 (disabled).
+- **Router service env** — adds `GLS_ROUTER_LLM_HTTP_ENABLED` / `GLS_ROUTER_LLM_HTTP_URL` so flipping HTTP dispatch on is an `.env` change. Documents that `LLM_HTTP_ENABLED=true` wins over the legacy `LLM_ENABLED=true` Rabbit path.
+
+**Tests (no new in module; 435 reactor unchanged):**
+
+Compose / Dockerfile validity is exercised by the existing `docker-build` CI job. Local verification: `./mvnw test` still green.
+
+**Files changed:** 1 new Dockerfile + 1 modified `docker-compose.yml` + log = 3 files.
+
+**Open issues / deferred:**
+
+- **`.env.example` documentation** — same as the BERT/SLM Compose-rollout PR's open item. The new `GLS_LLM_*` keys + the cut-over flag should land in `.env.example`. Trivial follow-up.
+- **K8s manifests** — Compose covers dev / single-host. K8s deferred per CSV #38.
+
+**Next:** `.env.example` updates; OR legacy `gls-llm-orchestration` retirement; OR Phase 1.7 Hub-component-to-taxonomy wiring; OR per-category overrides + cascadeHints handling.
