@@ -43,13 +43,25 @@ public class CascadeBackendConfig {
     @Primary
     public CascadeService cascadeService(
             MockCascadeService mock,
-            ObjectProvider<LlmDispatchCascadeService> llmProvider,
+            ObjectProvider<LlmDispatchCascadeService> llmRabbitProvider,
+            ObjectProvider<LlmHttpDispatcher> llmHttpDispatcherProvider,
             ObjectProvider<BertHttpDispatcher> bertDispatcherProvider,
             ObjectProvider<SlmHttpDispatcher> slmDispatcherProvider,
             ObjectProvider<RouterPolicyResolver> policyProvider) {
 
-        LlmDispatchCascadeService llm = llmProvider.getIfAvailable();
-        CascadeService cascade = llm != null ? llm : mock;
+        // LLM tier selection: HTTP wins over Rabbit when both are
+        // wired (the cut-over path); else Rabbit when only it is
+        // wired (legacy path); else mock.
+        LlmHttpDispatcher llmHttpDispatcher = llmHttpDispatcherProvider.getIfAvailable();
+        LlmDispatchCascadeService llmRabbit = llmRabbitProvider.getIfAvailable();
+        CascadeService cascade;
+        if (llmHttpDispatcher != null) {
+            cascade = new LlmHttpCascadeService(llmHttpDispatcher);
+        } else if (llmRabbit != null) {
+            cascade = llmRabbit;
+        } else {
+            cascade = mock;
+        }
 
         // Policy supplier — uses the resolver when wired (production),
         // falls back to RouterPolicy.DEFAULT when not (unit tests that

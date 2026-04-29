@@ -43,4 +43,16 @@ public class RouterHttpConfig {
                 .build();
         return new SlmHttpDispatcher(client, URI.create(url), Duration.ofMillis(timeoutMs), mapper);
     }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "gls.router.cascade.llm-http", name = "enabled", havingValue = "true")
+    public LlmHttpDispatcher llmHttpDispatcher(
+            @Value("${gls.router.cascade.llm-http.url:http://gls-llm-worker:8080}") String url,
+            @Value("${gls.router.cascade.llm-http.timeout-ms:90000}") int timeoutMs,
+            ObjectMapper mapper) {
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+        return new LlmHttpDispatcher(client, URI.create(url), Duration.ofMillis(timeoutMs), mapper);
+    }
 }

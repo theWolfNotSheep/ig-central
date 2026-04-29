@@ -2481,3 +2481,44 @@ The previous 389-reactor test suite (per the LLM PR1 entry) is unchanged. Module
 **Phase 1.6 status:** two of four plan checkboxes ticked (PR1's contract + PR2's logic move). Cost budget + rate limit remain. PR3 cuts the cascade router over to HTTP.
 
 **Next:** Phase 1.6 PR3 (cascade router cut-over: `LlmHttpDispatcher` + `LlmOrchestratorCascadeService` replacing `LlmDispatchCascadeService`); OR cost budget + rate limit; OR per-category overrides; OR Dockerfile / Compose for `gls-llm-worker`.
+
+## 2026-04-29 — Phase 1.6 PR3 — cascade router cut-over (Rabbit → HTTP for LLM)
+
+**Done:** The cascade router can now dispatch the LLM tier via HTTP to `gls-llm-worker` instead of via Rabbit to `gls-llm-orchestration`. Activated by `gls.router.cascade.llm-http.enabled=true`. When both flags are on (HTTP + Rabbit), HTTP wins — that's the cut-over path. The legacy Rabbit dispatcher stays operational behind its own feature flag for rollback.
+
+**Decisions logged:** None new — implements the planned LLM-tier transport swap.
+
+**What's wired:**
+
+- **`LlmHttpDispatcher`** (new) — pure HTTP client to `gls-llm-worker`'s `POST /v1/classify`. Same shape as BERT/SLM equivalents. 200 → `LlmInferenceResult`; 503 → `LlmTierFallthroughException` (default `LLM_NOT_CONFIGURED`); 422 → `LlmBlockUnknownException`; other 4xx/5xx → fallthrough with `errorCode=LLM_HTTP_<status>`; transport / parse → `LLM_TRANSPORT_ERROR` / `LLM_RESPONSE_INVALID`.
+- **`LlmInferenceResult`** (new record) — `(result, confidence, modelId, tokensIn, tokensOut, costUnits)`. No `backend` field (LLM has only one provider conceptually).
+- **`LlmTierFallthroughException`** + **`LlmBlockUnknownException`** — same pattern as BERT/SLM.
+- **`LlmHttpCascadeService`** (new) — implements `CascadeService`. Unlike the BERT/SLM orchestrators, doesn't wrap an inner cascade — LLM IS the cascade's floor. On `LlmTierFallthroughException`, surfaces as `LlmJobFailedException` → `ROUTER_LLM_FAILED` 502 (mirrors the legacy Rabbit failure mapping). `LlmBlockUnknownException` propagates for 422.
+- **`RouterHttpConfig`** — new `@Bean` registers `LlmHttpDispatcher` when `gls.router.cascade.llm-http.enabled=true`.
+- **`CascadeBackendConfig`** — selection logic: HTTP wins over Rabbit when both are wired; else Rabbit; else mock. The HTTP dispatcher → `LlmHttpCascadeService` becomes the cascade's floor.
+- **`RouterExceptionHandler`** — new handler → 422 `ROUTER_LLM_BLOCK_UNKNOWN`.
+- **`ClassifyController.errorCodeFor`** — extended with `ROUTER_LLM_BLOCK_UNKNOWN`.
+- **`application.yaml`** — `gls.router.cascade.llm-http.{enabled, url, timeout-ms}` (defaults: `false`, `http://gls-llm-worker:8080`, 90s).
+
+**Why HTTP wins over Rabbit when both are configured:**
+
+The cut-over should be deterministic — flipping `llm-http.enabled=true` is the explicit "use the new path" signal. Falling back to Rabbit only when HTTP isn't wired keeps existing setups working untouched. The `llm.enabled=true` flag remains the legacy-path activator; `llm-http.enabled=true` is the new-path activator. Both can be on during a redeploy transition. The selection picks the most modern wired option.
+
+**Tests (9 new in module; 424 reactor total):**
+
+- `LlmHttpDispatcherTest` (6) — happy 200; 503 with code; 503 without code; 422 → BlockUnknown; 500 → fallthrough; transport failure → fallthrough.
+- `LlmHttpCascadeServiceTest` (3) — `LLM` outcome on success; fallthrough → `LlmJobFailedException`; `LlmBlockUnknownException` propagates.
+
+Router module: 68 → 77 tests. Reactor: 415 → 424.
+
+**Files changed:** 5 new source files + 4 modified + 2 new test files + log = 12 files.
+
+**Open issues / deferred:**
+
+- **Cost budget gate + rate-limit semaphore** — Phase 1.6 plan checkbox; lives on the worker side. Small follow-up.
+- **Legacy `gls-llm-orchestration` retirement** — once the new path runs in non-dev, the Rabbit dispatcher + legacy module can be removed.
+- **End-to-end integration test** — gated on issue #7.
+
+**Phase 1.6 status:** **three of four plan checkboxes ticked.** PR1 (contract + skeleton), PR2 (real backends + MCP), PR3 (cascade cut-over). Cost budget + rate-limit semaphore is the last item.
+
+**Next:** Cost budget + rate limit on the LLM worker; OR per-category overrides; OR Dockerfile + Compose for `gls-llm-worker`; OR legacy retirement.

@@ -48,6 +48,16 @@ gls:
         enabled: ${GLS_ROUTER_SLM_ENABLED:false}
         url: ${GLS_ROUTER_SLM_URL:http://gls-slm-worker:8080}
         timeout-ms: ${GLS_ROUTER_SLM_TIMEOUT_MS:60000}
+      llm-http:
+        # When true, the LLM tier dispatches via HTTP to
+        # gls-llm-worker (Phase 1.6 PR3). When false, falls back to
+        # the legacy Rabbit-based LlmDispatchCascadeService
+        # (gls.router.cascade.llm.enabled=true). The HTTP path is
+        # the cut-over target — once the new gls-llm-worker is
+        # production-stable, the Rabbit dispatcher gets retired.
+        enabled: ${GLS_ROUTER_LLM_HTTP_ENABLED:false}
+        url: ${GLS_ROUTER_LLM_HTTP_URL:http://gls-llm-worker:8080}
+        timeout-ms: ${GLS_ROUTER_LLM_HTTP_TIMEOUT_MS:90000}
     policy:
       # ROUTER block name to load tier thresholds from. The block is
       # seeded by Mongock V003_DefaultRouterBlock as `default-router`.
