@@ -2591,3 +2591,39 @@ Compose / Dockerfile validity is exercised by the existing `docker-build` CI job
 - **K8s manifests** — Compose covers dev / single-host. K8s deferred per CSV #38.
 
 **Next:** `.env.example` updates; OR legacy `gls-llm-orchestration` retirement; OR Phase 1.7 Hub-component-to-taxonomy wiring; OR per-category overrides + cascadeHints handling.
+
+## 2026-04-29 — Phase 1.7 PR1 — `applicableCategoryIds[]` on hub-component entities
+
+**Done:** Phase 1.7 starts. Four governance entities (`PiiTypeDefinition`, `StorageTier`, `TraitDefinition`, `SensitivityDefinition`) gain an `applicableCategoryIds[]` field per CSV #31–34. Empty array = global (the pre-1.7 default behaviour); non-empty array = scoped to those category ids. A Mongock change unit backfills `[]` on every pre-1.7 row so the new field reads cleanly without nulls.
+
+**Decisions logged:** None new — implements CSV #31 / #32 / #33 / #34 (each entity's per-category scoping).
+
+**What's wired:**
+
+- **`PiiTypeDefinition`** — new `private List<String> applicableCategoryIds = new ArrayList<>();` + getter/setter that null-coalesces to empty.
+- **`StorageTier`** — same pattern.
+- **`TraitDefinition`** — same pattern.
+- **`SensitivityDefinition`** — same pattern. (The "promote to first-class entity" plan checkbox was already substantively done — `SensitivityDefinition` is already a `@Document(collection = "sensitivity_definitions")`. This PR just adds the field.)
+- **`V004_BackfillApplicableCategoryIds`** (new Mongock change unit, order 004) — runs `updateMany({applicableCategoryIds: {$exists: false}}, {$set: {applicableCategoryIds: []}})` against the four collections. Idempotent: re-runs are no-ops since the filter drops to zero matches after the first execution. Operates on raw collections (no Java domain shape imported) — same decoupling pattern as `V003_DefaultRouterBlock`.
+
+**Why default to empty array (= global) instead of "all categories":**
+
+Pre-1.7 the entities were globally applicable (no category scoping existed). Empty array preserves that behaviour exactly: every consumer that reads `applicableCategoryIds` interprets `[]` as "applies everywhere". The alternative — populating each row with the full list of category ids at backfill time — would lock the row's behaviour to the categories that existed *at backfill time*; new categories created after the migration wouldn't auto-apply. Empty-as-global is the right default.
+
+**Why the Mongock backfill instead of letting the field be null:**
+
+Spring Data's `@Field` deserialisation tolerates a missing field (returns `null`), which would null-pointer downstream `applicableCategoryIds.isEmpty()` calls if a consumer forgets a null check. Backfilling once at migration time means downstream code can rely on the field always being a non-null `List<String>` — fewer null checks, fewer surprise NPEs.
+
+**Tests (no new in module; 435 reactor unchanged):**
+
+The migration's correctness is exercised by Mongock's own framework + the existing `V001_MongockSmoke` smoke. Per the existing pattern (V002 / V003 don't have unit tests either), data migrations are integration-tested via running them against a live Mongo and verifying the resulting documents. Local verification: `./mvnw test` still green.
+
+**Files changed:** 4 modified entity files + 1 new Mongock change unit + plan / log = 7 files.
+
+**Open issues / deferred:**
+
+- **Hub `PackImportService` updates** — Phase 1.7 PR2. Preserve `applicableCategoryIds[]` on import (don't reset to empty when re-importing a pack); fire `gls.config.changed` events for the four component types per CSV #30.
+- **Per-request consumption** — the field is populated but no caller consumes it yet. Once Stage ④ scan dispatch (Phase 1.9) lands, the orchestrator filters PII / metadata-extraction blocks to only the ones whose `applicableCategoryIds` matches the just-classified category.
+- **Admin UI category picker** — operators need a UI to set the field. Lands when the admin UI editor for each entity is in shape.
+
+**Next:** Phase 1.7 PR2 (`PackImportService` updates + `gls.config.changed` events); OR `.env.example` updates; OR per-category overrides in the cascade router; OR legacy `gls-llm-orchestration` retirement.

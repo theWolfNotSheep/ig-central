@@ -34,6 +34,13 @@ public class SensitivityDefinition {
     /** IDs of Legislation documents that drive this sensitivity level. */
     private List<String> legislationIds = new ArrayList<>();
 
+    /**
+     * Phase 1.7 / CSV #34. Categories this sensitivity applies to.
+     * Empty = global (current behaviour, since sensitivity was
+     * originally an enum and applied everywhere). Non-empty = scoped.
+     */
+    private List<String> applicableCategoryIds = new ArrayList<>();
+
     // Import provenance
     private String sourcePackSlug;
     private Integer sourcePackVersion;
@@ -79,4 +86,9 @@ public class SensitivityDefinition {
 
     public Instant getImportedAt() { return importedAt; }
     public void setImportedAt(Instant importedAt) { this.importedAt = importedAt; }
+
+    public List<String> getApplicableCategoryIds() { return applicableCategoryIds; }
+    public void setApplicableCategoryIds(List<String> applicableCategoryIds) {
+        this.applicableCategoryIds = applicableCategoryIds == null ? new ArrayList<>() : applicableCategoryIds;
+    }
 }

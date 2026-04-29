@@ -4,6 +4,7 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -25,6 +26,13 @@ public class StorageTier {
     private List<SensitivityLabel> allowedSensitivities;
     private long maxFileSizeBytes;
     private double costPerGbMonth;
+
+    /**
+     * Phase 1.7 / CSV #32. Categories this tier applies to. Empty
+     * = global (current behaviour). Non-empty = scoped to those
+     * category ids.
+     */
+    private List<String> applicableCategoryIds = new ArrayList<>();
 
     // Import provenance
     private String sourcePackSlug;
@@ -71,4 +79,9 @@ public class StorageTier {
 
     public Instant getImportedAt() { return importedAt; }
     public void setImportedAt(Instant importedAt) { this.importedAt = importedAt; }
+
+    public List<String> getApplicableCategoryIds() { return applicableCategoryIds; }
+    public void setApplicableCategoryIds(List<String> applicableCategoryIds) {
+        this.applicableCategoryIds = applicableCategoryIds == null ? new ArrayList<>() : applicableCategoryIds;
+    }
 }
