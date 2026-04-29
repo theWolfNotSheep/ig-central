@@ -300,7 +300,7 @@ Per CSV #2 (DECIDED hybrid).
 
 - [x] `POLICY` added to `BlockType` enum. Phase 1.8 PR1 — `gls-governance.PipelineBlock.BlockType.POLICY`.
 - [x] Block content schema: `requiredScans[]` (refs to `PiiTypeDefinition`s), `metadataSchemaIds[]`, `governancePolicyIds[]`, optional `conditions{}` for per-category overrides. Phase 1.8 PR1 — `contracts/blocks/policy.schema.json` v0.4.0. `requiredScans[]` carries `(scanType, ref, blocking)` per scan; `conditions.bySensitivity[]` for per-sensitivity overrides.
-- [ ] In-engine interpreter (Option A from CSV #37): a node in the visual DAG that runs after classification.
+- [x] In-engine interpreter (Option A from CSV #37): a node in the visual DAG that runs after classification. Phase 1.8 PR2 (`PolicyBlockResolver` + typed `PolicyBlock`) and PR3 (engine wire-in: after `applyClassificationToDocument`, the engine resolves the POLICY block for the just-classified category and stashes effective `policyRequiredScanCount` / `policyMetadataSchemaIds` / `policyGovernancePolicyIds` in shared context). Observe-only this phase; Phase 1.9 (Stage ④) consumes the context to drive the post-classify pipeline. The visual-DAG-node form-factor (separate node type vs. built-in step) is deferred to Phase 1.9 once the dispatch shape is concrete.
 - [ ] Per-category POLICY blocks seeded at install time from the imported governance pack.
 
 ### 1.9 Stage ④ scan dispatch (CSV #36)
