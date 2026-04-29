@@ -2268,3 +2268,35 @@ The previous 362-reactor test suite (per the SLM PR4 entry) is unchanged. Module
 **Phase 1.5 status:** **five of five plan checkboxes ticked.** PR1 (module + contract), PR2 (Anthropic backend), PR3 (cascade wire-in), PR4 (Ollama backend), PR5 (MCP integration). The remaining "tune slmAcceptThreshold per category" work is gated on the trainer + a representative eval set; not on this phase's critical path.
 
 **Next:** `gls-bert-trainer` Python sketch (closes Phase 1.4); OR Phase 1.6 LLM worker rework (lift `gls-llm-orchestration` into the new contract shape — same shape SLM already exposes); OR Dockerfile + Compose rollout for the new v2 services; OR ROUTER block threshold reading + per-category enable.
+
+## 2026-04-29 — Phase 1.4 / 1.5 follow-up — Dockerfile + Compose rollout for new v2 services
+
+**Done:** Container image definitions for `gls-bert-inference` and `gls-slm-worker` plus their Compose entries, so the new tier services can be exercised end-to-end via `docker compose up --build` alongside the existing v2 cascade. The router's Compose entry also gains the cascade tier feature flags (`GLS_ROUTER_BERT_ENABLED`, `GLS_ROUTER_SLM_ENABLED`, `GLS_ROUTER_LLM_ENABLED`) + the worker URLs so flipping a flag is a `.env` change rather than a code change. Closes the deferred operational items from BERT PR1 and SLM PR1's logs.
+
+**Decisions logged:** None new.
+
+**What's wired:**
+
+- **`backend/gls-bert-inference/Dockerfile`** — multi-stage build, same shape as `gls-classifier-router/Dockerfile`. Layered pom-only `dependency:go-offline` for Maven cache hits, then `package -pl gls-bert-inference -am`. Final image: `eclipse-temurin:25-jre` with `curl` for the healthcheck, exposes 8094, healthcheck against `/actuator/health`.
+- **`backend/gls-slm-worker/Dockerfile`** — same shape, exposes 8095.
+- **`docker-compose.yml`** — adds `gls-bert-inference` (depends on minio for the future ONNX fetch path; default `GLS_BERT_ENGINE=none` so it returns `MODEL_NOT_LOADED` 503 until the trainer ships) and `gls-slm-worker` (depends on mongo + mcp-server; default `GLS_SLM_BACKEND=none`). The router service gains four new env vars: `GLS_ROUTER_BERT_ENABLED` / `_URL`, `GLS_ROUTER_SLM_ENABLED` / `_URL`, `GLS_ROUTER_LLM_ENABLED`. Defaults are `false` so existing setups behave identically.
+- **MCP wiring exposed via env** — the SLM worker's `GLS_MCP_SERVER_URL` defaults to `http://mcp-server:8081`, the same hostname the LLM orchestrator uses; both services see the same MCP server.
+
+**Why all four cascade flags default to `false`:**
+
+The cascade router is shared between PROMPT (LLM/SLM) and BERT_CLASSIFIER (BERT) blocks. Flipping any tier on without the matching worker reachable would surface as a 503 fallthrough — recoverable but noisy in logs. Defaulting all flags to `false` keeps the existing single-tier (mock or LLM-direct) behaviour. The `.env.example` (forthcoming follow-up) will document the recommended progression: enable LLM first, then BERT, then SLM, in that order, as each worker is verified.
+
+**Tests (no new in module; 364 reactor unchanged):**
+
+Compose + Dockerfile validity is exercised by the existing `docker-build` CI job (which already builds all services per merge). Local verification: `./mvnw test` still green (364 tests). No new unit tests — Compose / Dockerfile changes are infrastructure, not behaviour.
+
+**Files changed:** 2 new Dockerfiles + 1 modified `docker-compose.yml` + plan / log = 4 files.
+
+**Open issues / deferred:**
+
+- **`.env.example` documentation** — should add the `GLS_ROUTER_*_ENABLED`, `GLS_BERT_*`, `GLS_SLM_*`, `GLS_MCP_SERVER_URL` keys with sensible defaults + comments. Trivial follow-up.
+- **K8s manifests** — Compose covers dev / single-host. K8s deferred per CSV #38; lands once a deployment target is chosen.
+- **Image registry / CI image push** — Compose builds locally on every `up`. A registry push pipeline (GitHub Container Registry?) is on the v2 release-readiness list.
+- **Health probe smoke test** — once both new services start, `curl gls-bert-inference:8094/actuator/health` should return 200 (with `OUT_OF_SERVICE` since no model is loaded) and `curl gls-slm-worker:8095/actuator/health` should return 503. Belongs in the integration suite gated on issue #7.
+
+**Next:** `gls-bert-trainer` Python sketch (closes Phase 1.4 cleanly); OR Phase 1.6 LLM worker rework; OR ROUTER block threshold reading + per-category enable; OR `.env.example` + service-template README updates.
