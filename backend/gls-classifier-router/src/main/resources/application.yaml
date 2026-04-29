@@ -17,6 +17,16 @@ gls:
         # Phase 1.2 PR2 wires this; PR1 was mock-only.
         enabled: ${GLS_ROUTER_LLM_ENABLED:false}
         timeout: ${GLS_ROUTER_LLM_TIMEOUT:PT60S}
+      bert:
+        # When true, BertOrchestratorCascadeService fronts the LLM (or
+        # mock) inner cascade with HTTP calls to gls-bert-inference for
+        # BERT_CLASSIFIER blocks. On 503 MODEL_NOT_LOADED (or any
+        # transport error) the cascade escalates to the inner. When
+        # false (default), the orchestrator is not wired and the router
+        # behaves exactly as before. Phase 1.4 PR2.
+        enabled: ${GLS_ROUTER_BERT_ENABLED:false}
+        url: ${GLS_ROUTER_BERT_URL:http://gls-bert-inference:8080}
+        timeout-ms: ${GLS_ROUTER_BERT_TIMEOUT_MS:30000}
 
 management:
   endpoints:

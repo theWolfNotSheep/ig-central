@@ -1,6 +1,7 @@
 package co.uk.wolfnotsheep.router.web;
 
 import co.uk.wolfnotsheep.router.idempotency.IdempotencyInFlightException;
+import co.uk.wolfnotsheep.router.parse.BertBlockUnknownException;
 import co.uk.wolfnotsheep.router.parse.LlmJobFailedException;
 import co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException;
 import org.slf4j.Logger;
@@ -44,6 +45,12 @@ public class RouterExceptionHandler {
     public ResponseEntity<ProblemDetail> handleLlmFailed(LlmJobFailedException e) {
         return problem(HttpStatus.BAD_GATEWAY, "ROUTER_LLM_FAILED",
                 "LLM tier returned a failure", e.getMessage());
+    }
+
+    @ExceptionHandler(BertBlockUnknownException.class)
+    public ResponseEntity<ProblemDetail> handleBertBlockUnknown(BertBlockUnknownException e) {
+        return problem(HttpStatus.UNPROCESSABLE_ENTITY, "ROUTER_BERT_BLOCK_UNKNOWN",
+                "BERT block coords did not resolve at gls-bert-inference", e.getMessage());
     }
 
     @ExceptionHandler(UncheckedIOException.class)

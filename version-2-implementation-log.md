@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | 1.1 / 1.2 / 1.3 complete; 1.4 first-cut | 2026-04-29 | — | 1.1 extraction triad shipped. 1.2 closed (router mock + LLM dispatch + ROUTER schema + Mongock seed). 1.3 cutover wired behind `pipeline.classifier-router.enabled` (default off; perf-comparison checkbox still gated on Phase 0.11 baseline capture). 1.4 PR1 lands `gls-bert-inference` JVM module + `BERT_CLASSIFIER` block schema (stub backend; trainer + cascade wire-in are follow-up PRs). Phases 1.5+ open. |
+| 1   | 1.1 / 1.2 / 1.3 complete; 1.4 in flight | 2026-04-29 | — | 1.1 extraction triad shipped. 1.2 closed (router mock + LLM dispatch + ROUTER schema + Mongock seed). 1.3 cutover wired behind `pipeline.classifier-router.enabled` (default off; perf-comparison checkbox still gated on Phase 0.11 baseline capture). 1.4 PR1 lands `gls-bert-inference` JVM module + `BERT_CLASSIFIER` block schema (stub backend). 1.4 PR2 wires the BERT cascade tier in `gls-classifier-router` behind `gls.router.cascade.bert.enabled` (default off; falls through to LLM on `MODEL_NOT_LOADED`). Trainer + ROUTER threshold reading + per-category enable remain. Phases 1.5+ open. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -1953,3 +1953,53 @@ The previous 262-reactor test suite (per the Phase 1.3 entry) is unchanged. New 
 - **MinIO classpath but no fetch** — the MinIO client jar is on the module classpath so the real engine can use it directly without another BOM bump. No `MinioClient` bean is wired yet; that arrives with the real engine.
 
 **Next:** `gls-bert-trainer` Python sketch (closes Phase 1.4's first plan checkbox); OR real DJL + ONNX engine + cascade wire-in (closes the remaining 1.4 checkboxes); OR async surface for the router (`Prefer: respond-async` + 202 + `/v1/jobs/{nodeRunId}` mirroring the audio service); OR Phase 1.5 SLM worker.
+
+## 2026-04-29 — Phase 1.4 — BERT cascade tier wire-in (PR2)
+
+**Done:** The cascade router can now dispatch the BERT tier for `BERT_CLASSIFIER` blocks via synchronous HTTP to `gls-bert-inference`. Activated by `gls.router.cascade.bert.enabled=true`; default off so the existing mock / LLM-direct paths stay primary. The orchestrator wraps the existing inner cascade (LLM if enabled, mock otherwise) and falls through to it on `MODEL_NOT_LOADED` (or any transport / 5xx). End-to-end: with `bert.enabled=true` + `llm.enabled=true` + the inference service stub returning 503, every request flows BERT → fallthrough → LLM and the cascade trace records both steps.
+
+**Decisions logged:** None new. Implements CSV #2 (DECIDED hybrid). The fallthrough-on-503 contract is the explicit signal in the bert-inference OpenAPI surface (Phase 1.4 PR1).
+
+**What's wired:**
+
+- **`BertHttpDispatcher`** (new) — pure HTTP client. JDK `HttpClient` against `POST /v1/infer`. Builds the request body inline (`block: {id, version?}`, `text: {text, encoding}`, `nodeRunId?`). Translates responses:
+  - `200` → `BertInferenceResult(label, confidence, modelVersion)`.
+  - `503` → `BertTierFallthroughException` carrying `errorCode` from the response body (defaults to `MODEL_NOT_LOADED` when the body has no `code`).
+  - `422` → `BertBlockUnknownException` — propagates to the controller as 422 `ROUTER_BERT_BLOCK_UNKNOWN`. Configuration error; the LLM tier can't make up for a broken block.
+  - Other 4xx / 5xx → `BertTierFallthroughException` with `errorCode=BERT_HTTP_<status>`. Logged at WARN; cascade escalates rather than surfacing transient BERT issues (LLM is the architectural floor).
+  - Transport `IOException` / `InterruptedException` → `BertTierFallthroughException` with `errorCode=BERT_TRANSPORT_ERROR`.
+  - 200 with missing `label` → `BertTierFallthroughException` with `errorCode=BERT_RESPONSE_INVALID`.
+- **`BertOrchestratorCascadeService`** (new) — implements `CascadeService`. For `blockType=BERT_CLASSIFIER`: dispatches to BERT, returns BERT outcome on success, escalates to inner cascade on fallthrough (with the BERT step prepended to the inner's trace). For other block types (`PROMPT` / null): delegates directly to inner without touching the dispatcher. The `BertBlockUnknownException` is intentionally not caught — it propagates so the controller maps it to 422.
+- **`BertInferenceResult`** (new record) — internal shape carried between dispatcher and orchestrator.
+- **`BertTierFallthroughException`** (new) — internal signal carrying an `errorCode` for the cascade trace step.
+- **`BertBlockUnknownException`** (new) — user-facing 422 mapping.
+- **`RouterHttpConfig`** (new) — `@Configuration @ConditionalOnProperty(... bert.enabled = true)`. Registers a `BertHttpDispatcher` bean (built with a JDK `HttpClient`, the configured base URL, and a per-call timeout). The orchestrator itself is composed in `CascadeBackendConfig` so it can wrap whichever inner cascade is configured.
+- **`CascadeBackendConfig`** (refactored) — `MockCascadeService` is now always registered as a bean (the prior `@ConditionalOnMissingBean(CascadeService.class)` is gone). The active `CascadeService` is composed by a single `@Primary` factory: prefers LLM if available, falls back to mock; wraps with `BertOrchestratorCascadeService` if the BERT dispatcher bean exists. The factory is the new single source of truth for cascade composition.
+- **`RouterExceptionHandler`** — added `@ExceptionHandler(BertBlockUnknownException.class)` → 422 `ROUTER_BERT_BLOCK_UNKNOWN`. Other BERT failures fall through to the inner cascade and never reach this handler.
+- **`ClassifyController.errorCodeFor`** — extended with `ROUTER_BERT_BLOCK_UNKNOWN` so the audit `errorCode` matches the RFC 7807 `code` extension.
+- **`application.yaml`** — three new keys under `gls.router.cascade.bert.*`: `enabled` (`GLS_ROUTER_BERT_ENABLED`, default `false`), `url` (`GLS_ROUTER_BERT_URL`, default `http://gls-bert-inference:8080`), `timeout-ms` (`GLS_ROUTER_BERT_TIMEOUT_MS`, default `30000`).
+
+**Why fall through on 5xx but propagate on 422:**
+
+The BERT contract reserves 503 specifically for `MODEL_NOT_LOADED` — the explicit "I can't decide, escalate" signal. The cascade architecture says the LLM tier is the floor (CSV #1, ROUTER block default `LLM_FLOOR`), so transient BERT failures (5xx, transport) should also escalate rather than surface — the cascade's whole point is resilience. 422 is different: it means the block coords don't resolve, which is a config error the LLM tier can't paper over (the same block id is broken there too). Surface 422 to the caller; mask the rest.
+
+**Tests (12 new in module; 293 reactor total):**
+
+- `BertHttpDispatcherTest` (7) — happy 200 (label / confidence / modelVersion + request body shape sanity checks); 503 with `code=MODEL_NOT_LOADED` (errorCode propagated); 503 with no body (defaults to `MODEL_NOT_LOADED`); 422 → `BertBlockUnknownException`; 500 → fallthrough with `errorCode=BERT_HTTP_500`; transport failure (server not started) → fallthrough with `errorCode=BERT_TRANSPORT_ERROR`; 200 with missing `label` → fallthrough with `errorCode=BERT_RESPONSE_INVALID`. Uses `com.sun.net.httpserver.HttpServer` (JDK builtin) — same harness as the orchestrator's `ClassifierRouterClientTest`.
+- `BertOrchestratorCascadeServiceTest` (5) — happy `BERT_CLASSIFIER` (BERT dispatched, `tierOfDecision=BERT`, single trace step); fallthrough on `MODEL_NOT_LOADED` (BERT trace step prepended to inner's trace; `tierOfDecision` reflects the inner's choice); `PROMPT` block delegates directly to inner without touching the dispatcher; null block type delegates to inner; `BertBlockUnknownException` propagates without falling through (inner not called).
+
+Existing tests unchanged; the `CascadeBackendConfig` refactor doesn't affect existing unit tests because they construct `MockCascadeService` directly rather than going through Spring.
+
+**Files changed:** 5 new source files (`BertHttpDispatcher`, `BertOrchestratorCascadeService`, `BertInferenceResult`, `BertTierFallthroughException`, `BertBlockUnknownException`, `RouterHttpConfig`) + 4 modified (`CascadeBackendConfig`, `RouterExceptionHandler`, `ClassifyController`, `application.yaml`) + 2 new test files + plan / log = 12 files.
+
+**Open issues / deferred:**
+
+- **ROUTER block threshold reading** — the orchestrator doesn't yet read the ROUTER block from Mongo to apply per-tier `accept` thresholds. Today every BERT 200 response is accepted as-is. This is fine for now: the inference service always returns `MODEL_NOT_LOADED` until the trainer publishes an artefact, so the cascade always falls through to LLM. Threshold gating lands with the trainer / real engine PR.
+- **Per-category overrides** — same blocker; the ROUTER block schema's `categoryOverrides` is consumed once thresholds are read.
+- **BERT tier for PROMPT blocks** — BERT can serve PROMPT blocks too, by resolving a `BERT_CLASSIFIER` block (with `labelMapping`) tied to the same taxonomy. Deferred until the BERT_CLASSIFIER block is admin-creatable + the resolution path lands.
+- **Real BERT integration test** — exercising the whole cascade end-to-end requires the JVM bert-inference service running. Belongs with the broader pipeline integration suite blocked on issue #7. Direct unit-level coverage of the dispatcher (HTTP server stub) closes the most error-prone seam.
+- **Cost / latency budgets** — the ROUTER block schema's `costBudget.maxCostUnits` is not enforced yet. Lands when the cascade actually has multiple successful tiers running per request (today only one tier ever returns).
+
+**Phase 1.4 status:** two of five plan checkboxes ticked. `gls-bert-inference` (PR1), `BERT_CLASSIFIER` block schema (PR1), and cascade wire-in (PR2) are now green. Trainer + per-category enable remain.
+
+**Next:** `gls-bert-trainer` Python sketch (closes the trainer checkbox); OR async surface for the router (`Prefer: respond-async` mirroring the audio service); OR Phase 1.5 SLM worker; OR ROUTER block threshold reading + the BERT_CLASSIFIER block resolution path so PROMPT blocks can also exercise BERT.
