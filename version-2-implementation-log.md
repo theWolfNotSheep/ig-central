@@ -2300,3 +2300,53 @@ Compose + Dockerfile validity is exercised by the existing `docker-build` CI job
 - **Health probe smoke test** — once both new services start, `curl gls-bert-inference:8094/actuator/health` should return 200 (with `OUT_OF_SERVICE` since no model is loaded) and `curl gls-slm-worker:8095/actuator/health` should return 503. Belongs in the integration suite gated on issue #7.
 
 **Next:** `gls-bert-trainer` Python sketch (closes Phase 1.4 cleanly); OR Phase 1.6 LLM worker rework; OR ROUTER block threshold reading + per-category enable; OR `.env.example` + service-template README updates.
+
+## 2026-04-29 — Phase 1.4 PR4 — `gls-bert-trainer` Python sketch
+
+**Done:** Closes Phase 1.4 cleanly with the long-deferred Python trainer. New top-level `gls-bert-trainer/` package — pyproject + Dockerfile + tests. Three real components: `data.py` (pymongo reader for `bert_training_samples` with top-N + min-per-class gate), `train.py` (HuggingFace fine-tune of ModernBERT-base + Optimum ONNX export), `publish.py` (minio uploader with versioned object key + metadata sidecar). Skipped (with a WARN log) when fewer than the configured per-class sample minimum exists.
+
+**Decisions logged:** None new — implements CSV #2 (DECIDED hybrid: Python trains, JVM serves) for the trainer half of the split.
+
+**What's wired:**
+
+- **`gls-bert-trainer/`** (new top-level dir, sibling to the legacy `bert-classifier/` v1 inference service that this whole Phase 1.4 work eventually replaces).
+- **`pyproject.toml`** — package definition. Deps: `pymongo`, `minio`, `transformers`, `datasets`, `torch`, `scikit-learn`, `optimum[onnxruntime]`, `accelerate`. Console script: `gls-bert-trainer = "gls_bert_trainer.__main__:main"`.
+- **`config.py`** — env-driven `TrainerConfig` dataclass. `MONGO_URI` is required; everything else has dev-friendly defaults. Tunable: `GLS_BERT_TRAINER_TOP_N` (default 3 — matches CSV #2), `GLS_BERT_TRAINER_MIN_SAMPLES_PER_CLASS` (default 50), `GLS_BERT_TRAINER_BASE_MODEL` (default `answerdotai/ModernBERT-base`), `GLS_BERT_TRAINER_EPOCHS` (default 3), batch size, learning rate, max sequence length.
+- **`data.py`** — `TrainingDataLoader` queries `bert_training_samples` (the collection populated by `BertTrainingDataCollector` in `gls-app-assembly` per the Phase 1.3 entry). Aggregation pipeline groups by `categoryId`, applies the min-per-class gate via `$match`, sorts by count desc, takes top-N. Returns a `LoadedDataset` with the chosen samples plus an ordered `label_mapping` `[(categoryId, categoryName)]` whose index matches the model's softmax-output index. `split_train_test` gives a deterministic 90/10 split sorted by `(label, text)` so eval metrics are comparable across trainer versions.
+- **`train.py`** — `fine_tune_and_export`. Lazy-imports torch / transformers / optimum so the rest of the package stays importable in test environments without ML deps. Standard HF flow: `AutoTokenizer.from_pretrained` → `AutoModelForSequenceClassification.from_pretrained(num_labels=...)` → `Trainer(...).train()` → `Trainer.evaluate()` → `Trainer.save_model()`. ONNX export via `ORTModelForSequenceClassification.from_pretrained(..., export=True)`. Returns a `TrainingResult` carrying the `Path` to the exported `.onnx` file plus eval metrics (accuracy, f1_macro, per-label precision/recall) shaped to slot into the BERT_CLASSIFIER block's `trainingMetadata` field.
+- **`publish.py`** — `ArtefactPublisher` uploads `model.onnx` + `metadata.json` to MinIO under `${bucket}/${trainerVersion}/${modelVersion}/...`. Default `modelVersion` is a UTC timestamp `YYYY.MM.DD-HHMMSS`. Auto-creates the bucket if absent. The metadata sidecar's keys (`trainerVersion`, `modelVersion`, `baseModelId`, `trainedAt`, `datasetSize`, `trainSize`, `testSize`, `labels`, `evaluationMetrics`) match `contracts/blocks/bert-classifier.schema.json`'s `trainingMetadata` field one-to-one so the admin UI's "create block from artefact" path is a copy-paste.
+- **`__main__.py`** — CLI orchestration. Loads config, connects to Mongo, loads samples, bails early (return code 0, WARN log) if there's not enough data. Otherwise: lazy-imports `train`, runs `fine_tune_and_export` against a `TemporaryDirectory`, publishes via `ArtefactPublisher`, logs the resulting MinIO key.
+- **`Dockerfile`** — Python 3.12-slim, multi-stage. Build stage installs the package + heavy ML deps; runtime stage carries forward the installed site-packages + the `gls-bert-trainer` console script. No `EXPOSE` / `HEALTHCHECK` — this is a one-shot job, not a service.
+
+**Why deterministic train/test split instead of `random_state=42`:**
+
+Sorting by `(label, text)` then taking every Nth sample as test guarantees:
+
+1. The same input dataset always produces the same split, regardless of insert order in Mongo.
+2. Adding a new sample shifts at most one boundary — the rest of the split is stable.
+3. No NumPy / random-seed plumbing needed.
+
+The classic `train_test_split(random_state=42)` works too but introduces a numpy dep on the data layer (it's already in train.py for HF, but cleanly separable). Saving the dep and the seed-management complexity is worth a slightly less random split for an MLP-shaped classifier where input order is irrelevant.
+
+**Tests (15 in package; not in the Java reactor):**
+
+- `test_config.py` (3) — minimal-env load (mongo URI from env, defaults for everything else); env overrides; missing MONGO_URI raises.
+- `test_data.py` (7) — happy path (top-N categories returned in count-desc order with the `$match` gate hit); empty dataset (no `find` call); skips rows with blank text / blank label / null fields; `has_enough_samples` passes / fails; `split_train_test` is deterministic; rejects invalid ratios.
+- `test_publish.py` (5) — uploads ONNX + metadata to versioned object keys; creates bucket when absent; default model version is the UTC timestamp; metadata shape matches the BERT_CLASSIFIER block schema's `trainingMetadata` field names; minio mocked.
+
+The actual training run requires a GPU + a populated samples collection (and tens of minutes of compute) — gated on issue #7 with the rest of the v2 integration work.
+
+**Files changed:** ~9 new Python source files + 3 new test files + `pyproject.toml` + `Dockerfile` + `README.md` + `.gitignore` + plan / log = ~17 files.
+
+**Open issues / deferred:**
+
+- **Per-category overrides** — the trainer assumes a single global classifier across the top-N categories. Per-category specialisation (e.g. a separate fine-tune for medical vs. legal docs) lands when org-multi-tenancy is real.
+- **Distillation** — CSV #2 mentions distillation as a Phase 2 follow-up; not in this PR.
+- **Active learning loop** — selecting which samples to label next based on the inference service's low-confidence cases. Phase 2 work; needs the inference + correction-loop UI to be live first.
+- **Real training-run integration test** — needs a GPU + populated `bert_training_samples` + MinIO. Gated on issue #7. The unit tests under `tests/` do cover the surrounding orchestration.
+- **Compose entry** — the trainer is a one-shot k8s Job, not a long-running service, so it doesn't fit the `docker compose up` shape. A `profiles: [trainer]` entry that runs once and exits is a possible follow-up; for now `docker run` is the dev-time invocation.
+- **CI Python build** — the existing CI is Java-only. The Python tests would need a parallel CI workflow (or a hybrid one). For Phase 1.4 close-out, local `pytest` is the verification path.
+
+**Phase 1.4 status:** **all five plan checkboxes ticked.** PR1 (inference module + BERT_CLASSIFIER schema), PR2 (BERT cascade wire-in), PR3 (skipped — block schema landed in PR1), PR4 (this PR — trainer sketch). The "wire bert-inference into the cascade" + "enable BERT for top-1 category" items lit up as flag flips once the trainer's first artefact is published.
+
+**Next:** Phase 1.6 LLM worker rework (lift `gls-llm-orchestration` into the new HTTP contract shape — same shape SLM already exposes); OR ROUTER block threshold reading + per-category enable; OR `.env.example` + service-template README updates; OR `gls-bert-trainer` Compose / k8s Job manifest.
