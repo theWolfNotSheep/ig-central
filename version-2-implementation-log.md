@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | 1.1 / 1.2 / 1.3 complete; 1.4 in flight | 2026-04-29 | — | 1.1 extraction triad shipped. 1.2 closed (router mock + LLM dispatch + ROUTER schema + Mongock seed). 1.3 cutover wired behind `pipeline.classifier-router.enabled` (default off; perf-comparison checkbox still gated on Phase 0.11 baseline capture). 1.4 PR1 lands `gls-bert-inference` JVM module + `BERT_CLASSIFIER` block schema (stub backend). 1.4 PR2 wires the BERT cascade tier in `gls-classifier-router` behind `gls.router.cascade.bert.enabled` (default off; falls through to LLM on `MODEL_NOT_LOADED`). Trainer + ROUTER threshold reading + per-category enable remain. Phases 1.5+ open. |
+| 1   | 1.1 / 1.2 / 1.3 complete; 1.4 / 1.5 in flight | 2026-04-29 | — | 1.1 extraction triad shipped. 1.2 closed. 1.3 cutover wired behind `pipeline.classifier-router.enabled` (default off; perf-comparison gate on Phase 0.11). 1.4 PR1: `gls-bert-inference` + `BERT_CLASSIFIER` schema (stub backend). 1.4 PR2: BERT cascade tier wired in router behind `gls.router.cascade.bert.enabled` (default off, falls through to LLM on `MODEL_NOT_LOADED`). 1.4 PR3: router async surface (`Prefer: respond-async` + `/v1/jobs`). 1.5 PR1: `gls-slm-worker` module + contract (stub `SLM_NOT_CONFIGURED` backend; real Haiku + Ollama backends + cascade wire-in are follow-ups). 1.6 + trainer + per-category enable remain. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -2049,3 +2049,59 @@ Existing tests in the audio / orchestrator modules are unchanged because the con
 - **Cancel async job** — no `DELETE /v1/jobs/{nodeRunId}` yet. Audio doesn't have one either; the LLM-tier timeout already bounds runaway jobs.
 
 **Next:** `gls-bert-trainer` Python sketch (closes the trainer checkbox); OR Phase 1.5 SLM worker; OR ROUTER block threshold reading + per-category enable to start using BERT in production-shape; OR cancel-async / async-status webhook follow-ups (mirroring upcoming audio service work).
+
+## 2026-04-29 — Phase 1.5 PR1 — `gls-slm-worker` module + contract (stub backend)
+
+**Done:** First cut of the SLM (Small Language Model) tier of the cascade. Ships the contract surface, JVM module, async surface (`Prefer: respond-async` + `/v1/jobs`), audit / metrics / health, and a stub `NotConfiguredSlmService` that returns `SLM_NOT_CONFIGURED` 503 until either Anthropic Haiku or Ollama is wired. Same shape as the forthcoming `gls-llm-worker` rework (Phase 1.6), so the cascade router will be able to dispatch to either tier through identical client code.
+
+**Decisions logged:** None new — implements CSV #1 (cascade dispatch is task-agnostic) and CSV #47 (`Prefer: respond-async` semantics).
+
+**Contracts touched:**
+
+- **`contracts/slm-worker/`** (new, v0.1.0) — OpenAPI 3.1.1 declaration. Six operations: `POST /v1/classify` (sync 200 / async 202 with `Prefer: respond-async`), `GET /v1/jobs/{nodeRunId}` (poll), `GET /v1/backends` (roster + readiness), `GET /v1/capabilities`, `GET /actuator/health`. `ClassifyResponse` shape: `{nodeRunId, backend (ANTHROPIC_HAIKU / OLLAMA), modelId, confidence, result, rationale, durationMs, costUnits, tokensIn, tokensOut}`. `JobAccepted` + `JobStatus` schemas mirror the audio service / classifier-router (sync and async share the same idempotency row per CSV #47). Cross-references `_shared/` for the error envelope (CSV #17), service-account JWT (CSV #18), `traceparent` + `Idempotency-Key` + `Prefer` headers (CSV #16 / #20), `TextPayload` (CSV #19), `Capabilities` (CSV #21).
+
+**What's wired:**
+
+- **`gls-slm-worker`** (new module). Spring Boot 4.0.2 webmvc + actuator + data-mongodb; `gls-platform-audit` for Tier 2 audit; standard tracing (Micrometer / OTel). Parent + BOM hooked up (`gls.slm.worker.version` property in `backend/bom/pom.xml` so the deployable's version can diverge per the Independent Deployable Versions policy). `openapi-generator-maven-plugin` consumes `contracts/slm-worker/openapi.yaml` and emits `ClassifyApi` / `JobsApi` / `BackendsApi` / `MetaApi` interfaces under `co.uk.wolfnotsheep.slm.api` + models under `co.uk.wolfnotsheep.slm.model`.
+- **`SlmService` + `NotConfiguredSlmService`** — interface-driven so the real Anthropic Haiku + Ollama backends slot in behind the same shape. The stub throws `SlmNotConfiguredException` (controller maps to 503 `SLM_NOT_CONFIGURED`); reports `activeBackend()=NONE` and `isReady()=false`. `SlmBackendConfig` reads `gls.slm.worker.backend` (`none` default; `anthropic` / `ollama` for the future real impls) and registers the bean via `@ConditionalOnMissingBean(SlmService.class)` so a real backend can swap in cleanly when it ships.
+- **`SlmResult`** record — internal shape returned by the backend: `result` map, `confidence`, `rationale`, `backend` enum, `modelId`, `tokensIn`, `tokensOut`. Translated to the API `ClassifyResponse` in the controller.
+- **`ClassifyController`** — implements `ClassifyApi`. Handles the `Prefer` header for sync/async dispatch; tracks lifecycle in the `JobStore` (ACQUIRED → RUNNING → COMPLETED / FAILED). Errors map to RFC 7807 codes: `SLM_NOT_CONFIGURED`, `SLM_BLOCK_UNKNOWN`, `IDEMPOTENCY_IN_FLIGHT`, `SLM_DEPENDENCY_UNAVAILABLE`, `SLM_UNEXPECTED`. Audit envelope: `SLM_COMPLETED` on success (carries backend, modelId, tokensIn/Out, byteCount, durationMs); `SLM_FAILED` with errorCode + message on failure. `costUnits = (tokensIn + tokensOut + 999) / 1000` rounded up per CSV #22.
+- **`JobController`** — `GET /v1/jobs/{nodeRunId}`. Same poll surface as the audio service / router. Throws `JobNotFoundException` (404 `SLM_JOB_NOT_FOUND`) for unknown ids.
+- **`BackendsController`** — `GET /v1/backends`. First cut reports `active=NONE` plus both planned backends (`ANTHROPIC_HAIKU` and `OLLAMA`) listed unready with notes pointing at the config keys to set. When real backends ship, this controller can ask each in turn for readiness.
+- **`MetaController`** — `GET /v1/capabilities` reports `tiers=["SLM"]` plus the active backend (or empty when unconfigured); `GET /actuator/health` flips between `UP` (200) and `OUT_OF_SERVICE` (503) based on `backend.isReady()`.
+- **`co.uk.wolfnotsheep.slm.jobs`** package — `JobState` / `JobRecord` (`@Document(collection = "slm_jobs")`) / `JobAcquisition` / `JobRepository` / `JobStore`. Lifted from `gls-classifier-router`'s shape verbatim, which itself came from `gls-extraction-audio`. Three v2 services now share the exact same idempotency + async-job state machine, simplifying observability and operational tooling.
+- **`AsyncConfig`** — `slmAsyncExecutor` `ThreadPoolTaskExecutor` (core 4, max 8, queue 32 by default; tunable via `gls.slm.worker.async.*`). `AsyncDispatcher` (`@Component`) re-enters the controller via `ObjectProvider<ClassifyController>` for the `@Async` proxy boundary.
+- **`SlmEvents`** — Tier 2 audit factory. `action="CLASSIFY"` matches the router and the LLM worker so observers can join cascade-internal SLM tier calls into the same trace; `eventType=SLM_*` discriminates SLM-tier emissions from BERT and LLM emissions.
+- **`SlmExceptionHandler`** — RFC 7807 mappings for `SlmNotConfiguredException` (503), `BlockUnknownException` (422), `JobInFlightException` (409), `JobNotFoundException` (404), `UncheckedIOException` (503).
+- **`BackendReadinessHealthIndicator`** — actuator readiness gate. Flips UP only when `backend.isReady()`; carries `backend` detail.
+- **`backend/pom.xml`** — `<module>gls-slm-worker</module>` registered. **`backend/bom/pom.xml`** — `gls.slm.worker.version` property + dependency declaration.
+
+**Why the same `JobStore` shape lifted across three services:**
+
+The audio service, the classifier-router, and now the SLM worker all expose the `Prefer: respond-async` + `/v1/jobs` surface (CSV #47). Sharing the exact `JobRecord` / `JobStore` shape — including the Mongo TTL strategy, the lifecycle transitions, and the deletion model — means observability, operational dashboards, and runbooks are identical across the trio. A future shared library (`gls-platform-jobs` or similar) can lift the duplicated code; for now the duplication is the pragmatic move while the shape is still settling.
+
+**Tests (25 in module; 326 reactor total):**
+
+- `NotConfiguredSlmServiceTest` (2) — `classify` always throws; `activeBackend()=NONE`, `isReady()=false`.
+- `SlmEventsTest` (4) — `SLM_COMPLETED` envelope shape (Tier.SYSTEM, action=`CLASSIFY`, outcome=SUCCESS, metadata fields populated incl. backend / modelId / tokensIn / tokensOut); `SLM_FAILED` envelope; null-safe blockId / blockVersion / modelId omission; eventId is 26-char ULID-shaped.
+- `ClassifyControllerTest` (8) — generated-API conformance; happy path (200 + backend mapping + cache); backend failure path (markFailed + propagate); in-flight 409; cached → cached body; async → 202 + Location + dispatch; async with running row → 202 without re-dispatch; the real `NotConfiguredSlmService` stub round-trip propagates `SlmNotConfiguredException`.
+- `JobControllerTest` (4) — unknown nodeRunId → 404; PENDING / COMPLETED (with deserialised result) / FAILED row shapes.
+- `BackendsControllerTest` (3) — stub reports `active=NONE` with both backends listed unready; active anthropic / active ollama enum translation.
+- `MetaControllerTest` (4) — capabilities with no backend; capabilities with active backend; health 503 when unready; health 200 when ready.
+
+The previous 301-reactor test suite (per the router-async-surface entry) is unchanged. New module adds 25, total 326.
+
+**Files changed:** ~20 new source files in `gls-slm-worker` (controllers, backend, audit, jobs, health, application + yaml) + 6 new test files + 1 `pom.xml` + `backend/pom.xml` (module entry) + `backend/bom/pom.xml` (version property + dependency) + 1 new contract folder (`contracts/slm-worker/` × 4 files) + plan / log = ~36 files.
+
+**Open issues / deferred:**
+
+- **Real Anthropic Haiku backend** — separate PR. Wires the Anthropic SDK behind the `SlmService` interface; reads `ANTHROPIC_API_KEY`; calls `claude-haiku-4-5` (the v2 default per the model family in our infra).
+- **Real Ollama backend** — separate PR. Wires a local Ollama HTTP client; reads `gls.slm.worker.ollama.endpoint` + `gls.slm.worker.ollama.model`.
+- **Cascade wire-in** — `gls-classifier-router` doesn't yet dispatch to `gls-slm-worker`. Mirrors the BERT wire-in pattern: a new `SlmDispatchCascadeService` HTTP client + an extension to the orchestrator that calls SLM between BERT and LLM. Lands once the real backends exist to exercise the path.
+- **MCP integration** — per CSV #1, each worker calls MCP itself. The stub doesn't need MCP; lands with the real backends.
+- **JWT validation** — same blocker as the rest of the v2 services: contract declares `serviceJwt` security but enforcement waits on JWKS infra.
+- **Integration tests** — same blocker as the rest of the v2 services: real cross-service wiring tests gated on issue #7.
+- **Dockerfile + Compose entry** — deferred (BERT PR1 also deferred these; lands as a single follow-up that ships all the v2 service Compose entries together).
+- **Cost budget** — per-day / per-call ceilings deferred to the same PR as the real Anthropic backend.
+
+**Next:** Real Anthropic Haiku backend (closes the SLM provider loop); OR `gls-bert-trainer` Python sketch (closes Phase 1.4's last open checkbox); OR Phase 1.6 LLM worker rework (lift `gls-llm-orchestration` into the new contract shape); OR ROUTER block threshold reading + per-category enable; OR Dockerfile + Compose for `gls-slm-worker` and `gls-bert-inference`.
