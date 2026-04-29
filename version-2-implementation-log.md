@@ -2191,3 +2191,39 @@ Existing tests unchanged; the new orchestrator wraps the inner cascade transpare
 **Phase 1.5 status:** three of five plan checkboxes ticked. PR1 (module + contract), PR2 (Anthropic Haiku backend), PR3 (cascade wire-in) all green. Remaining: Ollama backend; MCP integration; per-category threshold tuning (gated on a representative eval set).
 
 **Next:** Ollama backend (Phase 1.5 PR4); OR MCP integration (cross-cutting — covers BERT, SLM, and the eventual LLM-rework simultaneously); OR `gls-bert-trainer` Python sketch (closes Phase 1.4); OR Phase 1.6 LLM worker rework; OR Dockerfile + Compose rollout for `gls-slm-worker` and `gls-bert-inference`.
+
+## 2026-04-29 — Phase 1.5 PR4 — Ollama SLM backend
+
+**Done:** Local Ollama backend lands behind the `SlmService` interface. Selected when `gls.slm.worker.backend=ollama`. Uses Spring AI's `OllamaChatModel` (same starter `gls-llm-orchestration` already depends on) and dispatches to `llama3.1:8b` by default. Closes the "two backends" Phase 1.5 plan checkbox.
+
+**Decisions logged:** None new.
+
+**What's wired:**
+
+- **`OllamaSlmService`** (new) — implements `SlmService`. Structurally identical to `AnthropicHaikuSlmService`: resolves the PROMPT block via `PromptBlockResolver`, substitutes `{{text}}`, calls `ChatClient.builder(ollamaChatModel).build()` with `OllamaChatOptions(model, temperature, numCtx)`. Same JSON / fence parsing → `(result, confidence, rationale)`. Same `tokensIn` / `tokensOut` extraction from `ChatResponse.getMetadata().getUsage()`. Same `UncheckedIOException` wrapping for SDK runtime exceptions so the cascade router can fall through.
+- **`SlmBackendConfig`** (extended) — `slmService` factory now also handles `backend=ollama`. Reads `gls.slm.worker.ollama.{model, temperature, num-ctx}` (defaults: `llama3.1:8b`, `0.1`, `32768`). `ObjectProvider<OllamaChatModel>.getIfAvailable()` returns null when the Ollama starter hasn't autoconfigured the bean (e.g. `spring.ai.ollama.base-url` not set / not reachable); falls through to the not-configured stub with a WARN log.
+- **`pom.xml`** — adds `spring-ai-starter-model-ollama` (no version since the Spring AI BOM is already imported in PR2).
+- **`application.yaml`** — three new keys under `gls.slm.worker.ollama.*`: `model` (default `llama3.1:8b`), `temperature` (default `0.1`), `num-ctx` (default `32768`).
+
+**Why structurally identical to Anthropic instead of a shared base class:**
+
+The two backends share parsing logic (~80 lines) but differ in the SDK options builder (`AnthropicChatOptions` vs `OllamaChatOptions`) and the metadata fields they surface. Extracting a `BaseSlmService` parent would require either a generic options-builder type-bound (clumsy due to Spring AI's split builder hierarchy) or reflection. The structural duplication is minor; if a third Spring-AI-backed backend ships (e.g. OpenAI), the lift to a base class becomes worthwhile. Until then, two flat 200-line implementations beat one 250-line abstraction.
+
+**Tests (7 new in module; 362 reactor total):**
+
+- `OllamaSlmServiceTest` (7) — `renderUser` substitution + appendage paths; `parseContent` for pure JSON; `parseContent` strips `\`\`\`json\` fences; `parseContent` non-JSON wraps as rationale with default confidence; `activeBackend()` returns `OLLAMA`; blank `modelId` falls back to default `llama3.1:8b` (proves construction succeeds; the default isn't surfaced directly but constructor validation works).
+
+The previous 355-reactor test suite (per the SLM PR3 entry) is unchanged. Module count goes from 42 → 49.
+
+**Files changed:** 1 new source file (`OllamaSlmService`) + 2 modified (`SlmBackendConfig`, `application.yaml`) + `pom.xml` + 1 new test file + plan / log = 6 files.
+
+**Open issues / deferred:**
+
+- **MCP integration** — same blocker as the Anthropic backend (PR2). Lands cross-service in a follow-up.
+- **Per-category threshold tuning** — gated on a representative eval set; same as the cascade wire-in entry.
+- **Real Ollama integration test** — needs a running Ollama instance with `llama3.1:8b` pulled. Same blocker as PR2's Anthropic round-trip; gated on issue #7.
+- **Backend reachability probe** — `OllamaSlmService.isReady()` returns true whenever the bean exists. A real `/api/tags` ping belongs with the broader health follow-up.
+
+**Phase 1.5 status:** **four of five plan checkboxes ticked.** PR1 (module + contract), PR2 (Anthropic backend), PR3 (cascade wire-in), PR4 (Ollama backend) all green. Remaining: MCP integration; per-category threshold tuning (gated on a representative eval set).
+
+**Next:** MCP integration (cross-cutting — covers BERT, SLM, and the eventual LLM-rework simultaneously); OR `gls-bert-trainer` Python sketch (closes Phase 1.4); OR Phase 1.6 LLM worker rework; OR Dockerfile + Compose rollout for `gls-slm-worker` and `gls-bert-inference`.
