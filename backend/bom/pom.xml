@@ -32,6 +32,7 @@
         <gls.hub.version>${gls.version}</gls.hub.version>
         <gls.extraction.tika.version>${gls.version}</gls.extraction.tika.version>
         <gls.extraction.archive.version>${gls.version}</gls.extraction.archive.version>
+        <gls.extraction.ocr.version>${gls.version}</gls.extraction.ocr.version>
     </properties>
 
     <dependencyManagement>
@@ -67,6 +68,12 @@
                 <groupId>co.uk.wolfnotsheep.extraction</groupId>
                 <artifactId>gls-extraction-archive</artifactId>
                 <version>${gls.extraction.archive.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.extraction</groupId>
+                <artifactId>gls-extraction-ocr</artifactId>
+                <version>${gls.extraction.ocr.version}</version>
             </dependency>
 
             <!-- ==================== Governance ==================== -->

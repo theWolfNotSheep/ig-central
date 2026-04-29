@@ -44,6 +44,7 @@
         <module>gls-platform-config</module>
         <module>gls-extraction-tika</module>
         <module>gls-extraction-archive</module>
+        <module>gls-extraction-ocr</module>
     </modules>
 
     <dependencyManagement>
