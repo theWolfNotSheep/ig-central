@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | 1.1 complete; 1.2 complete | 2026-04-29 | — | 1.1 extraction triad shipped. 1.2 closed: cascade router (mock + real LLM dispatch + ROUTER block schema + Mongock seed). Phases 1.3+ open. JWT + integration tests still blocked family-wide. |
+| 1   | 1.1 / 1.2 / 1.3 substantively complete | 2026-04-29 | — | 1.1 extraction triad shipped. 1.2 closed (router mock + LLM dispatch + ROUTER schema + Mongock seed). 1.3 cutover wired behind `pipeline.classifier-router.enabled` (default off; perf-comparison checkbox still gated on Phase 0.11 baseline capture). Phases 1.4+ open. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -1873,3 +1873,37 @@ Real-backend integration tests (Whisper round-trip with an `OPENAI_API_KEY`) are
 - **Per-category override usage** — the router's `MockCascadeService` and `LlmDispatchCascadeService` don't yet read `categoryOverrides`; lands when the BERT / SLM tiers wire in (1.4 / 1.5).
 
 **Next:** Phase 1.3 orchestrator cutover (call `gls-classifier-router` from `PipelineExecutionEngine` behind `pipeline.classifier-router.enabled` feature flag), OR Phase 1.4 BERT inference (cascade's first tier — `gls-bert-inference` JVM service + `gls-bert-trainer` Python sketch), OR async surface for the router (`Prefer: respond-async` + 202 + `/v1/jobs/{nodeRunId}` mirroring the audio service).
+
+## 2026-04-29 — Phase 1.3 — orchestrator cutover behind feature flag
+
+**Done:** The pipeline engine now has a second LLM-dispatch transport: synchronous HTTP through `gls-classifier-router`. Activated by `pipeline.classifier-router.enabled=true`; default off so the legacy async-Rabbit path remains primary. Cutover is rollback-safe — flipping the flag back to `false` is the revert path.
+
+**Decisions logged:** None new. Implements the pre-decided cutover plan.
+
+**What's wired:**
+
+- **`ClassifierRouterClient`** (new) — `@ConditionalOnProperty(name = "pipeline.classifier-router.enabled", havingValue = "true")`. Synchronous JDK `HttpClient` against `POST /v1/classify`. Builds a `ClassifyRequest` body (block coords + inline TextPayload), POSTs with a `traceparent` (random) and `Idempotency-Key` (the engine's existing per-node-run key). Translates the router's `ClassifyResponse` back into an `LlmJobCompletedEvent` shaped exactly like what the existing async path produces — categoryId, category, sensitivity, tags, confidence, requiresHumanReview, retentionScheduleId, applicablePolicyIds, extractedMetadata, customResult. Non-2xx responses surface as `LlmJobCompletedEvent.failure(...)` so `resumePipeline` applies them as classification failures the same way it does for any other LLM-stage error.
+- **`ClassifierRouterException`** (new) — thrown for transport / parse failures; the engine catches and converts to a failure event so the pipeline state machine reaches `CLASSIFICATION_FAILED` instead of throwing out of `walkNodes`.
+- **`PipelineExecutionEngine`** — constructor gains an `ObjectProvider<ClassifierRouterClient>` parameter. The SYNC_LLM case branches on `getIfAvailable()`: when present, calls the router and feeds the synthesised event into `resumePipeline(...)` inline; when absent (default), falls through to the existing `rabbitTemplate.convertAndSend(...)` async publish. The state-machine path is shared — `WAITING` is set for both transports; the async resume consumer simply never receives an event when the inline path runs.
+- **`application.yaml`** — three new keys under `pipeline.classifier-router.*`: `enabled` (`PIPELINE_CLASSIFIER_ROUTER_ENABLED`, default `false`), `url` (`PIPELINE_CLASSIFIER_ROUTER_URL`, default `http://gls-classifier-router:8080`), `timeout-ms` (default `90000`).
+
+**Why route through `resumePipeline` instead of duplicating its logic:**
+
+`resumePipeline` already handles every downstream effect — NodeRun status, shared context update, `applyClassificationToDocument`, `bertTrainingDataCollector.tryCollect`, walking the rest of the graph. Synthesising an `LlmJobCompletedEvent` and calling that one method is a one-line behaviour parity with the async path. The alternative — extracting the apply-result logic into a private method and calling it from both paths — works but doubles the surface area touched in this PR. The synthesise-and-resume approach has been used by other v2 services (the audio service's async `JobStore` does the same).
+
+**Tests (3 new in `gls-app-assembly`; 262 reactor total):**
+
+- `ClassifierRouterClientTest` (3, new) — happy translation (router 200 → `LlmJobCompletedEvent` populated correctly + headers + body shape sanity-checks); 422 → failure event with the body truncated into `error`; empty `result` object → success with nullable fields preserved. Uses `com.sun.net.httpserver.HttpServer` (JDK builtin) so no WireMock / Testcontainers dependency.
+- `PipelineExecutionEngineTest` unchanged — the new constructor parameter is autowired by Mockito's `@InjectMocks` (defaults to null `ObjectProvider`, which the engine handles via `getIfAvailable()` returning null).
+
+**Files changed:** 2 new source files + 1 modified (`PipelineExecutionEngine`) + 1 new test + 1 modified (`application.yaml`) + plan / log = 6 files.
+
+**Open issues:**
+
+- **Performance comparison vs. baseline** — the fourth Phase 1.3 plan checkbox is gated on Phase 0.11 (load driver + first captured baseline). Re-test once the baseline lands; expectation is that sync HTTP through the router adds < 50ms over the async-Rabbit path's median, well within the 10% gate.
+- **Engine-level cutover integration test** — exercising the full SYNC_LLM branch end-to-end requires Mongo + a stubbed router HTTP server in the same JVM. Belongs with the broader pipeline integration suite blocked on issue #7. Direct unit-level coverage of the router client (above) closes the most error-prone seam.
+- **Engine thread-blocking under load** — sync HTTP holds the request thread for up to `pipeline.classifier-router.timeout-ms` (default 90s). Acceptable for the cutover (low document volumes; same total cycle time as the async path's WAITING state). Re-evaluate when scaling beyond Phase 1; a worker-thread or async-router-surface follow-up is the answer.
+
+**Phase 1.3 status:** three of four plan checkboxes ticked. Perf-comparison gate is the only one open and is blocked on out-of-band substrate work (Phase 0.11 baseline capture).
+
+**Next:** Phase 1.4 BERT inference (cascade's first tier — `gls-bert-inference` JVM service + `gls-bert-trainer` Python sketch per CSV #2), OR async surface for the router (`Prefer: respond-async` + 202 + `/v1/jobs/{nodeRunId}` mirroring the audio service), OR Phase 1.5 SLM worker.
