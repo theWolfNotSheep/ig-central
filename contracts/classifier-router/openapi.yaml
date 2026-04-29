@@ -1,0 +1,326 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Classifier Router
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    Task-agnostic cascade router. The `gls-classifier-router` runs a
+    PROMPT block (or BERT_CLASSIFIER block) against an extracted text
+    payload and returns the structured result the block is configured
+    to produce — classification, PII / PHI / PCI scan, metadata
+    extraction, anything that fits the cascade. Different blocks, same
+    cascade.
+
+    Architecture §3 / §8.1 / §11.A. The cascade order is
+    BERT → SLM → LLM, with thresholds + escalation policy carried by
+    the ROUTER block referenced from the request.
+
+    **Phase 1.2 first cut** — this version of the contract is a
+    deterministic mock (controller returns a stubbed result). Real
+    BERT / SLM / LLM dispatch lands in 1.3+. Contract is shipped now
+    so the orchestrator + admin UI can integrate against the surface
+    while the cascade fills in.
+
+    **Conventions referenced from `_shared/`:**
+    - Error envelope (RFC 7807 + extensions) — CSV #17.
+    - Service-account JWT — CSV #18.
+    - `traceparent` + `Idempotency-Key` headers — CSV #16 / #20.
+    - `Capabilities` shape — CSV #21.
+
+servers:
+  - url: http://gls-classifier-router:8080
+    description: Internal Docker Compose hostname.
+  - url: http://localhost:8093
+    description: Local dev (override).
+
+tags:
+  - name: classify
+    description: Cascade dispatch (classification + scans + metadata).
+  - name: meta
+    description: Capabilities + health.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/classify:
+    post:
+      operationId: classify
+      tags: [classify]
+      summary: Run a PROMPT / BERT_CLASSIFIER block against extracted text.
+      description: |
+        Synchronous endpoint per CSV #13 default. Caller supplies the
+        extracted text payload (inline or by reference per CSV #19),
+        the `nodeRunId` the result is keyed on, and the `block`
+        coordinate (id + optional version per CSV #14 — version absent
+        means use the active version).
+
+        The router runs the cascade defined by the ROUTER block
+        referenced on the PROMPT block, returning the first tier whose
+        confidence clears its threshold. Tier-of-decision is reported
+        on the response so observers can see the cascade's behaviour.
+
+        **Phase 1.2 first cut.** This version returns a deterministic
+        mock — `tierOfDecision=LLM`, a fixed result body shaped by the
+        block's expected output type, and `confidence=0.5`. Wired
+        cascade lands as Phases 1.4 (BERT) / 1.5 (SLM) / 1.6 (LLM)
+        complete.
+
+        **Idempotency:** repeated requests with the same `nodeRunId`
+        within the 24h TTL window return the same result without
+        re-running the cascade (CSV #16).
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClassifyRequest'
+      responses:
+        '200':
+          description: Cascade succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClassifyResponse'
+        '409':
+          $ref: '../_shared/idempotency.yaml#/components/responses/InFlight'
+        '422':
+          description: |
+            Block coordinates resolve to nothing (no block with that id
+            / version), or the extracted text is shaped wrong for the
+            block's expected input.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '../_shared/retry.yaml#/components/responses/TooManyRequests'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Service capability advertisement.
+      description: |
+        Per CSV #21. Reports the supported tiers (BERT / SLM / LLM)
+        and which are wired today. In the Phase 1.2 first cut this is
+        purely informational — the cascade is mocked, so all tiers
+        report `enabled: false`.
+      responses:
+        '200':
+          description: Capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: '../_shared/capabilities.yaml#/components/schemas/Capabilities'
+
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [meta]
+      summary: Liveness + readiness probe.
+      security: []
+      responses:
+        '200':
+          description: Up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Down.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    ClassifyRequest:
+      type: object
+      required: [nodeRunId, block, text]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            Pipeline-node run id per architecture §6.11. Idempotency key
+            (CSV #16).
+        block:
+          $ref: '#/components/schemas/BlockRef'
+        text:
+          $ref: '../_shared/text-payload.yaml#/components/schemas/TextPayload'
+        documentRef:
+          type: object
+          description: |
+            Optional MinIO pointer to the source document. Lets the
+            cascade attach lineage on audit events; routing decisions
+            don't need it.
+          required: [bucket, objectKey]
+          additionalProperties: false
+          properties:
+            bucket: { type: string, minLength: 1, maxLength: 64 }
+            objectKey: { type: string, minLength: 1, maxLength: 1024 }
+        documentId:
+          type: string
+          maxLength: 64
+          description: Optional canonical document id; surfaced on Tier 1 audit when present.
+        cascadeHints:
+          type: object
+          additionalProperties: false
+          description: |
+            Optional per-request overrides on the cascade's behaviour.
+            Empty / null falls back to the ROUTER block's defaults.
+          properties:
+            forceTier:
+              type: string
+              enum: [BERT, SLM, LLM]
+              description: Skip earlier tiers and dispatch directly. For dry-runs / debugging.
+            maxCostUnits:
+              type: integer
+              minimum: 0
+              description: Stop the cascade if the next tier's cost would push past this.
+
+    BlockRef:
+      type: object
+      required: [id]
+      additionalProperties: false
+      description: |
+        Coordinates of the PROMPT or BERT_CLASSIFIER block to run
+        against the cascade. Per CSV #14 — `version` absent means use
+        the active version, present means pin.
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Block document id.
+        version:
+          type: integer
+          minimum: 1
+          description: Pinned block version. Omit for active.
+        type:
+          type: string
+          enum: [PROMPT, BERT_CLASSIFIER]
+          description: |
+            Optional declared type. Router validates against the
+            actual block document; mismatch returns 422.
+
+    ClassifyResponse:
+      type: object
+      required: [nodeRunId, tierOfDecision, result, confidence, costUnits]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+          description: Echo of the request's nodeRunId.
+        block:
+          $ref: '#/components/schemas/BlockRef'
+        tierOfDecision:
+          type: string
+          enum: [BERT, SLM, LLM, ROUTER_SHORT_CIRCUIT, MOCK]
+          description: |
+            Which tier of the cascade produced the result.
+            `MOCK` is reported by the Phase 1.2 deterministic stub
+            until BERT / SLM / LLM are wired. `ROUTER_SHORT_CIRCUIT`
+            is reserved for the case where the ROUTER block disables
+            all tiers and the router returns a default block-defined
+            outcome (e.g. classify-as-other).
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        result:
+          type: object
+          additionalProperties: true
+          description: |
+            Block-shaped output. The router doesn't constrain the
+            shape — that's the block's contract. Examples by block
+            type are in the README.
+        rationale:
+          type: string
+          maxLength: 4000
+          description: |
+            LLM-tier free-text rationale when present. BERT tier
+            doesn't produce this; the field is optional.
+        evidence:
+          type: array
+          maxItems: 32
+          items:
+            type: string
+          description: |
+            Block-supplied evidence pointers (text excerpts, page
+            numbers, regex hits). Block-shape; router passes through.
+        cascadeTrace:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/CascadeStep'
+          description: |
+            Per-tier breakdown of what the cascade tried before
+            returning. Empty / single-element when the first tier
+            cleared its threshold.
+        durationMs:
+          type: integer
+          minimum: 0
+        costUnits:
+          type: integer
+          minimum: 0
+          description: |
+            Cost-attribution unit per CSV #22. Sum of cost across the
+            cascade tiers actually invoked.
+
+    CascadeStep:
+      type: object
+      required: [tier, accepted, costUnits]
+      properties:
+        tier:
+          type: string
+          enum: [BERT, SLM, LLM]
+        accepted:
+          type: boolean
+          description: Did this tier's confidence clear its threshold?
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+        durationMs:
+          type: integer
+          minimum: 0
+        costUnits:
+          type: integer
+          minimum: 0
+        errorCode:
+          type: string
+          description: |
+            Set when the tier failed and the cascade fell through to
+            the next; the router doesn't surface the failure as a
+            request-level error unless every tier fails.
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'

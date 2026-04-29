@@ -34,6 +34,7 @@
         <gls.extraction.archive.version>${gls.version}</gls.extraction.archive.version>
         <gls.extraction.ocr.version>${gls.version}</gls.extraction.ocr.version>
         <gls.extraction.audio.version>${gls.version}</gls.extraction.audio.version>
+        <gls.router.version>${gls.version}</gls.router.version>
     </properties>
 
     <dependencyManagement>
@@ -81,6 +82,12 @@
                 <groupId>co.uk.wolfnotsheep.extraction</groupId>
                 <artifactId>gls-extraction-audio</artifactId>
                 <version>${gls.extraction.audio.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.router</groupId>
+                <artifactId>gls-classifier-router</artifactId>
+                <version>${gls.router.version}</version>
             </dependency>
 
             <!-- ==================== Governance ==================== -->

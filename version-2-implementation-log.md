@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | 1.1 substantively complete | 2026-04-29 | — | 1.1 extraction-family triad shipped: `gls-extraction-archive` (ZIP/MBOX/PST), `gls-extraction-ocr` (Tesseract via Tess4J), `gls-extraction-audio` (sync + async, OpenAI Whisper backend per CSV #46/#47). All four services in the family deployable via Compose. JWT and integration tests blocked across the family on JWKS infra + issue #7. Phases 1.2+ are open. |
+| 1   | 1.1 complete; 1.2 underway | 2026-04-29 | — | 1.1 extraction triad complete (archive / OCR / audio). 1.2 first cut: `gls-classifier-router` contract + module + deterministic mock cascade + Dockerfile + Compose entry shipped; ROUTER block schema, admin migration, real LLM-worker dispatch deferred to follow-up PRs. JWT + integration tests still blocked family-wide. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -1772,3 +1772,40 @@ Real-backend integration tests (Whisper round-trip with an `OPENAI_API_KEY`) are
 - **JWT** — blocked on JWKS infra; family-wide.
 
 **Next:** Phase 1.1 substantively complete. Phases 1.2+ (classifier-router, BERT, SLM/LLM rework, hub wiring, …) are open. The handoff's substrate follow-ups (audit-relay live smoke, Rabbit circuit-breaker, load driver, Python audit module sketch) remain valid out-of-band tasks.
+
+## 2026-04-29 — Phase 1.2 — `gls-classifier-router` first cut (contract + module + deterministic mock)
+
+**Done:** First cut of the cascade router lands the contract surface, module skeleton, deterministic mock cascade, idempotency, audit, RFC 7807 mapping, Dockerfile, and Compose entry. The orchestrator and admin UI have a stable target to integrate against while the real BERT / SLM / LLM tiers wire in across Phases 1.4–1.6.
+
+**Decisions logged:** None new — implements existing decisions (CSV #2 cascade hybrid, #14 block-version pinning, #16 idempotency, #17 RFC 7807, #18 service JWT, #19 TextPayload, #21 capabilities).
+
+**What's wired (under `backend/gls-classifier-router/`):**
+
+- **Contract** — `POST /v1/classify`, `GET /v1/capabilities`, `GET /actuator/health`. Request: `{ nodeRunId, block: { id, version?, type? }, text: TextPayload, cascadeHints?, documentRef?, documentId? }`. Response: `{ nodeRunId, block, tierOfDecision, confidence, result, rationale?, evidence?, cascadeTrace?, durationMs, costUnits }` — `tierOfDecision` enum includes `MOCK` for the first cut + `BERT` / `SLM` / `LLM` / `ROUTER_SHORT_CIRCUIT` for the future.
+- **`parse/CascadeService` + `MockCascadeService`** — interface + deterministic stub. Block-shape varies by declared block type (`PROMPT` → `{ category, sensitivity, confidence }`; `BERT_CLASSIFIER` → `{ label, confidence }`). `tierOfDecision="MOCK"` always; trace surfaces `{tier=BERT, accepted=false, errorCode=MOCK_DISABLED}` so observers can see the cascade isn't real yet.
+- **`idempotency/`** — Tika-style store on the `router_idempotency` Mongo collection, 24h TTL.
+- **`audit/RouterEvents`** — Tier 2 `CLASSIFY_COMPLETED` / `CLASSIFY_FAILED`, distinct event-types from the extraction family so audit consumers can filter classify calls separately. `action="CLASSIFY"`.
+- **`web/`** — `ClassifyController` (idempotency → cascade.run → response shape + cache + audit; Jackson DEDUCTION mixin on the request-side text `oneOf`); `RouterExceptionHandler` (`ROUTER_BLOCK_NOT_FOUND` 422, `IDEMPOTENCY_IN_FLIGHT` 409, `ROUTER_DEPENDENCY_UNAVAILABLE` 503); `MetaController` (capabilities advertises `tiers=["MOCK"]`); `ExtractMetrics` with `gls_router_classify_*` series.
+- **`application.yaml`** on port 8093.
+- **`Dockerfile`** — multi-stage, repo-root context.
+- **`docker-compose.yml`** — replaced the long-standing commented placeholder with an active block. Mongo + Rabbit health-gated.
+
+**Tests (19 in module; 253 reactor total):**
+
+- `RouterEventsTest` (4) — envelope shape; null block-coordinate omission; eventId pattern.
+- `MockCascadeServiceTest` (6) — PROMPT shape; BERT_CLASSIFIER shape; null-type defaults to PROMPT shape; empty / null text → 0 byte count; trace advertises tier-disabled status.
+- `MetaControllerTest` (3) — capabilities lists `MOCK` tier; health UP; generated API contract.
+- `ClassifyControllerTest` (6) — happy MOCK; CLASSIFY_COMPLETED audit shape; in-flight short-circuit; cached replay; success caches response; generated API contract.
+
+**Files changed:** 4 contracts files + 1 Dockerfile + 1 README + 1 pom + 1 application.yaml + 14 source files + 4 test files + 4 reactor / BOM / compose / plan / log updates = ~30 files changed.
+
+**Open issues / deferred:**
+
+- **Real LLM-worker dispatch** — bound for the next PR in Phase 1.2. Wiring the existing `gls.pipeline.llm.jobs` queue from inside the router via Rabbit consumer + correlation-id futures, replacing the mock for the LLM tier. Phase 1.4 BERT and 1.5 SLM tiers cascade in front of it after.
+- **`ROUTER` block type** — block content schema lands as a separate PR (block library expansion).
+- **Admin migration** — introduces `ROUTER` block type to the admin UI with `bertAccept=1.01` everywhere (cascade disabled by default until tuning lands).
+- **TextRef fetcher** — first cut returns the same mock regardless of inline-vs-textRef. The follow-up wires a small MinIO fetcher behind `inlineText()`.
+- **JWT** — blocked family-wide on JWKS.
+- **Integration tests** — blocked on issue #7.
+
+**Next:** Real LLM-worker dispatch (Phase 1.2 follow-up) OR move to Phase 1.3 orchestrator cutover OR wire BERT inference (1.4). The router's contract surface is stable so any of these can proceed in parallel.

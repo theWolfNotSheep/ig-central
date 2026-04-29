@@ -46,6 +46,7 @@
         <module>gls-extraction-archive</module>
         <module>gls-extraction-ocr</module>
         <module>gls-extraction-audio</module>
+        <module>gls-classifier-router</module>
     </modules>
 
     <dependencyManagement>
