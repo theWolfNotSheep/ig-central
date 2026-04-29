@@ -253,6 +253,8 @@ public class ClassifyController implements ClassifyApi {
     private static String errorCodeFor(Throwable cause) {
         if (cause instanceof BlockNotFoundException) return "ROUTER_BLOCK_NOT_FOUND";
         if (cause instanceof IdempotencyInFlightException) return "IDEMPOTENCY_IN_FLIGHT";
+        if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException) return "ROUTER_LLM_TIMEOUT";
+        if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmJobFailedException) return "ROUTER_LLM_FAILED";
         if (cause instanceof java.io.UncheckedIOException) return "ROUTER_DEPENDENCY_UNAVAILABLE";
         return "ROUTER_UNEXPECTED";
     }

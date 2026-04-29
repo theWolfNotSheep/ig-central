@@ -1809,3 +1809,40 @@ Real-backend integration tests (Whisper round-trip with an `OPENAI_API_KEY`) are
 - **Integration tests** — blocked on issue #7.
 
 **Next:** Real LLM-worker dispatch (Phase 1.2 follow-up) OR move to Phase 1.3 orchestrator cutover OR wire BERT inference (1.4). The router's contract surface is stable so any of these can proceed in parallel.
+
+## 2026-04-29 — Phase 1.2 — LLM-worker dispatch via Rabbit (PR2)
+
+**Done:** Real LLM tier wired behind the `CascadeService` interface. `LlmDispatchCascadeService` publishes `LlmJobRequest` (wire-compatible with `gls-document`'s `LlmJobRequestedEvent`) to the existing `gls.pipeline` exchange with routing key `pipeline.llm.requested`; listens on a per-replica auto-named queue bound to `pipeline.llm.completed` and correlates responses to dispatching calls by `jobId` via an in-memory `CompletableFuture` map. Mock cascade stays as the default; flip via `gls.router.cascade.llm.enabled=true` to swap in.
+
+**Decisions logged:** None new — implements existing CSV #1 (workers call MCP), CSV #14 (block-version pinning) and CSV #16 (idempotency) by passing `blockId` / `blockVersion` straight through to the LLM worker's existing event shape.
+
+**Per-replica queue rationale:** the existing `gls.pipeline.llm.completed` durable queue is consumed by `PipelineResumeConsumer` (in `gls-app-assembly`). If the router shared that queue, requests would be stolen. Instead each router replica binds its own non-durable, exclusive, auto-named queue to the same routing key on the same exchange — every replica sees every event; replicas drop events whose `jobId` doesn't match a registered future. Mild fanout cost, exact correlation. Same pattern as the v2 stack uses for `gls.config.changed`.
+
+**Sync HTTP behaviour:** the router's `POST /v1/classify` is sync per the current contract; the LLM tier blocks the response thread on the future for up to `gls.router.cascade.llm.timeout` (default 60s). Timeout surfaces as 504 `ROUTER_LLM_TIMEOUT`; an LLM-side failure (`success=false`) surfaces as 502 `ROUTER_LLM_FAILED`. CSV #13 envisages an async path via `Prefer: respond-async` for the LLM tier — that contract surface is its own follow-up PR (parallel to the audio service's pattern).
+
+**What's wired:**
+
+- **`parse/LlmJobRequest`** (new) — record mirroring `co.uk.wolfnotsheep.document.events.LlmJobRequestedEvent` field-for-field. Duplicated in the router so it doesn't pull `gls-document` (and its transitive dependencies) into the router module.
+- **`parse/LlmJobResult`** (new) — record mirroring `LlmJobCompletedEvent`. `@JsonIgnoreProperties(ignoreUnknown = true)` so a future LLM-event addition doesn't break the consumer.
+- **`parse/LlmDispatchCascadeService`** (new) — implements `CascadeService` for the LLM tier. Dispatch: build `LlmJobRequest`, register future, `convertAndSend`, await with timeout. `@RabbitListener` on the per-replica completed queue → `pending.remove(jobId).complete(result)`. Result map keys mirror what the existing LLM worker emits: `categoryId`, `category`, `sensitivity`, `tags`, `confidence`, `requiresHumanReview`, `retentionScheduleId`, `applicablePolicyIds`, `extractedMetadata`, `customResult`. Dispatch failures (broker unreachable) surface as `UncheckedIOException` → 503; timeout → `LlmJobTimeoutException` → 504; LLM-side failure → `LlmJobFailedException` → 502.
+- **`parse/RouterRabbitMqConfig`** (new) — `@ConditionalOnProperty(prefix="gls.router.cascade.llm", name="enabled", havingValue="true")`. Declares the topic exchange (idempotent if already exists), the per-replica `AnonymousQueue`, the binding to `pipeline.llm.completed`, the `LlmDispatchCascadeService` bean (replaces the mock), and a Rabbit listener container factory + Jackson converter that match the LLM worker's wire conventions.
+- **`parse/CascadeBackendConfig`** (new) — `@ConditionalOnMissingBean(CascadeService.class)` → returns `MockCascadeService`. Default fallback for builds where the LLM dispatch is disabled. `MockCascadeService` lost its `@Service` annotation (instantiated by this config now).
+- **`web/RouterExceptionHandler`** — added handlers for the two new exception types: `LlmJobTimeoutException` → 504 `ROUTER_LLM_TIMEOUT`, `LlmJobFailedException` → 502 `ROUTER_LLM_FAILED`.
+- **`web/ClassifyController.errorCodeFor`** — extended with the two new mappings so the audit `errorCode` matches the RFC 7807 `code` extension.
+- **`application.yaml`** — `gls.router.cascade.llm.enabled` (default `false`) + `gls.router.cascade.llm.timeout` (default `PT60S`).
+
+**Tests (25 in module; 259 reactor total):**
+
+- `LlmDispatchCascadeServiceTest` (6, new) — happy LLM round-trip (dispatch + listener feeds completion via `completeTestOnly`); timeout when no completion arrives; LLM-side failure (`success=false`) → `LlmJobFailedException`; `AmqpException` from the broker → `UncheckedIOException`; orphan completion (no registered future) is dropped quietly; null payload is dropped quietly.
+- Existing tests unchanged. `MockCascadeService` still works under direct instantiation — no @Service required.
+
+**Files changed:** 6 new source files + 4 modified (`MockCascadeService`, `RouterExceptionHandler`, `ClassifyController`, `application.yaml`) + 1 new test + plan / log = ~12 files changed.
+
+**Open issues / deferred:**
+
+- **Async surface (`Prefer: respond-async` 202 + `GET /v1/jobs/{nodeRunId}`)** — own contract bump. Mirrors the audio service's async pattern.
+- **MCP integration in the dispatch path** — per CSV #1 each worker calls MCP directly, but for now the router defers to the LLM worker which already does. Future inline calls land when BERT / SLM tiers wire in.
+- **Replay across restarts** — the in-memory `pending` map is lost on restart. Requests in flight at restart time time out client-side; the orchestrator's idempotency cache (or upstream retry) covers re-dispatch. Persistent dispatch tracking lands when the async surface does.
+- **Real LLM-worker integration test** — gated on issue #7 + a Testcontainers Rabbit + a stub LLM consumer; same blocker as the rest.
+
+**Next:** ROUTER block content schema + admin migration (closes Phase 1.2 plan checkboxes), OR Phase 1.3 orchestrator cutover (call `gls-classifier-router` from `PipelineExecutionEngine` behind a feature flag), OR Phase 1.4 BERT inference (cascade's first tier).

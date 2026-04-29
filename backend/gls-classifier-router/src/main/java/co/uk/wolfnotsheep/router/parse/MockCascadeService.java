@@ -1,7 +1,6 @@
 package co.uk.wolfnotsheep.router.parse;
 
 import io.micrometer.observation.annotation.Observed;
-import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -25,7 +24,6 @@ import java.util.Map;
  * <p>{@code tierOfDecision = "MOCK"} on every call so observers can
  * see the cascade isn't real yet.
  */
-@Service
 public class MockCascadeService implements CascadeService {
 
     private static final float MOCK_CONFIDENCE = 0.5f;
