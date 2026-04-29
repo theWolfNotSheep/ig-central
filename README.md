@@ -16,7 +16,7 @@ GLS is an intelligent document governance platform that **automatically classifi
 
 ### AI Classification at Scale
 
-Every document passes through a multi-stage pipeline powered by Claude AI:
+Every document passes through a set of workflow tools:
 
 1. **Text extraction** — content is pulled from PDFs, Word docs, spreadsheets, images (with OCR), and 40+ formats
 2. **PII detection** — credit card numbers, national insurance numbers, emails, phone numbers, and custom patterns are flagged automatically
