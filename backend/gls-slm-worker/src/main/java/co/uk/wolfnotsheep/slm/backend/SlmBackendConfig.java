@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.anthropic.AnthropicChatModel;
 import org.springframework.ai.ollama.OllamaChatModel;
+import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -44,6 +45,7 @@ public class SlmBackendConfig {
             ObjectProvider<AnthropicChatModel> anthropicProvider,
             ObjectProvider<OllamaChatModel> ollamaProvider,
             ObjectProvider<PromptBlockResolver> blockResolverProvider,
+            ObjectProvider<ToolCallbackProvider> toolCallbackProviderProvider,
             @Value("${gls.slm.worker.anthropic.model:claude-haiku-4-5}") String anthropicModel,
             @Value("${gls.slm.worker.anthropic.temperature:0.1}") double anthropicTemperature,
             @Value("${gls.slm.worker.anthropic.max-tokens:1024}") int anthropicMaxTokens,
@@ -54,6 +56,14 @@ public class SlmBackendConfig {
 
         ObjectMapper mapper = mapperProvider.getIfAvailable(ObjectMapper::new);
         PromptBlockResolver resolver = blockResolverProvider.getIfAvailable();
+        ToolCallbackProvider[] toolCallbacks = toolCallbackProviderProvider
+                .stream().toArray(ToolCallbackProvider[]::new);
+        if (toolCallbacks.length > 0) {
+            log.info("slm: MCP integration active — {} ToolCallbackProvider bean(s) injected",
+                    toolCallbacks.length);
+        } else {
+            log.info("slm: no ToolCallbackProvider beans found — MCP tools will not be available to the SLM call. Set spring.ai.mcp.client.sse.connections.<name>.url to enable.");
+        }
 
         if ("anthropic".equalsIgnoreCase(backend)) {
             AnthropicChatModel model = anthropicProvider.getIfAvailable();
@@ -68,7 +78,8 @@ public class SlmBackendConfig {
             log.info("slm: backend=anthropic model={} temperature={} maxTokens={}",
                     anthropicModel, anthropicTemperature, anthropicMaxTokens);
             return new AnthropicHaikuSlmService(
-                    model, resolver, anthropicModel, anthropicTemperature, anthropicMaxTokens, mapper);
+                    model, resolver, anthropicModel, anthropicTemperature, anthropicMaxTokens,
+                    mapper, toolCallbacks);
         }
 
         if ("ollama".equalsIgnoreCase(backend)) {
@@ -84,7 +95,8 @@ public class SlmBackendConfig {
             log.info("slm: backend=ollama model={} temperature={} numCtx={}",
                     ollamaModel, ollamaTemperature, ollamaNumCtx);
             return new OllamaSlmService(
-                    model, resolver, ollamaModel, ollamaTemperature, ollamaNumCtx, mapper);
+                    model, resolver, ollamaModel, ollamaTemperature, ollamaNumCtx, mapper,
+                    toolCallbacks);
         }
 
         log.info("slm: backend=none — every /v1/classify call will return SLM_NOT_CONFIGURED until a backend is wired");

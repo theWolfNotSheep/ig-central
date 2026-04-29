@@ -107,6 +107,22 @@
             <artifactId>spring-ai-starter-model-ollama</artifactId>
         </dependency>
 
+        <!-- ==================== Spring AI MCP Client ==================== -->
+
+        <!--
+          Connects to gls-mcp-server over SSE. The starter auto-
+          configures one or more ToolCallbackProvider beans (one per
+          declared MCP connection) which we hand to the ChatClient
+          builder so the LLM call can invoke MCP tools per CSV #1
+          ("each worker calls MCP itself"). When the MCP server is
+          unreachable the starter logs a warning and registers no
+          tools — the SLM call still works, just without tools.
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-client</artifactId>
+        </dependency>
+
         <!-- ==================== Tracing ==================== -->
 
         <dependency>
