@@ -255,6 +255,7 @@ public class ClassifyController implements ClassifyApi {
         if (cause instanceof IdempotencyInFlightException) return "IDEMPOTENCY_IN_FLIGHT";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException) return "ROUTER_LLM_TIMEOUT";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmJobFailedException) return "ROUTER_LLM_FAILED";
+        if (cause instanceof co.uk.wolfnotsheep.router.parse.BertBlockUnknownException) return "ROUTER_BERT_BLOCK_UNKNOWN";
         if (cause instanceof java.io.UncheckedIOException) return "ROUTER_DEPENDENCY_UNAVAILABLE";
         return "ROUTER_UNEXPECTED";
     }
