@@ -38,6 +38,16 @@ gls:
         enabled: ${GLS_ROUTER_BERT_ENABLED:false}
         url: ${GLS_ROUTER_BERT_URL:http://gls-bert-inference:8080}
         timeout-ms: ${GLS_ROUTER_BERT_TIMEOUT_MS:30000}
+      slm:
+        # When true, SlmOrchestratorCascadeService fronts the LLM (or
+        # mock) inner cascade with HTTP calls to gls-slm-worker for
+        # PROMPT blocks. On 503 SLM_NOT_CONFIGURED (or any transport
+        # error) the cascade escalates to the inner. Composes with
+        # the BERT tier — BERT runs outermost, then SLM, then the
+        # inner cascade. Phase 1.5 PR3.
+        enabled: ${GLS_ROUTER_SLM_ENABLED:false}
+        url: ${GLS_ROUTER_SLM_URL:http://gls-slm-worker:8080}
+        timeout-ms: ${GLS_ROUTER_SLM_TIMEOUT_MS:60000}
 
 management:
   endpoints:

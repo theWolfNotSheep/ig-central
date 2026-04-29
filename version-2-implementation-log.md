@@ -2149,3 +2149,45 @@ The previous 326-reactor test suite (per the SLM PR1 entry) is unchanged. Module
 - **`AnthropicHaikuSlmService.isReady()`** — currently returns `true` whenever the bean exists. A real ping-style probe (e.g. a `/v1/messages` HEAD call) belongs with the broader health follow-up.
 
 **Next:** Cascade wire-in (mirrors the BERT 1.4 PR2 pattern: `SlmDispatchCascadeService` in `gls-classifier-router` + orchestrator branch); OR Ollama backend (Phase 1.5 PR3); OR MCP integration; OR `gls-bert-trainer` Python sketch; OR Phase 1.6 LLM worker rework.
+
+## 2026-04-29 — Phase 1.5 PR3 — SLM cascade wire-in
+
+**Done:** The cascade router can now dispatch the SLM tier for `PROMPT` blocks via synchronous HTTP to `gls-slm-worker`. Activated by `gls.router.cascade.slm.enabled=true`; default off. Composes with the BERT tier — the production cascade is now BERT → SLM → inner (LLM/mock). End-to-end: with all three flags on + the SLM worker stub returning `SLM_NOT_CONFIGURED`, every `PROMPT` request flows BERT (bypass for PROMPT) → SLM (fallthrough) → LLM and the cascade trace records each step.
+
+**Decisions logged:** None new. Implements CSV #1 (cascade dispatch) for the SLM tier specifically. The chain-of-responsibility composition pattern in `CascadeBackendConfig` extends naturally to additional tiers.
+
+**What's wired:**
+
+- **`SlmHttpDispatcher`** (new) — pure HTTP client. JDK `HttpClient` against `POST /v1/classify`. Translates responses: 200 → `SlmInferenceResult`; 503 → `SlmTierFallthroughException` with `errorCode` from the body (default `SLM_NOT_CONFIGURED`); 422 → `SlmBlockUnknownException`; other 4xx/5xx → fallthrough with `errorCode=SLM_HTTP_<status>`; transport / parse failures → fallthrough with `SLM_TRANSPORT_ERROR` / `SLM_RESPONSE_INVALID`.
+- **`SlmInferenceResult`** (new record) — internal shape carrying `result` map, `confidence`, `backend`, `modelId`, `tokensIn`, `tokensOut`, `costUnits`.
+- **`SlmTierFallthroughException`** (new) + **`SlmBlockUnknownException`** (new) — same pattern as the BERT equivalents.
+- **`SlmOrchestratorCascadeService`** (new) — implements `CascadeService`. For `blockType=PROMPT`: dispatches to SLM, returns SLM outcome on success (`tierOfDecision=SLM`), escalates to inner on fallthrough (with the SLM trace step prepended). For other block types (`BERT_CLASSIFIER`, null): delegates directly to inner. `SlmBlockUnknownException` propagates so the controller maps it to 422.
+- **`RouterHttpConfig`** (refactored) — class-level `@ConditionalOnProperty` removed; each `@Bean` carries its own. Now registers `BertHttpDispatcher` and `SlmHttpDispatcher` independently.
+- **`CascadeBackendConfig`** (extended) — `cascadeService()` factory now composes BERT → SLM → inner using `ObjectProvider.getIfAvailable()` for each tier's dispatcher. Composition order is explicit (BERT outermost), so a request flowing through BERT → SLM → LLM gets each tier's trace step in order.
+- **`RouterExceptionHandler`** — new `@ExceptionHandler(SlmBlockUnknownException.class)` → 422 `ROUTER_SLM_BLOCK_UNKNOWN`.
+- **`ClassifyController.errorCodeFor`** — extended with `ROUTER_SLM_BLOCK_UNKNOWN`.
+- **`application.yaml`** — three new keys under `gls.router.cascade.slm.*`: `enabled` (default `false`), `url` (default `http://gls-slm-worker:8080`), `timeout-ms` (default `60000` — higher than BERT's 30s since SLM hits a real LLM).
+
+**Why a separate orchestrator instead of extending the BERT one:**
+
+Each orchestrator targets a single block type — BERT for `BERT_CLASSIFIER`, SLM for `PROMPT`. Keeping them as separate `CascadeService` implementations that wrap an inner means each tier is independently testable + flaggable, the composition order is explicit at wiring time, and adding another tier later (e.g. a regex-only tier before SLM) is purely additive. A single mega-orchestrator would tangle the conditions and turn block-type routing into a switch statement. The chain-of-responsibility shape scales linearly.
+
+**Tests (12 new in module; 355 reactor total):**
+
+- `SlmHttpDispatcherTest` (6) — happy 200 (full result shape + request body sanity); 503 with `code=SLM_NOT_CONFIGURED`; 503 with no body (defaults to `SLM_NOT_CONFIGURED`); 422 → `SlmBlockUnknownException`; 500 → fallthrough with `errorCode=SLM_HTTP_500`; transport failure → fallthrough with `SLM_TRANSPORT_ERROR`.
+- `SlmOrchestratorCascadeServiceTest` (6) — happy `PROMPT` (SLM dispatched); fallthrough on `SLM_NOT_CONFIGURED` (SLM trace step prepended); `BERT_CLASSIFIER` delegates directly to inner; null block type delegates to inner; `SlmBlockUnknownException` propagates without falling through; **composition test** — chain `BertOrchestrator(SlmOrchestrator(MockCascade))` proves `BERT_CLASSIFIER` flows BERT-bypass → SLM-bypass → mock, while `PROMPT` flows BERT-bypass → SLM-serves.
+
+Existing tests unchanged; the new orchestrator wraps the inner cascade transparently.
+
+**Files changed:** 5 new source files + 4 modified + 2 new test files + plan / log = 13 files.
+
+**Open issues / deferred:**
+
+- **MCP integration** — same blocker as the SLM PR2 entry. The cascade dispatch path is a natural place to inject MCP context; lands as a follow-up alongside the orchestrator-level MCP wiring (cross-cuts BERT, SLM, and the eventual LLM rework).
+- **ROUTER block threshold reading** — neither orchestrator reads the ROUTER block from Mongo to apply per-tier `accept` thresholds. Today every BERT 200 / SLM 200 response is accepted as-is. Threshold gating lands once a representative training corpus exists.
+- **Real cross-service integration test** — full BERT → SLM → LLM cascade end-to-end requires Testcontainers + all four services running. Belongs with the broader pipeline integration suite blocked on issue #7.
+- **Cost / latency budgets** — `costBudget.maxCostUnits` from the ROUTER block schema not yet enforced.
+
+**Phase 1.5 status:** three of five plan checkboxes ticked. PR1 (module + contract), PR2 (Anthropic Haiku backend), PR3 (cascade wire-in) all green. Remaining: Ollama backend; MCP integration; per-category threshold tuning (gated on a representative eval set).
+
+**Next:** Ollama backend (Phase 1.5 PR4); OR MCP integration (cross-cutting — covers BERT, SLM, and the eventual LLM-rework simultaneously); OR `gls-bert-trainer` Python sketch (closes Phase 1.4); OR Phase 1.6 LLM worker rework; OR Dockerfile + Compose rollout for `gls-slm-worker` and `gls-bert-inference`.

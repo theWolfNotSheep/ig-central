@@ -11,20 +11,17 @@ import java.net.http.HttpClient;
 import java.time.Duration;
 
 /**
- * HTTP wiring for the BERT cascade tier. Activated when
- * {@code gls.router.cascade.bert.enabled=true}; without that flag the
- * orchestrator is not constructed and the router behaves exactly as
- * before (mock or LLM-direct).
- *
- * <p>The orchestrator itself is composed in
- * {@link CascadeBackendConfig#cascadeService} so it can wrap whichever
- * inner cascade is configured (LLM if enabled, mock otherwise).
+ * HTTP wiring for the cascade tiers that talk to other v2 workers
+ * over HTTP. Each tier is independently activated by its own feature
+ * flag — without the flag, the dispatcher bean isn't constructed and
+ * {@link CascadeBackendConfig} composes the cascade without that
+ * tier.
  */
 @Configuration
-@ConditionalOnProperty(prefix = "gls.router.cascade.bert", name = "enabled", havingValue = "true")
 public class RouterHttpConfig {
 
     @Bean
+    @ConditionalOnProperty(prefix = "gls.router.cascade.bert", name = "enabled", havingValue = "true")
     public BertHttpDispatcher bertHttpDispatcher(
             @Value("${gls.router.cascade.bert.url:http://gls-bert-inference:8080}") String url,
             @Value("${gls.router.cascade.bert.timeout-ms:30000}") int timeoutMs,
@@ -33,5 +30,17 @@ public class RouterHttpConfig {
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
         return new BertHttpDispatcher(client, URI.create(url), Duration.ofMillis(timeoutMs), mapper);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "gls.router.cascade.slm", name = "enabled", havingValue = "true")
+    public SlmHttpDispatcher slmHttpDispatcher(
+            @Value("${gls.router.cascade.slm.url:http://gls-slm-worker:8080}") String url,
+            @Value("${gls.router.cascade.slm.timeout-ms:60000}") int timeoutMs,
+            ObjectMapper mapper) {
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build();
+        return new SlmHttpDispatcher(client, URI.create(url), Duration.ofMillis(timeoutMs), mapper);
     }
 }

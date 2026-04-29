@@ -3,6 +3,7 @@ package co.uk.wolfnotsheep.router.web;
 import co.uk.wolfnotsheep.router.parse.BertBlockUnknownException;
 import co.uk.wolfnotsheep.router.parse.LlmJobFailedException;
 import co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException;
+import co.uk.wolfnotsheep.router.parse.SlmBlockUnknownException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -56,6 +57,12 @@ public class RouterExceptionHandler {
     public ResponseEntity<ProblemDetail> handleBertBlockUnknown(BertBlockUnknownException e) {
         return problem(HttpStatus.UNPROCESSABLE_ENTITY, "ROUTER_BERT_BLOCK_UNKNOWN",
                 "BERT block coords did not resolve at gls-bert-inference", e.getMessage());
+    }
+
+    @ExceptionHandler(SlmBlockUnknownException.class)
+    public ResponseEntity<ProblemDetail> handleSlmBlockUnknown(SlmBlockUnknownException e) {
+        return problem(HttpStatus.UNPROCESSABLE_ENTITY, "ROUTER_SLM_BLOCK_UNKNOWN",
+                "PROMPT block coords did not resolve at gls-slm-worker", e.getMessage());
     }
 
     @ExceptionHandler(UncheckedIOException.class)

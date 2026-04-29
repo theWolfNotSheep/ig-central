@@ -277,7 +277,7 @@ Per CSV #2 (DECIDED hybrid).
 - [x] **`gls-slm-worker`** with two backends: Anthropic Haiku (cloud) and Ollama (local) — selectable via SLM block configuration. Phase 1.5 PR1 — first cut ships the contract surface, JVM module, audit / metrics / health / async surface, and a stub `NotConfiguredSlmService` that returns `SLM_NOT_CONFIGURED` 503 until either backend is wired. Real Anthropic Haiku and Ollama backends ship as separate follow-up PRs (1.5 PR2 / PR3).
 - [x] Same OpenAPI contract as LLM worker. Phase 1.5 PR1 — `contracts/slm-worker/openapi.yaml` v0.1.0 sets the shape the LLM worker rework (Phase 1.6) will conform to: `POST /v1/classify` with sync + `Prefer: respond-async`, `GET /v1/jobs/{nodeRunId}`, `GET /v1/backends`, `GET /v1/capabilities`, `GET /actuator/health`. Same `JobStore` shape as `gls-extraction-audio` and `gls-classifier-router`.
 - [ ] MCP integration mandatory (each worker calls MCP itself per CSV #1).
-- [ ] Wire into cascade as the middle tier.
+- [x] Wire into cascade as the middle tier. Phase 1.5 PR3 — `SlmHttpDispatcher` + `SlmOrchestratorCascadeService` in `gls-classifier-router`. For `PROMPT` blocks: dispatches to `gls-slm-worker`; on `SLM_NOT_CONFIGURED` (or transport / 5xx) falls through to inner. Composes with the BERT tier — full cascade is BERT → SLM → inner (LLM/mock). Activated by `gls.router.cascade.slm.enabled=true`; default off.
 - [ ] Tune `slmAcceptThreshold` per category against held-out evaluation set.
 
 ### 1.6 LLM worker rework
