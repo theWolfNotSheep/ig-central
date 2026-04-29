@@ -2,6 +2,16 @@ spring:
   application:
     name: gls-llm-worker
 
+  ai:
+    # MCP client — connects to gls-mcp-server over SSE per CSV #1.
+    mcp:
+      client:
+        type: SYNC
+        sse:
+          connections:
+            governance:
+              url: ${GLS_MCP_SERVER_URL:http://gls-mcp-server:8081}
+
 server:
   port: 8096
 
@@ -10,9 +20,19 @@ gls:
     worker:
       # `none` (default) → NotConfiguredLlmService; every /v1/classify
       # returns 503 LLM_NOT_CONFIGURED.
-      # `anthropic` (Phase 1.6 PR2) → real Claude backend lifted from
-      # gls-llm-orchestration. Requires ANTHROPIC_API_KEY.
+      # `anthropic` → AnthropicLlmService (defaults to claude-sonnet-4-5).
+      #   Requires ANTHROPIC_API_KEY.
+      # `ollama` → OllamaLlmService (defaults to qwen2.5:32b).
+      #   Requires spring.ai.ollama.base-url.
       backend: ${GLS_LLM_BACKEND:none}
+      anthropic:
+        model: ${GLS_LLM_ANTHROPIC_MODEL:claude-sonnet-4-5}
+        temperature: ${GLS_LLM_ANTHROPIC_TEMPERATURE:0.1}
+        max-tokens: ${GLS_LLM_ANTHROPIC_MAX_TOKENS:4096}
+      ollama:
+        model: ${GLS_LLM_OLLAMA_MODEL:qwen2.5:32b}
+        temperature: ${GLS_LLM_OLLAMA_TEMPERATURE:0.1}
+        num-ctx: ${GLS_LLM_OLLAMA_NUM_CTX:32768}
       jobs:
         ttl: ${GLS_LLM_JOBS_TTL:PT24H}
       async:
