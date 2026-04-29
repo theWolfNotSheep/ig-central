@@ -77,6 +77,21 @@
             <version>3.1.0</version>
         </dependency>
 
+        <!-- ==================== PST (Outlook archives) ==================== -->
+
+        <!--
+          CSV #44: pure-Java reader for Outlook PST/OST. Opens via
+          RandomAccessFile, exposes folder tree + per-message handles.
+          Each PSTMessage maps to a child `.eml` synthesised by the
+          PstArchiveWalker (basic RFC 822: headers + body; attachments
+          deferred to a follow-up).
+        -->
+        <dependency>
+            <groupId>com.pff</groupId>
+            <artifactId>java-libpst</artifactId>
+            <version>0.9.3</version>
+        </dependency>
+
         <!-- ==================== Validation ==================== -->
 
         <dependency>

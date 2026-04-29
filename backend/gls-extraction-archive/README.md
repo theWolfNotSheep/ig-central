@@ -11,26 +11,21 @@ Cloned from the `gls-extraction-tika` reference pattern (Phase 0.5) and `docs/se
 
 ## Status
 
-**Phase 1.1, first PR — module + contract only.** Implementation, generated stubs, Dockerfile, audit / trace / JWT wiring, and tests land in subsequent PRs that mirror Tika's 0.5.2–0.5.6 sequence.
+**Phase 1.1 — substantively complete.** ZIP / MBOX / PST walkers wired; idempotency, audit, health, metrics, exception handler, controller all live. Dockerfile + Compose entry shipped. Unit tests at 37; integration tests blocked on issue #7.
 
-What exists today:
+Outstanding:
 
-- `pom.xml` declaring the module against the parent reactor.
-- `contracts/extraction-archive/openapi.yaml` (in the `contracts/` tree, not here) — the source of truth.
+- **JWT** — blocked on JWKS infra (same as Tika).
+- **PST attachments** — `PstArchiveWalker` emits one `.eml` per message with headers + body only; attachments are dropped on the floor for now. Follow-up PR adds attachment children.
+- **Integration tests** — `@ServiceConnection` + Testcontainers PST fixture once issue #7 is unblocked.
 
-What's deferred to follow-up PRs:
+## Supported archive types
 
-- Generated server stub via `openapi-generator-maven-plugin`.
-- Per-format walker dispatch: ZIP via Commons Compress, MBOX via Tika's `MboxParser`, PST via `java-libpst` (or equivalent — added with the PST walker).
-- MinIO source for the source archive, MinIO sink for emitted children.
-- `nodeRunId` idempotency with 24h TTL (CSV #16).
-- Audit emission (`EXTRACTION_COMPLETED` / `EXTRACTION_FAILED`, Tier 2).
-- `traceparent` propagation; spans for `archive.walk`, `minio.fetch`, `minio.put`.
-- Spring Boot Actuator readiness probe (parser init + MinIO reach).
-- RFC 7807 errors with `ARCHIVE_TOO_LARGE` / `ARCHIVE_TOO_MANY_CHILDREN` / `ARCHIVE_DEPTH_EXCEEDED` / `ARCHIVE_CORRUPT` codes (the 413 / 422 codes on the contract).
-- Micrometer counters + latency histogram.
-- JWT validation middleware (CSV #18).
-- Dockerfile + compose service definition (placeholder block in `docker-compose.yml` activates here).
+| Type | Walker | Library | Notes |
+|---|---|---|---|
+| `.zip` | `ZipArchiveWalker` | Apache Commons Compress (transitive via `tika-parsers-standard-package`) | Streaming reader, single pass; encrypted entries → `ARCHIVE_CORRUPT`. |
+| `.mbox` | `MboxArchiveWalker` | Hand-rolled RFC 4155 splitter | One `.eml` per `From `-prefixed message; tolerates leading garbage. |
+| `.pst` | `PstArchiveWalker` | `com.pff:java-libpst` (CSV #44) | Materialises to temp file (libpst requires `RandomAccessFile`); each PSTMessage emitted as basic synthesised `.eml`. |
 
 ## Cross-references
 

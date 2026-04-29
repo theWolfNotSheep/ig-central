@@ -43,7 +43,7 @@ Update this table when a phase's status changes. The detailed entries below are 
 |---|---|---|---|---|
 | 0   | Substrate complete; minor follow-ups outstanding | 2026-04-26 | — | 0.1–0.6, 0.8, 0.9, 0.10, 0.12 done. 0.7 done bar Python sketch + Rabbit circuit-breaker (envelope + outbox indexes + library + auto-config + schema validation + outbox-to-Rabbit relay + ShedLock leader election + Micrometer metrics all landed). 0.11 scaffolded (load driver awaits representative content). |
 | 0.5 | Substantially complete | 2026-04-26 | — | 0.5.1, 0.5.2, 0.5.6 done. 0.5.3: error returns + audit (success + failure) + readiness HealthIndicators + metrics + tracing all done; **JWT outstanding** (blocked on JWKS infra). 0.5.4 unit-level only (153 reactor tests, 41 in extraction module); integration tests blocked on issue #7. 0.5.5 Dockerfile + Compose done; K8s + CI/CD image push outstanding. |
-| 1   | In progress (1.1 underway) | 2026-04-29 | — | 1.1 — `gls-extraction-archive`: contract + module + ZIP/MBOX impl + MinIO source/sink + idempotency + audit + health + metrics + 34 unit tests landed. PST walker, JWT, Dockerfile + Compose, integration tests still outstanding. |
+| 1   | In progress (1.1 underway) | 2026-04-29 | — | 1.1 — `gls-extraction-archive`: contract + module + ZIP/MBOX/PST impl + MinIO source/sink + idempotency + audit + health + metrics + Dockerfile + Compose + 37 unit tests landed. JWT (JWKS-blocked), integration tests (#7-blocked), PST attachments still outstanding. OCR + Audio services upcoming. |
 | 2   | Not started | — | — | |
 | 3   | Not started | — | — | |
 
@@ -1665,3 +1665,32 @@ Spring context is not loaded — pure POJO tests with mocked source / sink / ide
 - **Generated stubs commit policy** — same gap as Tika; tracked elsewhere.
 
 **Next:** Dockerfile + Compose service entry for `gls-extraction-archive` (mirrors Tika's 0.5.5). Then the PST walker. Then Phase 1.1 acceptance — three extraction services live or skip ahead to 1.2 router.
+
+## 2026-04-29 — Phase 1.1 — `gls-extraction-archive` PST walker + Dockerfile + Compose
+
+**Done:** Closes the per-format walker triad and ships the deployable for `gls-extraction-archive`. PST support uses `com.pff:java-libpst` (CSV #44 logged). Dockerfile mirrors Tika's repo-root build context pattern. Compose entry activates with full Mongo + Rabbit + MinIO wiring (the archive service holds idempotency rows in Mongo + emits Tier 2 audit events through `gls-platform-audit`'s outbox-relay, which needs Rabbit).
+
+**Decisions logged:** CSV #44 (Domain Model, §Plan-1.1) — PST parser library = `com.pff:java-libpst` v0.9.3 (Apache 2.0). Java-libpst is the de-facto OSS option in the JVM ecosystem; Maven Central; pure Java (no JNI). Alternatives evaluated: Tika's PST coverage (partial; relies on java-libpst internally), Aspose / Independentsoft (proprietary), libpff via JNI (adds native build step that complicates Compose-only deployment per CSV #38). Java-libpst's drawback (requires `RandomAccessFile`, not a stream) is handled by materialising the source archive to a temp file before walking — acceptable given the per-archive size cap.
+
+**What's wired:**
+
+- **`parse/PstArchiveWalker.java`** (new) — registers as `ArchiveType.PST`. Materialises the source stream to a `Files.createTempFile(...)` PST, opens via `PSTFile`, recurses through subfolders, iterates messages via `folder.getNextChild()`, synthesises a basic RFC 822 `.eml` per message (From / To / Cc / Subject / Date / Message-ID / MIME-Version / Content-Type plus body), and emits via the `ChildEmitter`. Cleanup deletes the temp file in a `finally` block. Corrupt or password-protected PSTs surface as `CorruptArchiveException` (HTTP 422 / `ARCHIVE_CORRUPT`).
+- **`pom.xml`** — added `com.pff:java-libpst:0.9.3` to dependencies with a comment explaining the choice.
+- **`Dockerfile`** (new) — multi-stage from `eclipse-temurin:25-jdk` build → `eclipse-temurin:25-jre` runtime. Repo-root build context per the service template's "Repo-root Docker build context" callout (lets the build reach `contracts/` for the audit envelope schema bundling). Healthcheck on `/actuator/health` over port 8090. Identical shape to Tika's Dockerfile barring artifact name + port.
+- **`docker-compose.yml`** — new active block `gls-extraction-archive` with full env wiring (Mongo URI, Rabbit credentials, MinIO endpoint, sink bucket override). Depends on `mongo` / `rabbitmq` / `minio` healthchecks. Uses `default-logging` + `gls` network.
+- **PST attachment limitation** — documented on the walker's javadoc and the service README. The walker emits message body only; attachments inside PST messages are dropped on the floor for now. The follow-up PR adds attachment children using `archivePath` to anchor them to the parent message id.
+
+**Tests:**
+
+- `PstArchiveWalkerTest` (3) — `supports()` returns PST; garbage bytes → `CorruptArchiveException`; empty stream → `CorruptArchiveException`. Happy-path PST walking is integration-test territory (requires a checked-in PST fixture and a JVM that can open it through java-libpst's RandomAccessFile path — `@TempDir`-friendly, but the fixture itself is non-trivial to author in code; java-libpst is read-only). Blocked on issue #7 like the rest of integration coverage.
+- `ArchiveWalkerDispatcherTest` updated — third walker (`PstArchiveWalker`) registered; `walkers().keySet()` now contains all three types.
+- All other archive tests unchanged. **37 / 37 in module; 190 / 190 across the reactor.**
+
+**Files changed:** 4 new (`PstArchiveWalker.java`, `PstArchiveWalkerTest.java`, `Dockerfile`, dispatcher test edit); 4 modified (`pom.xml`, `docker-compose.yml`, `README.md`, plan, log, CSV).
+
+**Open issues:**
+
+- **PST attachments** — own follow-up PR. Each PSTMessage's attachments enumerated via `msg.getAttachments()`; each attachment becomes a child with `archivePath = "<message-index>/<attachment-index>"` and `detectedMimeType` from the attachment's mime header.
+- **Integration tests** — gated on issue #7. A small fixture PST (≤ 100 KB, generated once via Outlook and checked in) gives us happy-path coverage when the gate lifts.
+
+**Next:** OCR service end-to-end (Tesseract via Tess4J — separate CSV decision). Then audio service end-to-end (Whisper, async-capable). Closing out Phase 1.1 to the extent possible without JWT / integration-test infrastructure.
