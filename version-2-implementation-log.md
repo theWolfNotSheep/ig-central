@@ -2701,3 +2701,38 @@ The schema is consumed by the admin UI (block save validation lands in a separat
 - **Schema validation at block save time** — same blocker as the other content schemas; cross-cuts all block types.
 
 **Next:** Phase 1.8 PR2 (in-engine interpreter); OR Phase 1.9 Stage ④ scan dispatch (the workers POLICY blocks reference); OR `.env.example` updates; OR legacy `gls-llm-orchestration` retirement.
+
+## 2026-04-29 — Phase 1.8 PR2 — POLICY block resolver + typed view
+
+**Done:** `PolicyBlock` typed record + `PolicyBlockResolver` service in `gls-governance`. Reads `pipeline_blocks` via raw `MongoTemplate` (same minimal-coupling pattern as the SLM/LLM workers' `PromptBlockResolver`) and parses POLICY block content into a strongly-typed shape. `effectiveFor(sensitivity)` applies per-sensitivity overrides. PR3 wires this into the pipeline-execution engine.
+
+**Decisions logged:** None new.
+
+**What's wired:**
+
+- **`PolicyBlock`** (new record) — typed view of `policy.schema.json`. Fields: `categoryId`, `categoryName`, `requiredScans` (List of `RequiredScan(scanType, ref, blocking)`), `metadataSchemaIds`, `governancePolicyIds`, `sensitivityOverrides`. `effectiveFor(sensitivity)` returns a new `PolicyBlock` with the matching override's lists overlaid (any list the override doesn't carry inherits from top-level).
+- **`PolicyBlockResolver`** (new `@Service`) — `resolveByCategoryId(categoryId)` queries `pipeline_blocks` for `type=POLICY` documents, walks the active version's content map, returns the first matching `PolicyBlock` or `Optional.empty()`. Robust: malformed scan entries silently skipped; Mongo lookup failures logged at WARN + return empty (consumers fall back to no-policy defaults).
+
+**Why a typed record + resolver instead of putting it on `PipelineBlock` directly:**
+
+`PipelineBlock` carries the union of all block types' content as `Map<String, Object>`. A typed `getPolicyContent()` accessor would pollute the model. The resolver pattern keeps `PipelineBlock` content-agnostic; consumers that *know* they want POLICY get a clean record. Same shape as `PromptBlockResolver` → `ResolvedPrompt` in the SLM/LLM workers.
+
+**Why `effectiveFor` lives on `PolicyBlock`, not the resolver:**
+
+The override-application logic only depends on the parsed block; it doesn't touch Mongo. Putting it on the record lets unit tests exercise the override semantics without mocking, and admin-UI consumers ("show what RESTRICTED docs of this category get") can call it without going through Mongo.
+
+**Tests (9 new in module; 450 reactor total):**
+
+- `PolicyBlockResolverTest` (9) — happy resolve; `blocking=false` honoured; categoryId mismatch → empty; no POLICY blocks → empty; Mongo throws → empty + WARN; blank/null categoryId → empty; sensitivity overrides with partial `apply` block; `draftContent` fallback when no active version; malformed scan entries silently skipped.
+
+Governance module: 17 → 26. Reactor: 441 → 450.
+
+**Files changed:** 1 new `PolicyBlock.java` + 1 new `PolicyBlockResolver.java` + 1 new test file + log = 4 files.
+
+**Open issues / deferred:**
+
+- **Engine integration (PR3)** — `PipelineExecutionEngine` calls `PolicyBlockResolver` after classification: looks up the POLICY block, dispatches the listed scans / metadata schemas / governance policies. Lives in `gls-app-assembly`.
+- **Per-category seeding (PR4)** — Mongock change unit + `PackImportService` enhancement to auto-create POLICY blocks at pack install.
+- **Schema-validation-at-save** — cross-cuts all block content types.
+
+**Next:** Phase 1.8 PR3 (engine integration); OR Phase 1.9 Stage ④ scan dispatch; OR `.env.example` updates; OR legacy retirement.
