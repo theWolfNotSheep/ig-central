@@ -1,5 +1,6 @@
 package co.uk.wolfnotsheep.infrastructure.services;
 
+import co.uk.wolfnotsheep.governance.models.MetadataSchema;
 import co.uk.wolfnotsheep.governance.models.PiiTypeDefinition;
 import org.junit.jupiter.api.Test;
 
@@ -143,5 +144,95 @@ class PackImportServiceTest {
                 .contains("\"instances\"")
                 .contains("\"confidence\"")
                 .contains("found=false");
+    }
+
+    // ── Phase 1.9 PR3 — buildExtractionSystemPrompt ───
+
+    @Test
+    void buildExtractionSystemPrompt_lists_field_name_type_required_flag_and_hints() {
+        MetadataSchema schema = new MetadataSchema();
+        schema.setId("hr-leave");
+        schema.setName("HR Leave Request");
+        schema.setDescription("Captures employee leave details");
+        schema.setExtractionContext("UK leave letters / forms");
+        schema.setFields(List.of(
+                new MetadataSchema.MetadataField(
+                        "employee_name", MetadataSchema.FieldType.TEXT, true,
+                        "Full name", "Look near 'Dear' / 'To'", List.of("Alice Smith")),
+                new MetadataSchema.MetadataField(
+                        "leave_type", MetadataSchema.FieldType.KEYWORD, false,
+                        null, null, List.of("maternity", "annual"))
+        ));
+
+        String prompt = PackImportService.buildExtractionSystemPrompt(schema);
+
+        assertThat(prompt)
+                .contains("HR Leave Request")
+                .contains("Schema description: Captures employee leave details")
+                .contains("Extraction context: UK leave letters")
+                .contains("- employee_name (TEXT) [required]: Full name")
+                .contains("hint: Look near 'Dear'")
+                .contains("examples: Alice Smith")
+                .contains("- leave_type (KEYWORD)")
+                .contains("examples: maternity, annual")
+                .contains("strict JSON keyed by fieldName")
+                .contains("NOT_FOUND");
+    }
+
+    @Test
+    void buildExtractionSystemPrompt_falls_back_to_id_when_name_is_null() {
+        MetadataSchema schema = new MetadataSchema();
+        schema.setId("only-id");
+
+        String prompt = PackImportService.buildExtractionSystemPrompt(schema);
+
+        assertThat(prompt).contains("only-id");
+    }
+
+    @Test
+    void buildExtractionSystemPrompt_omits_optional_blocks_when_blank() {
+        MetadataSchema schema = new MetadataSchema();
+        schema.setId("x");
+        schema.setName("Bare Schema");
+
+        String prompt = PackImportService.buildExtractionSystemPrompt(schema);
+
+        assertThat(prompt)
+                .doesNotContain("Schema description:")
+                .doesNotContain("Extraction context:");
+    }
+
+    @Test
+    void buildExtractionSystemPrompt_handles_field_with_minimal_data() {
+        MetadataSchema schema = new MetadataSchema();
+        schema.setId("x");
+        schema.setName("X");
+        schema.setFields(List.of(new MetadataSchema.MetadataField(
+                "amount", MetadataSchema.FieldType.NUMBER, false, null, null, null)));
+
+        String prompt = PackImportService.buildExtractionSystemPrompt(schema);
+
+        assertThat(prompt)
+                .contains("- amount (NUMBER)")
+                .doesNotContain("[required]")
+                .doesNotContain("amount.*hint")
+                .doesNotContain("amount.*examples");
+    }
+
+    @Test
+    void buildExtractionSystemPrompt_emits_typed_JSON_response_contract() {
+        MetadataSchema schema = new MetadataSchema();
+        schema.setId("x");
+        schema.setName("X");
+
+        String prompt = PackImportService.buildExtractionSystemPrompt(schema);
+
+        // The prompt instructs the model to return strict JSON keyed
+        // by fieldName with type-appropriate values; without this, the
+        // dispatcher would receive opaque text it can't deserialise.
+        assertThat(prompt)
+                .contains("strict JSON keyed by fieldName")
+                .contains("data type")
+                .contains("ISO 8601");
     }
 }

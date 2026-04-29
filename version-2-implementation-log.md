@@ -2929,3 +2929,43 @@ Reactor: 455 → 470 in `gls-app-assembly`. Full backend reactor green.
 - **Block ref → PROMPT vs PiiType fallback** — the seeded `scan-pii-${key}` blocks make `requiredScans[].ref` always resolve as a PROMPT block id today. If pre-seed POLICY blocks reference raw `PiiTypeDefinition.key` strings, the router will return 422 (no such block); a follow-up can add a `ScanRefResolver` that detects PiiType keys and synthesizes a transient PROMPT block at dispatch time.
 
 **Next:** Phase 1.9 PR3 — metadata extraction PROMPT block seeder + dispatch (parallel pattern to PR1 + PR2 but for `policyMetadataSchemaIds[]`). After that, PR4 aggregates scan + metadata results, persists them to the document, hands off to enforcement, and gates the pipeline on blocking failures.
+
+## 2026-04-29 — Phase 1.9 PR3 — Metadata extraction PROMPT seeder + engine dispatch
+
+**Done:** Third PR of Phase 1.9. Mirrors PR1 + PR2's pattern but for the metadata extraction half of stage ④. Two pieces:
+
+1. **`PackImportService.seedExtractionPromptBlocksForMetadataSchemas`** — runs after `seedScanPromptBlocksForPiiTypes` in `importPack`. For every `MetadataSchema` in the local DB, creates a `kind=METADATA_EXTRACTION` PROMPT block named `extract-metadata-${schemaId}` if one doesn't already exist. The seeded `systemPrompt` enumerates the schema's fields (`fieldName (TYPE) [required]: description — hint: ... — examples: ...`) and instructs the model to return strict JSON keyed by `fieldName` with type-appropriate values (`TEXT/KEYWORD/CURRENCY → string`, `NUMBER → number`, `BOOLEAN → boolean`, `DATE → ISO 8601 string`). Required fields whose value can't be determined return the literal string `"NOT_FOUND"`. Idempotent + PREVIEW-skipping; iterates `metadataSchemaRepo.findAll()` so operators upgrading from a Phase 1.7 install pick up extraction blocks for pre-existing schemas on the next pack install.
+
+2. **`MetadataExtractionDispatcher`** — sibling to `PolicyScanDispatcher`, reuses `ScanRouterClient` for transport (the cascade router doesn't care whether the PROMPT is `SCAN` or `METADATA_EXTRACTION` kind — the client is a transport, not a parser). Iterates `metadataSchemaIds[]`, builds the deterministic block ref `extract-metadata-${schemaId}`, dispatches each through the cascade router, and aggregates `MetadataExtractionResult` records. Same fail-soft semantics as the scan dispatcher: empty list → silent return, no client → not-dispatched marker, blank schema id → recorded error, dispatcher exception → caught + recorded. `nodeRunId` is `${pipelineRunId}-extract-${schemaId}` so the router's idempotency window dedupes retries cleanly. The `ScanRouterClient` name is now slightly misleading because it serves both scan and metadata extraction calls — flagged for a rename to `RouterPromptClient` in a follow-up.
+
+3. **Engine wire-in.** `PipelineExecutionEngine` constructor gains `MetadataExtractionDispatcher`; new `dispatchMetadataExtraction` helper called inline after `dispatchPolicyScans`. Reads `policyMetadataSchemaIds` from ctx, calls the dispatcher with `doc.getExtractedText()`, stashes the per-schema results under `policyExtractionResults` for PR4 to persist onto the document + hand off to enforcement.
+
+**Why reuse `ScanRouterClient` instead of a third client:**
+
+Both SCAN and METADATA_EXTRACTION blocks emit a `Map<String, Object>` result through the cascade router — the only difference is what's inside the map. `ScanRouterClient.RouterScanOutcome` already carries a generic `result` map. Forking the client into a third sibling would just be three classes that do the same HTTP call. The dispatcher (which knows the result *interpretation*) is the right place for the type split.
+
+**Tests:**
+
+- `MetadataExtractionDispatcherTest` (9 tests): empty list, single schema success, transport failure, multi-schema ordering, no-client fallback, blank/null schema id, dispatcher exception capture, nodeRunId convention (`runId-extract-id` and the null-runId fallback).
+- `PackImportServiceTest` +5 tests for `buildExtractionSystemPrompt`: field listing with type / required / hint / examples, name fallback to id, optional-blocks elision, minimal-field handling, strict-JSON response contract assertions.
+
+Reactor: 470 → 484 in `gls-app-assembly`. Full backend reactor green.
+
+**Contracts touched:** None. The PROMPT schema (Phase 1.9 PR1, v0.5.0) already covers the new `kind=METADATA_EXTRACTION` blocks; the cascade-router contract (v0.2.0) accepts any PROMPT id at `POST /v1/classify`.
+
+**Files changed:**
+
+- `PackImportService.java` — new `seedExtractionPromptBlocksForMetadataSchemas` + static `buildExtractionSystemPrompt` helper, called from `importPack` after the scan PROMPT seeder.
+- `MetadataExtractionDispatcher.java` (new), `MetadataExtractionResult.java` (new).
+- `PipelineExecutionEngine.java` — constructor +1 param, `dispatchMetadataExtraction` helper, `extractionResultToMap` ctx serialiser.
+- `MetadataExtractionDispatcherTest.java` (new), `PackImportServiceTest.java` +5 tests.
+- Plan + log = 8 files.
+
+**Open issues / deferred:**
+
+- **`ScanRouterClient` rename** — the client now serves both scan and metadata extraction calls. Renaming it to `RouterPromptClient` (or `CascadeRouterClient`) is a small follow-up that improves naming clarity without changing behaviour.
+- **Block id vs name mismatch** (carried from PR2) — seeded block names like `extract-metadata-hr-leave` are passed to the router as `block.id`, which the router's downstream lookup queries as Mongo `_id`. The seeders don't currently set `_id = name`, so the auto-generated ObjectId is what Mongo stores. Either (a) the seeders set `_id = name` for stable lookup, (b) the dispatcher resolves `name → _id` before calling the router, or (c) the cascade router accepts `block.name`. Option (a) is the smallest change; tracked for a small standalone PR.
+- **Metadata persistence on the document** — `policyExtractionResults` lives in shared context only; PR4 will fold the extracted fields into `DocumentClassificationResult.extractedMetadata` (matching the existing classification-time metadata extraction path) and emit Tier 2 audit events.
+- **MIME-type filtering** — `MetadataSchema.linkedMimeTypes` isn't yet used by the dispatcher. Phase 1.9 dispatch runs every schema referenced by the POLICY block regardless of doc MIME type. A follow-up can short-circuit when the doc's MIME type is set + not in the schema's allow-list.
+
+**Next:** Phase 1.9 PR4 — final piece. Persist scan + extraction results onto the document (or `DocumentClassificationResult`), gate the pipeline on blocking scan failures (`SCAN_FAILED` status + retry path), emit Tier 2 audit events for each scan + extraction outcome, and hand off the consolidated state to the enforcement stage.

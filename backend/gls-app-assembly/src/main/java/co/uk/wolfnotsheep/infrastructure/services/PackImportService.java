@@ -172,6 +172,17 @@ public class PackImportService {
             results.add(scanPromptSeedResult);
         }
 
+        // Phase 1.9 PR3 — seed a METADATA_EXTRACTION-kind PROMPT block
+        // per MetadataSchema the operator has installed. The seed gives
+        // POLICY-block authors a real PROMPT block id to drop into
+        // metadataSchemaIds[]; the cascade router runs the prompt at
+        // stage ④ (PR3 dispatcher). Idempotent.
+        ComponentResult extractionPromptSeedResult = seedExtractionPromptBlocksForMetadataSchemas(ctx);
+        if (extractionPromptSeedResult.created() > 0 || extractionPromptSeedResult.updated() > 0
+                || extractionPromptSeedResult.skipped() > 0) {
+            results.add(extractionPromptSeedResult);
+        }
+
         int totalCreated = results.stream().mapToInt(ComponentResult::created).sum();
         int totalUpdated = results.stream().mapToInt(ComponentResult::updated).sum();
         int totalSkipped = results.stream().mapToInt(ComponentResult::skipped).sum();
@@ -915,6 +926,133 @@ public class PackImportService {
         sb.append("\nRespond with strict JSON of the form:\n");
         sb.append("{\"found\": <true|false>, \"instances\": [{\"value\": \"...\", \"context\": \"...\"}], \"confidence\": <0.0..1.0>}\n");
         sb.append("If no instances are present, return found=false and an empty instances array.");
+        return sb.toString();
+    }
+
+    // ── Metadata extraction PROMPT block seeding ─────
+
+    /**
+     * Phase 1.9 PR3. After all components are imported, seed a
+     * {@code METADATA_EXTRACTION}-kind PROMPT block per
+     * {@link MetadataSchema} that doesn't already have one. POLICY-block
+     * authors reference the seeded block by id from
+     * {@code metadataSchemaIds[]}; the cascade router executes the
+     * prompt at stage ④.
+     *
+     * <p>Block name convention: {@code extract-metadata-${schemaId}}.
+     * The seeded {@code systemPrompt} enumerates the schema's fields,
+     * each field's data type, whether it's required, and any extraction
+     * hints / examples — and instructs the model to return strict JSON
+     * keyed by {@code fieldName} with field-typed values.
+     *
+     * <p>Iterates {@code metadataSchemaRepo.findAll()} (not just
+     * imported keys), same rationale as the scan PROMPT seeder.
+     * Idempotent.
+     */
+    private ComponentResult seedExtractionPromptBlocksForMetadataSchemas(ImportContext ctx) {
+        if (ctx.mode == ImportMode.PREVIEW) {
+            return new ComponentResult("EXTRACTION_PROMPT_BLOCKS_SEED", "auto-seed",
+                    0, 0, 0, 0,
+                    List.of("Preview mode — extraction PROMPT block seeding skipped"));
+        }
+        int created = 0, skipped = 0;
+        List<String> details = new ArrayList<>();
+        List<MetadataSchema> schemas;
+        try {
+            schemas = metadataSchemaRepo.findAll();
+        } catch (Exception e) {
+            log.warn("Could not list metadata schemas for extraction PROMPT seeding (non-fatal): {}", e.getMessage());
+            return new ComponentResult("EXTRACTION_PROMPT_BLOCKS_SEED", "auto-seed",
+                    0, 0, 0, 0, List.of("Metadata schema listing failed: " + e.getMessage()));
+        }
+
+        for (MetadataSchema schema : schemas) {
+            if (schema.getId() == null || schema.getId().isBlank()) continue;
+            String blockName = "extract-metadata-" + schema.getId();
+            if (pipelineBlockRepo.findByName(blockName).isPresent()) {
+                skipped++;
+                continue;
+            }
+
+            PipelineBlock block = new PipelineBlock();
+            block.setName(blockName);
+            block.setDescription("METADATA_EXTRACTION PROMPT auto-seeded for schema "
+                    + schema.getName() + " (" + schema.getId() + "). Phase 1.9 / CSV #36. "
+                    + "POLICY blocks reference this id from metadataSchemaIds[].");
+            block.setType(PipelineBlock.BlockType.PROMPT);
+            block.setActive(true);
+            block.setActiveVersion(1);
+
+            Map<String, Object> content = new LinkedHashMap<>();
+            content.put("kind", "METADATA_EXTRACTION");
+            content.put("metadataSchemaId", schema.getId());
+            content.put("systemPrompt", buildExtractionSystemPrompt(schema));
+            content.put("userPromptTemplate", "{{documentText}}");
+            content.put("outputFormat", "JSON");
+
+            PipelineBlock.BlockVersion v1 = new PipelineBlock.BlockVersion(
+                    1, content,
+                    "Auto-seeded by PackImportService (pack=" + ctx.packSlug + ", schema=" + schema.getName() + ").",
+                    "pack-import:" + ctx.packSlug,
+                    ctx.importedAt);
+            block.setVersions(new ArrayList<>(List.of(v1)));
+            block.setCreatedAt(ctx.importedAt);
+            block.setCreatedBy("pack-import:" + ctx.packSlug);
+            block.setUpdatedAt(ctx.importedAt);
+            block.setSourcePackSlug(ctx.packSlug);
+            block.setSourcePackVersion(ctx.packVersion);
+            block.setImportedAt(ctx.importedAt);
+
+            pipelineBlockRepo.save(block);
+            created++;
+            details.add("Seeded EXTRACTION PROMPT block: " + blockName);
+        }
+
+        if (created > 0) {
+            log.info("Seeded {} EXTRACTION PROMPT block(s) for metadata schemas ({} pre-existing skipped)",
+                    created, skipped);
+        }
+        return new ComponentResult("EXTRACTION_PROMPT_BLOCKS_SEED", "auto-seed",
+                created, 0, skipped, 0, details);
+    }
+
+    static String buildExtractionSystemPrompt(MetadataSchema schema) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are a metadata extraction assistant. Examine the supplied document ");
+        sb.append("text and extract the following fields for the schema \"");
+        sb.append(schema.getName() == null ? schema.getId() : schema.getName());
+        sb.append("\".\n");
+        if (schema.getDescription() != null && !schema.getDescription().isBlank()) {
+            sb.append("\nSchema description: ").append(schema.getDescription()).append('\n');
+        }
+        if (schema.getExtractionContext() != null && !schema.getExtractionContext().isBlank()) {
+            sb.append("Extraction context: ").append(schema.getExtractionContext()).append('\n');
+        }
+
+        sb.append("\nFields to extract:\n");
+        if (schema.getFields() != null) {
+            for (MetadataSchema.MetadataField f : schema.getFields()) {
+                if (f == null || f.fieldName() == null) continue;
+                sb.append("- ").append(f.fieldName());
+                if (f.dataType() != null) sb.append(" (").append(f.dataType()).append(')');
+                if (f.required()) sb.append(" [required]");
+                if (f.description() != null && !f.description().isBlank()) {
+                    sb.append(": ").append(f.description());
+                }
+                if (f.extractionHint() != null && !f.extractionHint().isBlank()) {
+                    sb.append(" — hint: ").append(f.extractionHint());
+                }
+                if (f.examples() != null && !f.examples().isEmpty()) {
+                    sb.append(" — examples: ").append(String.join(", ", f.examples()));
+                }
+                sb.append('\n');
+            }
+        }
+        sb.append("\nRespond with strict JSON keyed by fieldName. Use the field's data type ");
+        sb.append("as the JSON value type (TEXT/KEYWORD/CURRENCY → string, NUMBER → number, ");
+        sb.append("BOOLEAN → boolean, DATE → ISO 8601 string). For required fields where the ");
+        sb.append("value cannot be determined, use the literal string \"NOT_FOUND\". Omit ");
+        sb.append("optional fields you cannot extract. Do not include any other keys.");
         return sb.toString();
     }
 
