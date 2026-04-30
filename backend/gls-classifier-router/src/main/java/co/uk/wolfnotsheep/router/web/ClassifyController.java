@@ -142,12 +142,7 @@ public class ClassifyController implements ClassifyApi {
             ResponseEntity<ClassifyResponse> response = doClassify(traceparent, request, idempotencyKey);
             ClassifyResponse body = response.getBody();
             cacheCompleted(request.getNodeRunId(), body);
-            String tier = body == null || body.getTierOfDecision() == null
-                    ? null : body.getTierOfDecision().name();
-            metrics.recordSuccess(timer, tier);
-            metrics.recordTierByCategory(tier, extractCategory(body));
-            metrics.recordCost(tier, body == null || body.getCostUnits() == null ? 0L
-                    : body.getCostUnits().longValue());
+            recordSuccessMetrics(timer, body);
             return response;
         } catch (RuntimeException failure) {
             String code = errorCodeFor(failure);
@@ -170,14 +165,44 @@ public class ClassifyController implements ClassifyApi {
      * can {@code @Async}-invoke it without bypassing Spring's AOP.
      */
     void runAsync(ClassifyRequest request, String traceparent) {
+        io.micrometer.core.instrument.Timer.Sample timer = metrics.startTimer();
         try {
             jobs.markRunning(request.getNodeRunId());
             ResponseEntity<ClassifyResponse> response = doClassify(traceparent, request, null);
             cacheCompleted(request.getNodeRunId(), response.getBody());
+            recordSuccessMetrics(timer, response.getBody());
         } catch (RuntimeException failure) {
             String code = errorCodeFor(failure);
+            metrics.recordFailure(timer, code);
             jobs.markFailed(request.getNodeRunId(), code, safeMessage(failure));
             emitFailed(request, traceparent, failure);
+        }
+    }
+
+    /**
+     * Records all success-path metrics in one place so the sync and
+     * async paths emit the same set: duration timer, result counter,
+     * tier-by-category, cost-units, cascade-step distribution, and
+     * per-step timing. Phase 2.6 PR2 wired the first three on the
+     * sync path; PR-E (this PR) extends to async and adds steps +
+     * per-step timing.
+     */
+    private void recordSuccessMetrics(io.micrometer.core.instrument.Timer.Sample timer,
+                                      ClassifyResponse body) {
+        String tier = body == null || body.getTierOfDecision() == null
+                ? null : body.getTierOfDecision().name();
+        metrics.recordSuccess(timer, tier);
+        metrics.recordTierByCategory(tier, extractCategory(body));
+        metrics.recordCost(tier, body == null || body.getCostUnits() == null ? 0L
+                : body.getCostUnits().longValue());
+        if (body != null && body.getCascadeTrace() != null) {
+            metrics.recordCascadeSteps(body.getCascadeTrace().size());
+            for (CascadeStep step : body.getCascadeTrace()) {
+                String stepTier = step.getTier() == null ? null : step.getTier().name();
+                long durationMs = step.getDurationMs() == null ? 0L : step.getDurationMs().longValue();
+                boolean accepted = step.getAccepted() != null && step.getAccepted();
+                metrics.recordTierStepDuration(stepTier, accepted, durationMs);
+            }
         }
     }
 

@@ -4371,3 +4371,41 @@ Reactor green via `./mvnw -DskipTests package`.
 **Phase 2.6 status:** **plan items 1 (tier-of-decision histogram) and 3 (cost-per-document) complete.** Plan items 2 (escalation rate dashboard), 4 (p50/p95/p99 latency by tier and mime type), 5 (MCP availability impact on confidence), 6 (alerts on circuit breaker open / DLQ depth / stale documents / audit chain breaks) remain. Items 4-5-6 are cheap to add once the data points exist.
 
 **Next:** Phase 2 substantially complete. Remaining gaps are blocked or low-priority follow-ups: 2.1 `classification_outbox` reconciler (blocked on §6.5), 2.2 Anthropic 429 honoring (blocked on Spring AI), 2.5 chaos integration tests (blocked on infra). Phase 3 (admin UI) is the natural next major workstream; different shape from Phase 2 (React, not Java).
+
+## 2026-04-30 — Phase 2.6 PR3 — Cascade observability follow-ups
+
+**Done:** Three deferred items folded into one PR:
+
+1. **Async-path metric coverage** (deferral from Phase 2.6 PR2). The async classify path (`runAsync`, invoked when `Prefer: respond-async` is set) wasn't recording the success-path metrics — sync and async were diverging in dashboards. Refactored to share a common `recordSuccessMetrics(timer, body)` helper that fires duration + result + tier-by-category + cost units.
+2. **Phase 2.6 plan item 2 — escalation rate dashboard.** New `gls_router_classify_cascade_steps` distribution summary (p50 / p95 / p99) records the number of cascade steps per call. Length 1 means the first tier accepted; longer = more escalations. Tight low-value distribution is the happy case.
+3. **Phase 2.6 plan item 4 — per-tier-step latency.** New `gls_router_classify_tier_step_duration_seconds{tier, accepted}` timer records the duration of each individual cascade step, tagged by which tier ran it and whether the step's result was accepted (otherwise fell through to the next tier). Operators read p50/p95/p99 latency split by tier × accepted/rejected — fall-through latency is the cost of a wasted attempt; accepted latency is useful work.
+
+**Plan item 4 mime-type dimension deferred:** the request contract doesn't carry mime; threading it through requires either a contract change or a new lookup path. Captured as a follow-up; the per-tier histogram delivers most of the operational value.
+
+**Plan item 5 (MCP availability impact):** the LLM worker's `McpCappingLlmService` already counts cap events via `llm.mcp.confidence_capped{backend}` (Phase 2.6 PR1). The router-side proxy (a `mcp_capped` tag on tier-by-category) needs a structured `mcpCapped` flag in the cascade response — that's a contract change. Tracked.
+
+**Changes:**
+
+- `gls-classifier-router/.../web/ExtractMetrics.java` — two new methods: `recordCascadeSteps(int)` (distribution summary) and `recordTierStepDuration(tier, accepted, durationMs)` (tagged timer).
+- `gls-classifier-router/.../web/ClassifyController.java` — extracted `recordSuccessMetrics(timer, body)` helper used by both sync (`handleSyncAcquired`) and async (`runAsync`) paths. The helper now also records cascade-step count + per-step durations.
+- `gls-classifier-router/.../web/ExtractMetricsTest.java` — extended with 4 new tests: cascade-steps distribution recorded; cascade-steps skips negative; tier-step-duration tagged correctly; tier-step-duration skips negative duration.
+
+**Tests:** 114 / 0 in `gls-classifier-router` (was 110; +4 new). Reactor green.
+
+**Decisions logged:** None new. The `accepted` boolean is the load-bearing tag — without it, fall-through latency (cost of a wasted attempt) and accepted latency (useful work) would be conflated.
+
+**Files changed:**
+
+- `backend/gls-classifier-router/src/main/java/.../web/ExtractMetrics.java` — modified.
+- `backend/gls-classifier-router/src/main/java/.../web/ClassifyController.java` — modified.
+- `backend/gls-classifier-router/src/test/java/.../web/ExtractMetricsTest.java` — modified.
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **Mime-type latency dimension still missing.** Needs request contract to carry `mimeType` (or a side-channel lookup) so the timer can be tagged by it.
+- **MCP availability impact router-side proxy missing.** Needs structured `mcpCapped` field in `ClassifyResponse`.
+
+**Phase 2.6 status:** Plan items 1, 2, 3, 4 (without mime dimension) **done**. Items 5 (MCP impact router-side) and 6 (Prometheus alerts — operational config, not code) remain. Across the whole phase, 5 of 6 items have substantive code coverage; the last is an alerts-config workstream for the deployment side.
+
+**Next:** PR-F — DLQ replay dry-run + per-queue idempotency.
