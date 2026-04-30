@@ -5,7 +5,7 @@ import co.uk.wolfnotsheep.auditcollector.model.AuditEvent;
 import co.uk.wolfnotsheep.auditcollector.model.EventListResponse;
 import co.uk.wolfnotsheep.auditcollector.store.StoredAuditEvent;
 import co.uk.wolfnotsheep.auditcollector.store.StoredTier2Event;
-import co.uk.wolfnotsheep.auditcollector.store.Tier1Repository;
+import co.uk.wolfnotsheep.auditcollector.store.Tier1Store;
 import co.uk.wolfnotsheep.auditcollector.store.Tier2Store;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,11 +28,11 @@ public class EventsController implements EventsApi {
     private static final int DEFAULT_PAGE_SIZE = 50;
     private static final int MAX_PAGE_SIZE = 500;
 
-    private final Tier1Repository tier1Repo;
+    private final Tier1Store tier1Store;
     private final Tier2Store tier2Store;
 
-    public EventsController(Tier1Repository tier1Repo, Tier2Store tier2Store) {
-        this.tier1Repo = tier1Repo;
+    public EventsController(Tier1Store tier1Store, Tier2Store tier2Store) {
+        this.tier1Store = tier1Store;
         this.tier2Store = tier2Store;
     }
 
@@ -68,7 +68,7 @@ public class EventsController implements EventsApi {
 
     @Override
     public ResponseEntity<AuditEvent> getEvent(String traceparent, String eventId) {
-        Optional<? extends StoredAuditEvent> hit = tier1Repo.findById(eventId)
+        Optional<? extends StoredAuditEvent> hit = tier1Store.findById(eventId)
                 .<StoredAuditEvent>map(r -> r)
                 .or(() -> tier2Store.findById(eventId).map(r -> r));
         StoredAuditEvent row = hit.orElseThrow(() -> new AuditEventNotFoundException(eventId));
