@@ -3674,3 +3674,49 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 1.12 status:** **all 5 plan items ticked** with the connectors migration deferred to Phase 1.13. Phase 1.12 substantially complete; cleanup PRs (delete legacy emissions, retire `AuditEventRepository`, migrate admin UI to query collector REST) come after the new pipeline soaks.
 
 **Next:** Phase 1.13 (`Connectors family review`) — audit `gls-connectors` (Drive, Gmail), conform to new contract surface, add `gls-platform-audit` integration. The connector migration is the third audit emit site so it's worth pulling the shared helper into `gls-platform-audit` first to avoid a third copy.
+
+## 2026-04-30 — Phase 1.13 PR1 — Connectors review + per-source ShedLock
+
+**Done:** Phase 1.13 surveyed both connector code surfaces and wired per-source ShedLock. Surprise finding: there's no separate `gls-connectors` module — connectors live inside `gls-app-assembly` under `infrastructure.services.{drives, mail}` and `infrastructure.controllers.{drives, mailboxes, auth}`. Survey of `auditEventRepository.save(...)` calls in those packages: zero hits. Connectors handle ingestion (Drive/Gmail watch + pull), not state-change auditing — the audit-relevant events fire downstream via the services already migrated in PR5 / PR6 (`DOCUMENT_INGESTED`, `DOCUMENT_CLASSIFIED`, `GOVERNANCE_APPLIED`).
+
+**Plan-item-1 (audit-emit migration) is therefore implicitly complete** with no code change — there was nothing to migrate. `gls-platform-audit` dependency is already on the classpath via PR6's `gls-app-assembly` migration, so a future PR that adds state-change auditing in connector code can reuse the existing `PlatformAuditEmitter` helper.
+
+**Plan-item-2 (per-source watch sharding via ShedLock) — real implementation work:**
+
+- `infrastructure/services/connectors/PerSourceLock.java` (new) — wraps `LockProvider.lock(LockConfiguration)` with a `withLock(name, lockAtMostFor, action)` helper that runs the action under a Mongo-backed lock. Returns `true` if the action ran, `false` if another replica held the lock (silent skip). `LockProvider` injected via `ObjectProvider` so single-replica deployments without `shedlock-provider-mongo` on the classpath fall through to `action.run()` (the `getIfAvailable()`-returns-null no-op path).
+- `services/drives/GoogleDriveFolderMonitor.checkMonitoredFolders` — per-drive lock keyed on `drive-poll-<driveId>`; lockAtMostFor 10 minutes (worst-case folder scan). Extracted the per-drive work into `processDrive(drive)` so the lambda body is small.
+- `services/mail/GmailPollingScheduler.pollGmailWatchers` — per-watcher lock keyed on `gmail-poll-<pipelineId>-<nodeId>` (each watcher is a unique combination of pipeline + node, since one pipeline can have multiple gmailWatcher nodes); lockAtMostFor 5 minutes.
+
+Both pollers continue to use `@Scheduled` at the method level (so every replica runs the schedule), but the per-iteration lock prevents the same source from being processed by two replicas simultaneously. This is the right pattern for "per-source sharding": replica A polls drives 1, 3, 5 while replica B polls drives 2, 4 (whoever acquires the lock first wins; the next tick redistributes).
+
+**Why per-iteration rather than method-level `@SchedulerLock`:**
+
+`@SchedulerLock(name = "...")` would prevent any replica from running the scheduled method while another holds the lock — that's leader-election semantics, not sharding. Per-source sharding requires the schedule to run on every replica with each source acquiring its own lock. Manual `LockProvider` use is the only path to that pattern.
+
+**Tests:** 84 / 0 in `gls-app-assembly` (was 79; +5 new for `PerSourceLockTest`).
+
+- `PerSourceLockTest` (5) — happy-path acquire + run + unlock, lock-held-elsewhere skips, unlock-on-action-throw, absent `LockProvider` falls through (no-op), `LockConfiguration` carries the right name + lockAtMostFor.
+
+Reactor: full backend reactor green (`./mvnw -DskipTests package`).
+
+**Decisions logged:** None new. Per-source sharding pattern is implicit in the plan's Phase 1.13 wording; making it concrete here.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/connectors/PerSourceLock.java` — 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/{drives/GoogleDriveFolderMonitor, mail/GmailPollingScheduler}.java` — 2 modified.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/connectors/PerSourceLockTest.java` — 1 new.
+- Plan + log = 5 files total.
+
+**Open issues / deferred:**
+
+- **Lock duration tuning.** Drive folder scan worst-case is hard to estimate; 10 minutes is a guess. If a real scan exceeds it the lock auto-releases mid-scan and a second replica might double-process the tail of the file list (idempotent on `externalStorageRef.fileId` so no duplicate documents — just wasted API calls). Tune via observability once we have a perf baseline (Phase 0.11 deferral).
+- **No metrics on lock acquisition.** Skipped iterations are debug-logged but not counted. Useful telemetry: `connector.lock.acquired{source=drive}`, `connector.lock.skipped{source=drive}` per second. Tracked alongside the broader Phase 2 reliability metrics.
+- **Email polling continues to scan `activePipelines` × `visualNodes` even when most iterations skip-due-to-lock.** Cheap (N is small for any realistic install), but a sufficiently large pipeline catalog would benefit from indexing watcher nodes separately. Premature optimisation today.
+- **`gls-connectors` as its own module.** The plan named the module aspirationally; the code lives in `gls-app-assembly` today. Carving it out would mirror the worker extractions of Phase 1.10 / 1.11 — separate Maven module + own deployable consuming the same Rabbit topology. Tracked as a future architectural cleanup; nothing forces it today since the connectors don't have their own scaling profile.
+
+**Phase 1.13 status:** **both plan items ticked.** Phase 1.13 complete with the deferrals above.
+
+**Phase 1 status overall:** **all 13 sub-phases substantially complete** — 1.1 through 1.13 done, with deferrals tracked per-PR. Phase 1's acceptance gates remain (end-to-end happy path test, 10%-of-baseline perf check, audit Tier 1 verification, hub pack import propagation under 30 seconds, cost-per-document recording) — all blocked on Phase 0.11's load driver having representative content.
+
+**Next:** Either start Phase 2 (system-wide resilience — recovery tasks, circuit breakers, rate limits, quorum queues, ~15-25 PRs estimated) or close-off Phase 1 deferrals. Phase 2 is the natural next step but it's a long phase; the smaller Phase 1 deferrals (audit cleanup, ULID library, JWT validation when JWKS lands) are quick wins if a focused session is preferred.

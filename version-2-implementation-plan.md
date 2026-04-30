@@ -333,8 +333,8 @@ Per CSV #2 (DECIDED hybrid).
 
 ### 1.13 Connectors family review
 
-- [ ] `gls-connectors` already exists in some form (Drive, Gmail). Audit current code; conform to new contract surface; add `gls-platform-audit` integration.
-- [ ] Per-source watch sharding via ShedLock.
+- [x] `gls-connectors` already exists in some form (Drive, Gmail). Audit current code; conform to new contract surface; add `gls-platform-audit` integration. Phase 1.13 PR1: surveyed `GoogleDriveFolderMonitor`, `GoogleDriveService`, `GmailService`, `GmailPollingScheduler`, `EmailIngestionService` — connectors handle ingestion not state-change auditing, so no `auditEventRepository.save(...)` calls existed to migrate. The audit-relevant events (DOCUMENT_INGESTED, DOCUMENT_CLASSIFIED, GOVERNANCE_APPLIED) flow from downstream services already migrated in PR5/PR6. `gls-platform-audit` dependency was already pulled in via PR6's `gls-app-assembly` migration so connectors can emit through the new pipeline when state-change auditing is added in future.
+- [x] Per-source watch sharding via ShedLock. Phase 1.13 PR1: new `PerSourceLock` helper in `infrastructure.services.connectors` wraps `LockProvider.lock()` with a per-iteration acquire pattern (different from method-level `@SchedulerLock` — multiple replicas can run the scheduled method, each picks up whichever sources are unlocked). Wired into `GoogleDriveFolderMonitor.checkMonitoredFolders` (per-drive lock keyed on `drive-poll-<driveId>`) and `GmailPollingScheduler.pollGmailWatchers` (per-watcher lock keyed on `gmail-poll-<pipelineId>-<nodeId>`). `LockProvider` is auto-configured by `gls-platform-audit`'s `AuditRelayLockConfig` (Mongo-backed); single-replica deployments without ShedLock fall through to the action via `ObjectProvider.getIfAvailable()`-returns-null no-op.
 
 ### Acceptance gate (Phase 1 overall)
 

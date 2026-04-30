@@ -11,6 +11,7 @@ import co.uk.wolfnotsheep.document.repositories.SystemErrorRepository;
 import co.uk.wolfnotsheep.document.services.DocumentService;
 import co.uk.wolfnotsheep.document.services.ObjectStorageService;
 import co.uk.wolfnotsheep.document.util.SlugGenerator;
+import co.uk.wolfnotsheep.infrastructure.services.connectors.PerSourceLock;
 import co.uk.wolfnotsheep.infrastructure.services.drives.GoogleDriveService.DriveFileInfo;
 import co.uk.wolfnotsheep.platform.config.services.AppConfigService;
 import org.slf4j.Logger;
@@ -23,6 +24,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +49,7 @@ public class GoogleDriveFolderMonitor {
     private final MongoTemplate mongoTemplate;
     private final SystemErrorRepository systemErrorRepo;
     private final AppConfigService appConfigService;
+    private final PerSourceLock perSourceLock;
 
     public GoogleDriveFolderMonitor(ConnectedDriveRepository driveRepo,
                                      DocumentRepository documentRepo,
@@ -56,7 +59,8 @@ public class GoogleDriveFolderMonitor {
                                      RabbitTemplate rabbitTemplate,
                                      MongoTemplate mongoTemplate,
                                      SystemErrorRepository systemErrorRepo,
-                                     AppConfigService appConfigService) {
+                                     AppConfigService appConfigService,
+                                     PerSourceLock perSourceLock) {
         this.driveRepo = driveRepo;
         this.documentRepo = documentRepo;
         this.documentService = documentService;
@@ -66,6 +70,7 @@ public class GoogleDriveFolderMonitor {
         this.rabbitTemplate = rabbitTemplate;
         this.systemErrorRepo = systemErrorRepo;
         this.appConfigService = appConfigService;
+        this.perSourceLock = perSourceLock;
     }
 
     /**
@@ -79,29 +84,36 @@ public class GoogleDriveFolderMonitor {
         if (activeDrives.isEmpty()) return;
 
         for (ConnectedDrive drive : activeDrives) {
-            boolean allSucceeded = true;
-            for (String folderId : drive.getMonitoredFolderIds()) {
+            // Per-source lock: only one replica processes a given drive at a time
+            // (Phase 1.13 — per-source watch sharding via ShedLock).
+            String lockName = "drive-poll-" + drive.getId();
+            perSourceLock.withLock(lockName, Duration.ofMinutes(10), () -> processDrive(drive));
+        }
+    }
+
+    private void processDrive(ConnectedDrive drive) {
+        boolean allSucceeded = true;
+        for (String folderId : drive.getMonitoredFolderIds()) {
+            try {
+                checkFolder(drive, folderId);
+            } catch (Exception e) {
+                allSucceeded = false;
+                log.error("Failed to check monitored folder {} for drive {}: {}",
+                        folderId, drive.getProviderAccountEmail(), e.getMessage());
                 try {
-                    checkFolder(drive, folderId);
-                } catch (Exception e) {
-                    allSucceeded = false;
-                    log.error("Failed to check monitored folder {} for drive {}: {}",
-                            folderId, drive.getProviderAccountEmail(), e.getMessage());
-                    try {
-                        SystemError error = SystemError.of("ERROR", "EXTERNAL_API",
-                                "Drive folder monitor failed for folder " + folderId + " on " + drive.getProviderAccountEmail() + ": " + e.getMessage());
-                        error.setService("api");
-                        systemErrorRepo.save(error);
-                    } catch (Exception ex) {
-                        log.warn("Failed to persist folder monitor error: {}", ex.getMessage());
-                    }
+                    SystemError error = SystemError.of("ERROR", "EXTERNAL_API",
+                            "Drive folder monitor failed for folder " + folderId + " on " + drive.getProviderAccountEmail() + ": " + e.getMessage());
+                    error.setService("api");
+                    systemErrorRepo.save(error);
+                } catch (Exception ex) {
+                    log.warn("Failed to persist folder monitor error: {}", ex.getMessage());
                 }
             }
-            // Only update last sync time if all folders were checked successfully
-            if (allSucceeded) {
-                drive.setLastSyncAt(Instant.now());
-                driveRepo.save(drive);
-            }
+        }
+        // Only update last sync time if all folders were checked successfully
+        if (allSucceeded) {
+            drive.setLastSyncAt(Instant.now());
+            driveRepo.save(drive);
         }
     }
 
