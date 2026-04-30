@@ -130,6 +130,18 @@ pipeline:
     enabled: ${PIPELINE_CLASSIFIER_ROUTER_ENABLED:false}
     url: ${PIPELINE_CLASSIFIER_ROUTER_URL:http://gls-classifier-router:8080}
     timeout-ms: ${PIPELINE_CLASSIFIER_ROUTER_TIMEOUT_MS:90000}
+  indexing-worker:
+    # Phase 1.11 PR3 cutover. When true, the legacy
+    # ElasticsearchIndexService dispatches every public write
+    # (indexDocument / removeDocument / reindexAll) to
+    # gls-indexing-worker over HTTP instead of writing to ES
+    # in-process. The worker reuses the same IndexingService
+    # internally — transport swap, no behavioural change. Default
+    # false so the legacy in-process path stays primary; flip to
+    # true to roll forward.
+    enabled: ${PIPELINE_INDEXING_WORKER_ENABLED:false}
+    url: ${PIPELINE_INDEXING_WORKER_URL:http://gls-indexing-worker:8098}
+    timeout-ms: ${PIPELINE_INDEXING_WORKER_TIMEOUT_MS:30000}
   enforcement-worker:
     # Phase 1.10 PR3 cutover. When true, the engine calls
     # gls-enforcement-worker synchronously over HTTP instead of

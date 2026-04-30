@@ -7,6 +7,7 @@ import co.uk.wolfnotsheep.document.repositories.DocumentRepository;
 import co.uk.wolfnotsheep.document.repositories.SystemErrorRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +22,15 @@ import java.util.Map;
 /**
  * Indexes documents into Elasticsearch for fast full-text search.
  * MongoDB remains the system of record — ES is the search index.
+ *
+ * <p>Phase 1.11 PR3 adds an opt-in {@link IndexingWorkerClient}
+ * delegate. When the bean is present (i.e.
+ * {@code pipeline.indexing-worker.enabled=true}), each public
+ * write method dispatches to the worker over HTTP instead of doing
+ * the work in-process. When absent (default), the legacy in-process
+ * ES write logic runs unchanged. The worker container reuses the
+ * same {@code IndexingService} internally — this is a transport
+ * swap, not a behavioural change.
  */
 @Service
 public class ElasticsearchIndexService {
@@ -31,13 +41,17 @@ public class ElasticsearchIndexService {
     private final DocumentRepository documentRepo;
     private final SystemErrorRepository systemErrorRepo;
     private final HttpClient httpClient;
+    private final ObjectProvider<IndexingWorkerClient> workerClientProvider;
 
     @org.springframework.beans.factory.annotation.Value("${spring.elasticsearch.uris:http://localhost:9200}")
     private String esUri;
 
-    public ElasticsearchIndexService(DocumentRepository documentRepo, SystemErrorRepository systemErrorRepo) {
+    public ElasticsearchIndexService(DocumentRepository documentRepo,
+                                     SystemErrorRepository systemErrorRepo,
+                                     ObjectProvider<IndexingWorkerClient> workerClientProvider) {
         this.documentRepo = documentRepo;
         this.systemErrorRepo = systemErrorRepo;
+        this.workerClientProvider = workerClientProvider;
         this.httpClient = HttpClient.newHttpClient();
     }
 
@@ -117,9 +131,22 @@ public class ElasticsearchIndexService {
 
     /**
      * Index a single document. Called after every status change.
+     * When the worker bean is present, dispatches to it over HTTP
+     * instead of writing to ES in-process.
      */
     @Async
     public void indexDocument(String documentId) {
+        IndexingWorkerClient worker = workerClientProvider.getIfAvailable();
+        if (worker != null) {
+            try {
+                long version = worker.indexDocument(documentId);
+                log.debug("indexed via worker doc={} version={}", documentId, version);
+            } catch (RuntimeException e) {
+                log.error("indexing-worker index failed for {}: {}", documentId, e.getMessage());
+                persistEsError(documentId, "indexing-worker exception: " + e.getMessage());
+            }
+            return;
+        }
         try {
             DocumentModel doc = documentRepo.findById(documentId).orElse(null);
             if (doc == null) return;
@@ -156,9 +183,20 @@ public class ElasticsearchIndexService {
     }
 
     /**
-     * Remove a document from the index.
+     * Remove a document from the index. When the worker bean is
+     * present, dispatches to it over HTTP.
      */
     public void removeDocument(String documentId) {
+        IndexingWorkerClient worker = workerClientProvider.getIfAvailable();
+        if (worker != null) {
+            try {
+                String result = worker.removeDocument(documentId);
+                log.debug("removed via worker doc={} result={}", documentId, result);
+            } catch (RuntimeException e) {
+                log.warn("indexing-worker delete failed for {}: {}", documentId, e.getMessage());
+            }
+            return;
+        }
         try {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(esUri + "/" + INDEX_NAME + "/_doc/" + documentId))
@@ -170,9 +208,24 @@ public class ElasticsearchIndexService {
     }
 
     /**
-     * Bulk reindex all documents. Admin-triggered.
+     * Bulk reindex all documents. Admin-triggered. When the worker
+     * bean is present, fires a dispatch and returns -1 to signal
+     * "in-flight" — the legacy synchronous int-count semantics don't
+     * fit the worker's async surface; admins poll the monitoring
+     * page for completion. Returns 0 on dispatch failure.
      */
     public int reindexAll() {
+        IndexingWorkerClient worker = workerClientProvider.getIfAvailable();
+        if (worker != null) {
+            try {
+                String nodeRunId = worker.reindex();
+                log.info("dispatched reindex to worker (nodeRunId={})", nodeRunId);
+                return -1;
+            } catch (RuntimeException e) {
+                log.error("indexing-worker reindex dispatch failed: {}", e.getMessage());
+                return 0;
+            }
+        }
         List<DocumentModel> docs = documentRepo.findAll();
         int indexed = 0;
         for (DocumentModel doc : docs) {

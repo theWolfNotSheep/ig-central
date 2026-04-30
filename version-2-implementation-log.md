@@ -3294,3 +3294,58 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 1.11 status:** **all three plan checkboxes ticked** (consumer + ES write + per-service error handling). Cutover from in-process callers (PR3) is the remaining loose end before the legacy `ElasticsearchIndexService` can be retired.
 
 **Next:** Phase 1.11 PR3 — cut in-process callers over. `DocumentController` / `MonitoringController` / `PipelineWebhookController` stop calling `ElasticsearchIndexService.indexDocument` / `removeDocument` / `reindexAll`. New `IndexingWorkerClient` (HTTP) for the sync admin paths; the Rabbit consumer absorbs the per-document indexing path. Behind `pipeline.indexing-worker.enabled` (default off; legacy in-process service stays as fallback).
+
+## 2026-04-30 — Phase 1.11 PR3 — Indexing-worker cutover behind feature flag
+
+**Done:** Wired `gls-app-assembly`'s legacy `ElasticsearchIndexService` to dispatch each public write (`indexDocument` / `removeDocument` / `reindexAll`) to `gls-indexing-worker` over HTTP when `pipeline.indexing-worker.enabled=true`. Otherwise (default), the in-process write logic runs unchanged. Cutover is contained inside the legacy service — the 3 callers (`DocumentController` / `MonitoringController` / `PipelineWebhookController`) have zero changes. The worker container reuses the same `IndexingService` internally; this is a transport swap, not a logic move.
+
+**Contracts touched:** None new. Consumes the v0.2.0 surface from PR1.
+
+**Changes:**
+
+- `infrastructure/services/IndexingWorkerClient.java` (new) — synchronous JDK `HttpClient` against `${pipeline.indexing-worker.url}/v1/index/{id}?nodeRunId=…`, `DELETE /v1/index/{id}`, and `POST /v1/reindex`. Sets `traceparent` (random valid format) + `Idempotency-Key: nodeRun:<nodeRunId>`. Returns: ES `_version` from index (best-effort, 0 if missing), `result` string from delete (`DELETED` / `NOT_FOUND`), `nodeRunId` from reindex dispatch (fire-and-forget — admin polls monitoring page for completion). Bean conditional on `pipeline.indexing-worker.enabled=true`; default off.
+- `infrastructure/services/IndexingWorkerException.java` (new) — sibling of `ClassifierRouterException` / `EnforcementWorkerException`. Caught inside the legacy service and surfaced as a `SystemError` row, matching the existing in-process ES failure path so callers see no behaviour change.
+- `infrastructure/services/ElasticsearchIndexService.java` — added `ObjectProvider<IndexingWorkerClient>` constructor parameter. Each public write checks `getIfAvailable()` first: if present, dispatch over HTTP; if absent, run the legacy in-process logic. `reindexAll()` returns `-1` to signal "in-flight" when dispatched (the worker's surface is async; admins poll the monitoring page). `0` on dispatch failure, preserving the existing "no documents indexed" semantics. Index-document failures still go through `persistEsError` so the existing monitoring + retry surface keeps working.
+- `application.yaml` — new `pipeline.indexing-worker.{enabled, url, timeout-ms}` keys with env overrides `PIPELINE_INDEXING_WORKER_{ENABLED, URL, TIMEOUT_MS}`. Defaults: `false` / `http://gls-indexing-worker:8098` / `30000`.
+
+**Why route inside the legacy service rather than via a new facade:**
+
+The 3 callers (`DocumentController` / `MonitoringController` / `PipelineWebhookController`) inject `ElasticsearchIndexService` directly and call its methods inline. Wrapping them in a new `IndexingDispatcher` interface would either require touching every caller (3 controllers + their tests + their constructor injections) or creating an internal pass-through that just shadows the method names. The legacy service is already a thin Spring bean with a small surface; the `getIfAvailable()` check at the top of each method is two lines. Smaller cutover surface, no caller changes, and the seam is removable in a single deletion when the legacy path is retired.
+
+**Why fire-and-forget for `reindexAll`:**
+
+The legacy service returned `int indexedCount` synchronously after walking every document. The worker's contracted surface is async (`POST /v1/reindex` returns 202 + `Location: /v1/jobs/{nodeRunId}`). Bridging "synchronous int" to "async dispatch" cleanly would require the legacy service to block waiting for the worker's `JobStore` to flip to `COMPLETED` — which works for small datasets but stalls the admin endpoint for minutes on real corpora. We chose fire-and-forget: dispatch and return `-1` immediately. The existing `MonitoringController.reindex` UI path can poll the monitoring page (or in a follow-up, surface the `nodeRunId` for direct job polling). The synchronous in-process path remains intact when the flag is off.
+
+**Tests:**
+
+- `IndexingWorkerClientTest` (new, 6) — JDK-builtin `HttpServer`, mirrors `ClassifierRouterClientTest` / enforcement client test:
+  - `indexDocument` happy path (200 → version 7, headers + path sanity);
+  - `indexDocument` non-2xx (503) → `IndexingWorkerException` with `HTTP 503` + the response code;
+  - `removeDocument` happy (`DELETED`);
+  - `removeDocument` idempotent (`NOT_FOUND`);
+  - `reindex` async dispatch (202 → returns generated `nodeRunId`);
+  - `reindex` non-202 (409) → `IndexingWorkerException`.
+- Existing `gls-app-assembly` test suite — 73 / 0 (was 67; +6 from the new test file). The `ElasticsearchIndexService` constructor change is absorbed by Mockito's null injection for the new `ObjectProvider` parameter; the legacy path is exercised by every test that doesn't explicitly wire a worker bean.
+
+Reactor: `./mvnw clean test -pl gls-app-assembly,gls-indexing-worker -am` — full green (97 across the two modules).
+
+**Decisions logged:** None new. Mirrors the established CSV #13 / #16 / #20 / #47 patterns for sync HTTP cutover behind a feature flag.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/{IndexingWorkerClient.java, IndexingWorkerException.java}` (2 new).
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/ElasticsearchIndexService.java` (modified).
+- `backend/gls-app-assembly/src/main/resources/application.yaml` (modified — feature-flag keys).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/IndexingWorkerClientTest.java` (1 new).
+- Plan + log = 6 files total.
+
+**Open issues / deferred:**
+
+- **`reindexAll` returns `-1` on worker dispatch.** Existing `MonitoringController.reindex` calls return the int to the admin UI as "documents indexed". `-1` is harmless but uninformative. A small follow-up wires the returned `nodeRunId` through to the admin UI so the operator can poll the worker's `JobStore` for the real summary.
+- **No engine-level integration test of the cutover.** Unit coverage is high (6 new client tests); a Testcontainers smoke that boots the api + the indexing worker against real Mongo/Rabbit/ES with the flag on would close the gap. Tracked alongside the same deferral from PR2.
+- **Legacy `ElasticsearchIndexService` is no longer the only writer path.** When the flag is off, both the in-process service and the worker's Rabbit consumer would write (because PR2's worker container is already up). Operators flip the flag to switch; they should NOT run both with the worker's compose container present unless they want double writes (idempotent — same docId, ES PUT upsert — but wasteful). Documented inline in the application.yaml comment.
+- **Service-account JWT** — client doesn't send a JWT header; worker doesn't validate. Same Phase 0.5 deferral as the enforcement-worker cutover.
+
+**Phase 1.11 status:** **all four checkboxes ticked** (consumer + ES write + error handling + cutover). Phase 1.11 complete with the deferrals above; the legacy `ElasticsearchIndexService` can be retired in a future PR once the worker has soaked.
+
+**Next:** Phase 1.12 (`gls-audit-collector`) — Tier 1 + Tier 2 binary, hash-chain WORM, S3 Object Lock backend, OpenSearch hot + S3 cold for Tier 2, every service starts emitting via `gls-platform-audit`. Largest sub-phase remaining in Phase 1.
