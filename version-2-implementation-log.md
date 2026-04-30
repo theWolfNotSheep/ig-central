@@ -4409,3 +4409,38 @@ Reactor green via `./mvnw -DskipTests package`.
 **Phase 2.6 status:** Plan items 1, 2, 3, 4 (without mime dimension) **done**. Items 5 (MCP impact router-side) and 6 (Prometheus alerts — operational config, not code) remain. Across the whole phase, 5 of 6 items have substantive code coverage; the last is an alerts-config workstream for the deployment side.
 
 **Next:** PR-F — DLQ replay dry-run + per-queue idempotency.
+
+## 2026-04-30 — Phase 2.3 PR5 — DLQ replay dry-run + per-queue idempotency
+
+**Done:** Two deferred items from Phase 2.3 PR4 (#111) closed:
+
+1. **`?dryRun=true` query parameter.** Previously the endpoint committed as it ran — no way to preview what would be replayed. Dry-run mode pops messages via `basicGet(queue, autoAck=false)` and `basicNack(deliveryTag, false, /* requeue */ true)` so messages stay in the DLQ. The response body's new `preview` field lists per-message origin (exchange + routing key), reason, and body size, so operators see exactly what a real replay would do.
+2. **Per-queue ShedLock idempotency.** Two concurrent admin calls draining the same DLQ used to compete on the same messages. The service now acquires a per-queue lock (`dlq-replay-<queueName>`) via the existing `LockProvider`; a second concurrent call gets `409 ReplayInProgressException`. `lockAtMostFor=PT5M` covers worst-case drain time; auto-released on completion.
+
+**Refactor:** the previous implementation used `RabbitTemplate.receive(queue)` (auto-ack) so couldn't support dry-run. Refactored to `RabbitTemplate.execute(channel -> channel.basicGet(queue, false))` with manual ack/nack, plus a `StepOutcome` enum (EMPTY / REPLAYED / SKIPPED) distinguishing "queue empty" from "skipped" cleanly.
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/services/DlqReplayService.java` — significant refactor. New constructor signature accepts `ObjectProvider<LockProvider>`. New `dryRun(queueName, max)` method alongside `replay(queueName, max)`. New `ReplayPreview` and `ReplayInProgressException` types. Counter `dlq.replay{queue, outcome, mode}` adds a `mode` tag (`real` / `dry_run`).
+- `gls-app-assembly/.../infrastructure/controllers/admin/DlqReplayController.java` — `?dryRun=true|false` query param routes to the right service method. `ReplayInProgressException` → 409 Conflict.
+- `gls-app-assembly/.../infrastructure/services/DlqReplayServiceTest.java` — significant rewrite to match the new `execute(channel -> ...)` mocking pattern. 11 tests cover: disallowed queue throws; zero/negative max throws; empty queue zero counts; real mode re-publishes + acks; dry-run nacks-with-requeue + populates preview; max-messages honoured; missing-x-death skipped + acked; per-queue lock held throws ReplayInProgressException; absent LockProvider runs without lock; lock released after replay; absent MeterRegistry doesn't break.
+
+**Tests:** `DlqReplayServiceTest` 11 / 0 (was 8). Reactor green.
+
+**Decisions logged:** None new. Two design choices in JavaDoc:
+- Dry-run uses `basicGet` + `nack(requeue=true)` rather than a peek-only API (RabbitMQ doesn't have native peek). Messages briefly transit out of the queue and back; downstream consumers can't see them during that window. Acceptable for an admin-only operation.
+- Per-queue lock keyed on queue name (not by request id) — concurrent admin sessions targeting different DLQs proceed in parallel.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/DlqReplayService.java` — modified.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/DlqReplayController.java` — modified.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/DlqReplayServiceTest.java` — modified.
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **No filtering by reason / age / count.** Drains FIFO; future: query params for selective replay (e.g. only `reason=expired` messages older than 1h).
+- **Body preview not included.** `ReplayPreview` includes only metadata + size; the body is not surfaced (could be large / contain sensitive data). A separate `?includeBody=true` flag with an admin warning would address operator forensics needs.
+
+**Next:** PR-G — leader-status admin endpoint + `@SchedulerLock` skip-rate metric.
