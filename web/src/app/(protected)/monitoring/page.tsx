@@ -11,6 +11,8 @@ import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
 import { usePipelineSSE } from "@/hooks/use-pipeline-sse";
 import PipelineRunsTab from "@/components/monitoring/pipeline-runs-tab";
+import DlqReplayTab from "@/components/monitoring/dlq-replay-tab";
+import SchedulerLocksPanel from "@/components/monitoring/scheduler-locks-panel";
 
 type ServiceStatus = {
     name: string;
@@ -122,7 +124,7 @@ export default function MonitoringPage() {
         setRefreshing(false);
     };
 
-    const [monTab, setMonTab] = useState<"overview" | "pipeline" | "runs" | "errors">("overview");
+    const [monTab, setMonTab] = useState<"overview" | "pipeline" | "runs" | "errors" | "ops">("overview");
     const [pipelineDocs, setPipelineDocs] = useState<any[]>([]);
     const [pipelineDocsLoading, setPipelineDocsLoading] = useState(false);
     const [pipelineFilter, setPipelineFilter] = useState<string | null>(null);
@@ -228,7 +230,25 @@ export default function MonitoringPage() {
                         </span>
                     )}
                 </button>
+                <button onClick={() => setMonTab("ops")}
+                    className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${monTab === "ops" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"}`}>
+                    Ops
+                </button>
             </div>
+
+            {/* ── Ops Tab ───────────────────────────────── */}
+            {monTab === "ops" && (
+                <div className="space-y-6">
+                    <section>
+                        <SectionHeader icon={Inbox} title="Dead-letter queues" />
+                        <DlqReplayTab />
+                    </section>
+                    <section>
+                        <SectionHeader icon={Activity} title="Leader election" />
+                        <SchedulerLocksPanel />
+                    </section>
+                </div>
+            )}
 
             {/* ── Pipeline Tab ──────────────────────────── */}
             {monTab === "pipeline" && (

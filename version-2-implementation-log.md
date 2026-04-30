@@ -4476,3 +4476,37 @@ Reactor green via `./mvnw -DskipTests package`.
 - **No leader-change event log.** The endpoint shows current state; historical "this replica was leader for these intervals" requires either a Mongo audit collection on lock transitions or scraping the Prometheus counter over time. Operators read the Prometheus history for now.
 
 **Next:** All deferred follow-ups within reach are now shipped. Remaining gaps are blocked or low-priority architectural workstreams: 2.1 `classification_outbox` (blocked on §6.5), 2.2 Anthropic 429 honoring (blocked on Spring AI), 2.5 chaos integration tests (blocked on infra), per-tenant tags (architectural), Phase 3 admin UI (different shape).
+
+## 2026-04-30 — Phase 3 PR1 — DLQ replay + scheduler-locks Ops UI
+
+**Done:** First Phase 3 admin-UI piece. New "Ops" tab on the existing monitoring page surfaces two operationally important admin endpoints shipped in the Phase 2 backend run:
+
+1. **DLQ inspection + replay UI** (Phase 3 plan item §3.5). Wraps `POST /api/admin/dlq/{queueName}/replay` (Phase 2.3 PR4 #111 + dry-run from PR5 #116). Lists the two whitelisted DLQs (`gls.documents.dlq`, `gls.pipeline.dlq`) with per-queue Preview / Replay actions. Preview drives the dry-run path — pops messages, lists origin (exchange + routing key), reason, body size, then nacks-with-requeue so nothing is consumed. Replay drives the real path — re-publishes to origin, acks. Errors during the batch surface in a collapsible details panel. 409 from the backend (concurrent admin call) shows a "try again in a moment" toast. 400 (queue not whitelisted) shows an "invalid request" toast.
+2. **Leader-status panel** (Phase 3 plan item §3.5 / observability). Wraps `GET /api/admin/scheduler/locks` (Phase 2.4 PR3 #117). Reads the ShedLock collection and lists every named lock with its holder hostname, lock-until, locked-at, and a derived `active` badge. Operators see at a glance which replica is leader for `audit-tier1-leader`, `gls-audit-outbox-relay`, `stale-pipeline-recovery`, etc.
+
+**Changes:**
+
+- `web/src/components/monitoring/dlq-replay-tab.tsx` (new) — React component for DLQ preview / replay. Tailwind-styled, `lucide-react` icons, `sonner` toasts, `axios` client. Per-queue collapsed state + per-queue `max` input bounded at 1..1000. Result panel renders the preview list as a table.
+- `web/src/components/monitoring/scheduler-locks-panel.tsx` (new) — React component for the leader-status table. Fetches once on mount; `Refresh` button for manual reload. Active vs Expired states distinguished by colour-coded badge. Relative-time formatter (`5s ago`, `in 30m`).
+- `web/src/app/(protected)/monitoring/page.tsx` — extended `monTab` state with `"ops"`. New tab button in the header strip. New conditional Ops-tab body renders the two components stacked under section headers.
+
+**Tests:** TypeScript `tsc --noEmit` clean. ESLint clean for the new files (pre-existing warnings in `monitoring/page.tsx` unchanged — `fetchInfra` unused, several `any` types — separate cleanup).
+
+**Decisions logged:** None new. The "Ops" tab pattern matches the existing tab structure on monitoring; future Phase 3 work can add more tabs (Performance dashboards in §3.8, Hub pack browser in §3.9) under the same shape.
+
+**Files changed:**
+
+- `web/src/components/monitoring/dlq-replay-tab.tsx` — 1 new.
+- `web/src/components/monitoring/scheduler-locks-panel.tsx` — 1 new.
+- `web/src/app/(protected)/monitoring/page.tsx` — modified (3 small edits: import, state-tuple union, tab strip + body).
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **No body-preview in the dry-run table.** Backend `ReplayPreview` carries body bytes count only; surfacing the actual body needs an `?includeBody=true` flag (which itself was deferred from PR5).
+- **No real-time auto-refresh for the locks panel.** Manual Refresh only; consider a 10-second poll if operators ask for it.
+- **No per-queue queue-depth display.** The DLQ tab doesn't show "X messages currently pending" — would need a separate `GET /api/admin/dlq/{queueName}/depth` endpoint backed by `RabbitTemplate.execute(channel -> channel.messageCount(queue))`. Tracked.
+
+**Phase 3 status:** Plan item §3.5 partial — DLQ inspection + replay UI shipped; document monitoring + retry buttons + bulk reclassification trigger remain. §3.8 (performance dashboards) untouched but the metrics it'd consume are all live from Phase 2.
+
+**Next:** Phase 3 PR2 — pick from §3.1 (visual DAG editor for pipelines), §3.2 (block library), §3.3 (taxonomy tree editor), §3.6 (audit explorer), §3.8 (performance dashboards). Pipeline DAG editor is the biggest single piece; performance dashboards consume the metrics already shipped.
