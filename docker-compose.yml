@@ -564,6 +564,35 @@ services:
     logging: *default-logging
     networks: [gls]
 
+  gls-enforcement-worker:                                 # Phase 1.10
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-enforcement-worker
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: backend/gls-governance-enforcement/Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
+      # The HTTP worker is the new entry point (Phase 1.10 PR3 will
+      # cut the orchestrator over to it). Disable the legacy in-process
+      # Rabbit consumer in this container so it doesn't double-process
+      # the classified queue alongside the api/execution-engine path.
+      # The consumer is `@ConditionalOnProperty(... matchIfMissing=true,
+      # havingValue=false)` — set the flag to `true` to disable it.
+      PIPELINE_EXECUTION_ENGINE_ENABLED: "true"
+    depends_on:
+      mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    logging: *default-logging
+    networks: [gls]
+
   # (gls-classifier-router placeholder removed — active block is below.)
 
   # gls-audit-collector:                                  # Phase 1.12 / 0.7 follow-up

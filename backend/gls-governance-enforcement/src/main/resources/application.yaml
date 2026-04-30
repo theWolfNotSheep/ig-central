@@ -1,12 +1,13 @@
 server:
-  port: 8084
+  port: ${GLS_ENFORCEMENT_WORKER_PORT:8097}
 
 spring:
   application:
-    name: gls-governance-enforcement
+    name: gls-enforcement-worker
 
-  mongodb:
-    uri: mongodb://root:${MONGO_PASSWORD:example}@localhost:27017/${MONGO_DB_NAME:governance_led_storage_main}?authSource=admin
+  data:
+    mongodb:
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://root:${MONGO_PASSWORD:example}@localhost:27017/${MONGO_DB_NAME:governance_led_storage_main}?authSource=admin}
 
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
@@ -21,11 +22,33 @@ minio:
   bucket: ${MINIO_BUCKET:gls-documents}
 
 pipeline:
+  # Disable the legacy Rabbit consumer when the Phase 1.10 HTTP worker
+  # is the only enforcer in the topology — flip to false (the default
+  # in this module) so the pipeline-execution-engine flag governs
+  # whether the in-process consumer runs.
   execution-engine:
     enabled: ${PIPELINE_EXECUTION_ENGINE_ENABLED:false}
+
+gls:
+  enforcement:
+    worker:
+      jobs:
+        ttl: ${GLS_ENFORCEMENT_JOBS_TTL:PT24H}
+      async:
+        core-size: ${GLS_ENFORCEMENT_ASYNC_CORE:4}
+        max-size: ${GLS_ENFORCEMENT_ASYNC_MAX:8}
+        queue-capacity: ${GLS_ENFORCEMENT_ASYNC_QUEUE:32}
 
 management:
   endpoints:
     web:
       exposure:
-        include: info,health
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+
+logging:
+  level:
+    co.uk.wolfnotsheep: INFO

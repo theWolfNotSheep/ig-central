@@ -3072,3 +3072,61 @@ The Phase 1.9 PR4 stash on the classification result (`extractedMetadata`, `poli
 - **Tier 2 audit emission** — `AppliedSummary.auditEventId` is contracted but until `gls-platform-audit` library completes (Phase 0.7 outstanding), the worker emits via the legacy `AuditEventRepository` and reports the legacy id.
 
 **Next:** Phase 1.10 PR2 — HTTP controllers + Dockerfile + compose entry on the existing `gls-governance-enforcement` module. Wires the contracted surface to the in-place `EnforcementService` (no logic move; just an HTTP veneer + idempotent job-store like the other workers).
+
+## 2026-04-30 — Phase 1.10 PR2 — Enforcement worker HTTP surface
+
+**Done:** Carved `gls-governance-enforcement` from a library-module-with-`@SpringBootApplication` into a standalone deployable. The HTTP surface implements the Phase 1.10 PR1 contract directly via openapi-generator stubs; the existing `EnforcementService` is reused unchanged — the controller is a thin veneer plus before/after snapshot capture so `AppliedSummary` can be composed from the diff without altering the service signature (which is also called by the in-process pipeline engine + the legacy Rabbit consumer).
+
+**Contracts touched:**
+
+- `contracts/enforcement-worker/openapi.yaml` — bumped 0.1.0 → 0.2.0. `AppliedSummary.retentionTrigger` and `AppliedSummary.expectedDispositionAction` enums realigned with the canonical Java `ClassificationCategory.RetentionTrigger` and `RetentionSchedule.DispositionAction` values. PR1 used aspirational values that didn't exist in the codebase — caught at PR2 mapping time. Technically breaking, but the contract has no live consumers yet (PR2 is the first implementation). Major version bump deferred to 1.0.0.
+- `contracts/enforcement-worker/VERSION`, `CHANGELOG.md` — version bump + changelog entry per `CLAUDE.md` workflow.
+
+**New module surface:**
+
+- `web/EnforceController` (implements `EnforceApi`) — POST `/v1/enforce`. Sync (200) without `Prefer: respond-async`, 202 + `Location: /v1/jobs/{nodeRunId}` with it. Sync + async share the `JobStore` row for idempotency per CSV #47. Acquired/Running/Completed/Failed disposition matches the slm-worker / classifier-router pattern. Captures `storageTierId` snapshot before calling `EnforcementService.enforce`; composes `AppliedSummary` from the diff afterwards.
+- `web/JobController` (implements `JobsApi`) — GET `/v1/jobs/{nodeRunId}`. Returns `JobStatus` envelope; `result` is the cached `EnforceResponse` JSON for completed rows.
+- `web/MetaController` (implements `MetaApi`) — `/v1/capabilities` advertises tier `ENFORCEMENT`; `/actuator/health` returns the contract-shaped `HealthResponse{UP}`. Spring Boot's actuator continues to expose its own `/actuator/health` for ops tooling.
+- `web/AsyncDispatcher` + `web/AsyncConfig` — bounded `enforcementAsyncExecutor` (4/8/32 defaults, tunable via `gls.enforcement.worker.async.*`), invoked via `@Async` from the controller's async branch.
+- `web/EnforceExceptionHandler` (`@RestControllerAdvice`) — RFC 7807 problem+json mapping for `DocumentNotFoundException` (404), `EnforcementInvalidInputException` (422), `JobInFlightException` (409), `JobNotFoundException` (404), `IllegalArgumentException` (422 fallback), and `RuntimeException` (500 catch-all).
+- `web/EnforcementMapper` — pure-static translator between the contract `EnforceRequest` / `ClassificationEvent` and the internal `DocumentClassifiedEvent` (validates required fields), plus `DocumentModel` → `AppliedSummary` (storage-tier-diff, retention denormalisation, optional schedule-fallback for `expectedDispositionAction`).
+- `web/{DocumentNotFoundException, EnforcementInvalidInputException, JobInFlightException, JobNotFoundException}` — thin marker exceptions consumed by the handler.
+- `jobs/{JobStore, JobAcquisition, JobRecord, JobRepository, JobState}` — Mongo-backed idempotency cache. Collection `enforcement_jobs`, TTL via `expireAfter="0s"` index on `expiresAt` (24h default; tunable via `gls.enforcement.worker.jobs.ttl`). Lifted from the slm-worker pattern verbatim.
+
+**EnforcementService:** no signature change. The new HTTP path calls `enforce(event)` exactly as the legacy `ClassificationEnforcementConsumer` and `PipelineExecutionEngine` do. Existing `EnforcementServiceTest` (5 tests) still passes unmodified.
+
+**Application class:** `GlsGovernanceEnforcementApplication` gains `@EnableAsync` and an additional `enforcement.jobs` package in `@EnableMongoRepositories.basePackages`. Component scan unchanged.
+
+**Module pom:** OpenAPI generator wired to `contracts/enforcement-worker/openapi.yaml`, generates into `co.uk.wolfnotsheep.enforcement.{api,model,invoker}`. `interfaceOnly=true` so controllers retain hand-written control. Added `jakarta.validation-api` + `swagger-annotations` for the generated stubs.
+
+**Application config:** Port flipped from 8084 → 8097 (matches the contract's `localhost` server entry; no other consumer referenced 8084). New properties: `gls.enforcement.worker.{jobs.ttl, async.{core-size,max-size,queue-capacity}, build.version}`. Re-routed mongo URI lookup to `spring.data.mongodb.uri` (was on the deprecated `spring.mongodb.uri` key, which Spring Boot 4 silently ignores).
+
+**Docker + compose:**
+
+- `Dockerfile` (new) — repo-root context, mirrors slm-worker layout. JDK 25 build → JRE 25 runtime; `EXPOSE 8097`; healthcheck on `/actuator/health`.
+- `docker-compose.yml` — new `gls-enforcement-worker` service (after `gls-llm-worker`). Wires Mongo + Rabbit + MinIO. Sets `PIPELINE_EXECUTION_ENGINE_ENABLED=true` to disable the legacy in-process Rabbit consumer in this container — otherwise it would double-process the `documents.classified` queue alongside the `gls-app-assembly` engine.
+
+**Tests:** 25 new tests, full suite 30 tests / 0 failures in this module.
+
+- `EnforcementMapperTest` (11) — required-field validation (5 missing-field paths), all-fields pass-through, optional-field defaults, storage-diff composition, schedule-fallback for disposition, null-safe response when `after=null`.
+- `EnforceControllerTest` (8) — implements-EnforceApi guard, happy-path sync (200 + cache write + storage diff), 404 on missing document with `markFailed("DOCUMENT_NOT_FOUND")`, 409 on in-flight collision (no service call), 200 on completed cache hit (no service call), 202 on async with `Location` header + dispatcher invocation, 422 on invalid-input with `markFailed("ENFORCEMENT_INVALID_INPUT")`, 500-class on unexpected service failure with `markFailed("ENFORCEMENT_UNEXPECTED")`.
+- `JobControllerTest` (4) — unknown nodeRunId throws `JobNotFoundException`; PENDING / COMPLETED / FAILED rows surface correctly; cached `EnforceResponse` round-trips through Jackson with `findAndRegisterModules()`.
+- `MetaControllerTest` (2) — capabilities advertise `service` / `version` / `tiers=[ENFORCEMENT]`; health returns 200 UP.
+
+Reactor: full backend reactor green (`./mvnw -DskipTests package`). `gls-app-assembly` test suite still green (63 tests including the unaffected `PipelineExecutionEngineTest` etc).
+
+**Spectral lint:** clean (`No results with a severity of 'error' found!`).
+
+**Decisions logged:** None new. The contract enum realignment to canonical Java values is captured in the CHANGELOG, not the decision tree — it's a spec-correction, not a new architectural call.
+
+**Open issues / deferred:**
+
+- **`auditEventId` always null in PR2** — `AppliedSummary.auditEventId` is contracted but the `EnforcementService` writes via the legacy `AuditEventRepository.save()` without surfacing the saved id. The simpler refactor (return `AuditEvent` from `enforce`) would ripple through the engine + consumer. Deferred to the same PR that wires `gls-platform-audit` (Phase 0.7 outstanding); the controller passes `null` and notes the deferral inline.
+- **Service-account JWT** — contract declares `serviceJwt` security but the worker has no JWT validator wired yet. Same blocker as Phase 0.5 (JWKS infra). Defer until that lands.
+- **PR3 follow-on** — orchestrator cutover. Add `EnforcementWorkerClient` (mirroring `ClassifierRouterClient`) called from `PipelineExecutionEngine` after `applyClassificationToDocument`, behind `pipeline.enforcement-worker.enabled` (default off). Rabbit consumer + in-process call stay as the fallback until the cutover proves out.
+- **Generator-smoke wiring** — `contracts-smoke` only validates `hello-world` today. Add the enforcement-worker spec to its surface in a small follow-up so a contract change without a regenerate is caught at CI rather than at module compile-time.
+- **Standalone-deployable acceptance test** — no Testcontainers integration test boots the worker against a real Mongo + posts a real request yet. The unit-level coverage is high (30 tests) but a smoke test would catch wiring regressions (e.g. the application.yaml mongo-key fix). Tracked as a Phase 1.10 PR2.5 / acceptance follow-up.
+
+**Phase 1.10 status:** 2 of 3 plan checkboxes ticked (deployable split + contract). Rollback feature flag remains for PR3.
+
+**Next:** Phase 1.10 PR3 — orchestrator cutover behind `pipeline.enforcement-worker.enabled`. Add HTTP client + integration into `PipelineExecutionEngine.applyClassificationToDocument`. Or: address PR2 follow-ups (audit-event-id wiring, JWT, smoke test) once Phase 0.7 / 0.5 prerequisites land.
