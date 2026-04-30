@@ -4300,3 +4300,38 @@ Reactor green via `./mvnw -DskipTests package`.
 **Phase 2.4 status:** **all 3 plan items complete.** (1: audit-collector Tier 1 leader election — done here; 2: `gls-scheduler` leader election — done in Phase 2.4 PR1 + earlier `OutboxRelay`; 3: connector per-source watches — done in Phase 1.13.)
 
 **Next:** Phase 2 status is now: 2.1 4/5 (blocked), 2.2 3/5 (design calls), 2.3 4/4 ✓, 2.4 3/3 ✓, 2.5 0/N (blocked on infra), 2.6 5/6 (cascade-router data points needed). Remaining session work, in order: 2.2 Ollama+Anthropic fallback, then 2.6 tier-of-decision histogram + cost-per-document metrics, then Phase 3 admin UI (different shape — React, not Java).
+
+## 2026-04-30 — Phase 2.2 PR4 — Ollama + Anthropic in-worker fallback
+
+**Done:** Closed Phase 2.2 plan item 3 ("Ollama unreachable → circuit + fallback to Anthropic"). New `FallbackLlmService` decorator wraps a primary + secondary `LlmService` and falls through to secondary on primary failure. Wired in `LlmBackendConfig` so when both `AnthropicChatModel` and `OllamaChatModel` beans are autoconfigured AND `gls.llm.worker.fallback.enabled=true`, the active service becomes `Fallback(primary, secondary)`. Primary is whichever side `gls.llm.worker.backend` selects; secondary is the other.
+
+**Design call (recommended default):** Primary = `gls.llm.worker.backend` (existing config), secondary = the other backend. Default `fallback.enabled=false` so existing deployments don't change behaviour. Operators flip the flag once both API keys are wired and they want resilience over deterministic backend choice.
+
+**Changes:**
+
+- `gls-llm-worker/.../backend/FallbackLlmService.java` (new) — decorator implementing `LlmService`. On call: tries primary; on `BudgetExceededException` / `RateLimitExceededException` (caller-side gates), propagates without fallback; on `CircuitBreakerOpenException` or other `RuntimeException`, calls secondary. `activeBackend()` returns the configured primary regardless of where the actual call landed (transparent fallback). `isReady()` is true if EITHER backend is up. Counter `llm.fallback.invocations{primary, reason}` ticks per fallback event with reason `circuit_breaker_open` or `primary_failed`.
+- `gls-llm-worker/.../backend/LlmBackendConfig.java` — significant refactor of the `llmService` bean factory. Each backend (anthropic / ollama) is now built lazily via `buildAnthropicIfAvailable` / `buildOllamaIfAvailable` helpers — both are constructed when their `ChatModel` bean exists, regardless of which one is selected as primary. When `fallback.enabled=true` AND secondary is available, wraps in `FallbackLlmService`; else uses primary alone. Each backend has its own circuit breaker (different lock-name `llm-anthropic` vs `llm-ollama`) so a failing primary trips its own breaker and the fallback path stays fast.
+- `gls-llm-worker/.../backend/FallbackLlmServiceTest.java` (new) — 11 tests: primary success no secondary call; primary `RuntimeException` falls through; primary breaker open falls through; budget exception doesn't fall through; rate-limit exception doesn't fall through; secondary failure propagates; `activeBackend` returns primary; `isReady` true if either ready; `isReady` false if both down; counter tags primary + reason; absent `MeterRegistry` doesn't break.
+
+**Tests:** 99 / 0 in `gls-llm-worker` (was 88; +11 new). Reactor green via `./mvnw -DskipTests package`.
+
+**Decisions logged:** None new. Two design choices documented in JavaDoc:
+- Caller-side gates don't fall back (would mask the back-pressure).
+- Per-backend circuit breakers (different lock-names) so primary's outage doesn't suppress secondary's metrics.
+
+**Files changed:**
+
+- `backend/gls-llm-worker/src/main/java/.../backend/FallbackLlmService.java` — 1 new.
+- `backend/gls-llm-worker/src/main/java/.../backend/LlmBackendConfig.java` — modified (per-backend lazy-build refactor + fallback wiring).
+- `backend/gls-llm-worker/src/test/java/.../backend/FallbackLlmServiceTest.java` — 1 new.
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **Single-attempt secondary.** If secondary also fails, we propagate. No "try primary again after a window" — that's what the circuit breaker on each backend handles separately.
+- **No "promote secondary to primary" admin endpoint.** Operators can't tell the worker to swap primary/secondary at runtime — config restart required. Tracked.
+- **Per-tenant fallback policy not modelled.** All callers share the same primary/secondary config. Per-tenant overrides need a request-scoped resolver; out of scope today.
+
+**Phase 2.2 status:** **4 of 5 plan items complete.** (1: Anthropic circuit breaker — done; 2: Anthropic 429 / `Retry-After` — blocked on Spring AI; 3: Ollama unreachable + Anthropic fallback — done here; 4: MCP unreachable confidence cap — done; 5: cost budget auto-degrade — done.)
+
+**Next:** Phase 2.6 PR2 — tier-of-decision histogram + cost-per-document metrics. Needs the cascade router to emit per-tier outcomes + per-document cost rollup.
