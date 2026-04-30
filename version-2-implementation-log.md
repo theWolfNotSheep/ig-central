@@ -3130,3 +3130,56 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`). `gls-app-ass
 **Phase 1.10 status:** 2 of 3 plan checkboxes ticked (deployable split + contract). Rollback feature flag remains for PR3.
 
 **Next:** Phase 1.10 PR3 — orchestrator cutover behind `pipeline.enforcement-worker.enabled`. Add HTTP client + integration into `PipelineExecutionEngine.applyClassificationToDocument`. Or: address PR2 follow-ups (audit-event-id wiring, JWT, smoke test) once Phase 0.7 / 0.5 prerequisites land.
+
+## 2026-04-30 — Phase 1.10 PR3 — Engine cutover behind feature flag
+
+**Done:** Wired `gls-app-assembly`'s `PipelineExecutionEngine` to call `gls-enforcement-worker` over HTTP when `pipeline.enforcement-worker.enabled=true`. Otherwise (default), the engine keeps invoking the in-process `EnforcementService` exactly as before. Both paths share the same downstream behaviour because the worker container reuses the same `EnforcementService` internally — the cutover is a transport swap, not a logic move.
+
+**Contracts touched:** None new. Consumes the v0.2.0 surface from PR1+PR2 (`POST /v1/enforce` synchronous path).
+
+**Changes:**
+
+- `infrastructure/services/pipeline/EnforcementWorkerClient.java` (new) — synchronous JDK `HttpClient` against `${pipeline.enforcement-worker.url}/v1/enforce`. Builds the request body from a `DocumentClassifiedEvent` (omitting null-optional fields), sets `traceparent` (random valid format) + `Idempotency-Key: nodeRun:<nodeRunId>`, parses `EnforceResponse` + `AppliedSummary` into a slim `Outcome` record (carries `storageTierBefore`/`After`, `storageMigrated`, `auditEventId`, `durationMs`). Bean conditional on `pipeline.enforcement-worker.enabled=true` per CSV-friendly opt-in pattern; default off so the legacy in-process path stays primary.
+- `infrastructure/services/pipeline/EnforcementWorkerException.java` (new) — sibling of `ClassifierRouterException`. Engine treats it as an `ENFORCEMENT` stage failure (existing `PipelineStageException("ENFORCEMENT", e)` wrap).
+- `PipelineExecutionEngine.java` — new `ObjectProvider<EnforcementWorkerClient>` constructor parameter (last position to minimise churn) + new private `applyEnforcement(doc, event, node)` helper extracted from `handleGovernance`. The helper checks `getIfAvailable()` on the provider: if present (worker bean active), call HTTP and re-fetch the doc by id (worker has already persisted before responding); if absent, call the in-process `EnforcementService.enforce`. The rest of `handleGovernance` (toggle clearing, status routing, audit log) is unchanged.
+- `application.yaml` — new `pipeline.enforcement-worker.{enabled, url, timeout-ms}` keys with env overrides `PIPELINE_ENFORCEMENT_WORKER_{ENABLED, URL, TIMEOUT_MS}`. Defaults: `false` / `http://gls-enforcement-worker:8097` / `60000`.
+
+**Why a private helper rather than a separate strategy class:** the helper is one method called from one place; extracting it to a strategy interface would add ceremony without a second implementation in flight. The branch reads top-to-bottom in `handleGovernance` exactly the way the existing classifier-router branch reads — the engine has a consistent "optional client provider, fall through to in-process service" shape across the workers it dispatches to.
+
+**Why the engine re-fetches the document after the worker call:** the worker writes via the same `documentService.save(doc)` inside `EnforcementService.enforce` before responding. The contracted `AppliedSummary` carries observability fields (storage diff, audit event id), not the full `DocumentModel`. Re-fetching by id is the same Mongo round-trip the in-process path implicitly does (engine-side lookup before per-node toggle clearing + status save). No contract change needed.
+
+**Why `Idempotency-Key: nodeRun:<nodeRunId>`:** orchestrator pattern from CSV #16. Repeated dispatches with the same nodeRunId hit the worker's `JobStore` cache and return the previously-cached `EnforceResponse` without re-running enforcement.
+
+**Tests:**
+
+- `EnforcementWorkerClientTest` (new, 4) — JDK-builtin `HttpServer` (no external deps; mirrors `ClassifierRouterClientTest`):
+  - happy-path 200 → `Outcome` with all `AppliedSummary` fields populated, request body shape sanity (nodeRunId, classification keys, sensitivity), header sanity (`Idempotency-Key=nodeRun:nr-engine-1`, valid `traceparent` regex);
+  - non-2xx (404 + problem+json) → `EnforcementWorkerException` containing `HTTP 404` and the response code;
+  - minimal response (no `applied` fields) → `Outcome` with all-null/false defaults;
+  - event with null optional fields → request body omits those keys.
+- `PipelineExecutionEngineTest` (existing 7) — unchanged. The new `ObjectProvider<EnforcementWorkerClient>` constructor parameter is unmocked → injected as null by `@InjectMocks`, exercising the "client absent" branch implicitly. The graph-only tests don't invoke `handleGovernance` so the branch isn't directly hit; that's covered by the contract-style HTTP test on the client itself.
+
+Reactor: 67 tests / 0 failures across `gls-app-assembly` + `gls-governance-enforcement` on a clean build (was 63 in PR2; +4 new client tests).
+
+**Spectral lint:** N/A (no contract changes).
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../pipeline/{EnforcementWorkerClient.java, EnforcementWorkerException.java}` (2 new).
+- `backend/gls-app-assembly/src/main/java/.../pipeline/PipelineExecutionEngine.java` (1 modified).
+- `backend/gls-app-assembly/src/main/resources/application.yaml` (1 modified — feature-flag keys).
+- `backend/gls-app-assembly/src/test/java/.../pipeline/EnforcementWorkerClientTest.java` (1 new).
+- Plan + log = 6 files total.
+
+**Decisions logged:** None new. Mirrors the established CSV #13 / #16 / #20 / #47 patterns for sync HTTP cutover.
+
+**Open issues / deferred:**
+
+- **No engine-level test of the HTTP branch.** The `PipelineExecutionEngineTest` only exercises the graph-compilation logic (topological sort, condition evaluation) — it doesn't call `handleGovernance` end-to-end. A higher-level integration test that wires a real `PipelineExecutionEngine` against an `EnforcementWorkerClient` pointed at a stub HTTP server would close that gap. Tracked as a follow-up.
+- **Compose env not pre-wired.** The `api` compose entry doesn't set `PIPELINE_ENFORCEMENT_WORKER_ENABLED` — relies on the application.yaml default (`false`). Same pattern as `PIPELINE_CLASSIFIER_ROUTER_ENABLED`. Operators flip via `.env` when ready to roll forward; PR2 already shipped the worker container.
+- **`auditEventId` always null end-to-end** — same deferral noted in PR2 (worker emits via legacy `AuditEventRepository` without surfacing the saved id). The client surfaces the field but it'll be null until `gls-platform-audit` integration lands (Phase 0.7).
+- **Service-account JWT** — client doesn't add a JWT header. Same deferral as PR2; worker doesn't validate either, so end-to-end works without one. Tighten when JWKS infra lands.
+
+**Phase 1.10 status:** **all three plan checkboxes ticked** (deployable split + contract + rollback feature flag). Phase 1.10 complete with the audit/JWT/integration-test deferrals above.
+
+**Next:** Phase 1.11 (`gls-indexing-worker`) — greenfield service consuming `gls.documents.classified`, writes document body + `extractedMetadata` to Elasticsearch. Or close-off any of the deferred Phase 1.10 follow-ups once their prerequisites land.
