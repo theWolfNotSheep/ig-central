@@ -51,6 +51,7 @@
         <module>gls-slm-worker</module>
         <module>gls-llm-worker</module>
         <module>gls-indexing-worker</module>
+        <module>gls-audit-collector</module>
     </modules>
 
     <dependencyManagement>

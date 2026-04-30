@@ -39,6 +39,7 @@
         <gls.slm.worker.version>${gls.version}</gls.slm.worker.version>
         <gls.llm.worker.version>${gls.version}</gls.llm.worker.version>
         <gls.indexing.worker.version>${gls.version}</gls.indexing.worker.version>
+        <gls.audit.collector.version>${gls.version}</gls.audit.collector.version>
     </properties>
 
     <dependencyManagement>
@@ -116,6 +117,12 @@
                 <groupId>co.uk.wolfnotsheep.indexing</groupId>
                 <artifactId>gls-indexing-worker</artifactId>
                 <version>${gls.indexing.worker.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.auditcollector</groupId>
+                <artifactId>gls-audit-collector</artifactId>
+                <version>${gls.audit.collector.version}</version>
             </dependency>
 
             <!-- ==================== Governance ==================== -->
