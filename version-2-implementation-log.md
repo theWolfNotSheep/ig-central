@@ -3788,3 +3788,35 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 - Phase 1 acceptance gates (end-to-end happy path test, 10%-of-baseline perf check, audit Tier 1 verification, hub pack import propagation, cost-per-document recording) → blocked on Phase 0.11's load driver having representative content.
 
 **Next:** Phase 2 (system-wide resilience) is the natural next step now that Phase 1's actionable closeout is done. ~15-25 PRs estimated covering recovery jobs, vendor circuit breakers, backpressure / rate limits, quorum queues + DLQ wiring.
+
+## 2026-04-30 — Phase 2.1 PR1 — `StalePipelineRunRecoveryTask` (detect + fail-out)
+
+**Done:** First half of Phase 2.1 plan item 1 — detection of v2 `PipelineRun`s stuck in `RUNNING`/`WAITING` for >15 min, with explicit fail-out so they no longer sit invisibly stuck. The legacy `StaleDocumentRecoveryTask` (which operates on `DocumentModel.status` — the v1 form) stays as-is; this is a parallel task for the v2 `pipeline_runs` / `node_runs` collections that the legacy task doesn't touch. Auto-resume from the last completed node is deferred to PR2 (needs a public `engine.resumeRun` entry point).
+
+**Why split:** The plan item is "detects pipeline runs stuck > 15 min; resets to last completed node; re-queues." The detect-and-fail behaviour is a complete observable outcome on its own — operators stop seeing silently stuck runs. Auto-resume requires exposing a new entry point on `PipelineExecutionEngine` (currently the only ways into `walkNodes` are `executePipeline(DocumentIngestedEvent)` for fresh runs and `resumePipeline(LlmJobCompletedEvent)` for LLM-completion callbacks — neither fits the "continue from currentNodeIndex" shape). Doing the engine refactor in the same PR conflates two reviewable concerns; splitting keeps each PR's surface tight.
+
+**Changes:**
+
+- `infrastructure/services/pipeline/StalePipelineRunRecoveryTask.java` (new) — `@Scheduled(fixedDelay = 5 min, initialDelay = 2 min)`. Queries `pipeline_runs` for status ∈ {`RUNNING`, `WAITING`} AND `updatedAt < now-15min` via the existing `findByStatusAndUpdatedAtBefore` repo method. Per stale run: enumerates `node_runs`, marks any in-flight (`RUNNING` / `WAITING`) `NodeRun` as `FAILED` with `error="STALE_RECOVERY: ..."` and `completedAt`/`durationMs` stamped; marks the `PipelineRun` itself `FAILED` with `errorNodeKey=currentNodeKey`, `error="STALE_RECOVERY: ..."`, `completedAt`/`totalDurationMs` stamped; persists a `SystemError` row so the existing monitoring page surfaces the recovery action. Top-level errors are caught and turned into a `SystemError` so the task self-reports if Mongo goes offline mid-cycle.
+- Per-cycle Micrometer counters: `pipeline.stale.detected` (every stale `PipelineRun` seen) and `pipeline.stale.failed` (every run successfully failed-out — diverges from `detected` when a per-run save throws, which the task swallows so the next iteration retries).
+- `infrastructure/services/pipeline/StalePipelineRunRecoveryTaskTest.java` (new) — 8 tests: no-op when nothing stale; `RUNNING` run + in-flight `NodeRun` both failed with stamped fields; `WAITING` run also handled; completed/skipped/already-failed `NodeRun`s left alone; multiple stale runs processed independently; one-run save failure doesn't break the batch; top-level exception persists `SystemError` instead of escaping; absent `MeterRegistry` doesn't break the task.
+
+**Tests:** 94 / 0 in `gls-app-assembly` (was 86; +8 new for `StalePipelineRunRecoveryTaskTest`). Reactor green.
+
+**Decisions logged:** None new. Task lives in `gls-app-assembly` (not the aspirational `gls-scheduler` module the plan named) because the engine + repos already live there; carving out `gls-scheduler` is a separate architectural cleanup.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/pipeline/StalePipelineRunRecoveryTask.java` — 1 new.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/pipeline/StalePipelineRunRecoveryTaskTest.java` — 1 new.
+- Log = 3 files total.
+
+**Open issues / deferred:**
+
+- **Auto-resume (PR2 of this plan item).** Add `PipelineExecutionEngine.resumeRun(pipelineRunId)` that loads the run + document, reconstructs a synthetic `DocumentIngestedEvent`, and calls `walkNodes` from `currentNodeIndex`. Then the recovery task can call it instead of fail-out, with retry-count bookkeeping (`MAX_AUTO_RETRIES` guard analogous to the legacy task) before falling back to the fail-out path.
+- **No `@SchedulerLock` on the recovery task itself.** Single-replica deploys are fine today; multi-replica deploys would have every replica running the task in parallel and racing to fail the same runs out (idempotent — the second replica's save would see status already `FAILED` and overwrite with the same value). Add leader-election via ShedLock alongside the analogous treatment for the legacy `StaleDocumentRecoveryTask` once the multi-replica roll-out lands.
+- **No metric for run age at detection time.** Useful for SLO dashboards (p95 detection-lag = wall-time between a run going stale and being failed out). Add a `Timer` or distribution summary in PR2 once the `Counter` shape proves out.
+
+**Phase 2.1 status:** Plan item 1 (`StaleDocumentRecoveryTask`) — first half done (v2 detection + fail-out). Second half (auto-resume) is PR2. Remaining 2.1 items (classification_outbox reconciler, audit outbox replay, ES reconciliation, Hub pack import retry) untouched.
+
+**Next:** Phase 2.1 PR2 — `engine.resumeRun(pipelineRunId)` + wire the recovery task to call it instead of fail-out.
