@@ -50,6 +50,7 @@
         <module>gls-bert-inference</module>
         <module>gls-slm-worker</module>
         <module>gls-llm-worker</module>
+        <module>gls-indexing-worker</module>
     </modules>
 
     <dependencyManagement>
