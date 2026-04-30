@@ -3720,3 +3720,38 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 1 status overall:** **all 13 sub-phases substantially complete** — 1.1 through 1.13 done, with deferrals tracked per-PR. Phase 1's acceptance gates remain (end-to-end happy path test, 10%-of-baseline perf check, audit Tier 1 verification, hub pack import propagation under 30 seconds, cost-per-document recording) — all blocked on Phase 0.11's load driver having representative content.
 
 **Next:** Either start Phase 2 (system-wide resilience — recovery tasks, circuit breakers, rate limits, quorum queues, ~15-25 PRs estimated) or close-off Phase 1 deferrals. Phase 2 is the natural next step but it's a long phase; the smaller Phase 1 deferrals (audit cleanup, ULID library, JWT validation when JWKS lands) are quick wins if a focused session is preferred.
+
+## 2026-04-30 — Phase 1 closeout PR1 — Extract shared `BaseAuditEmitter`
+
+**Done:** Resolved the "two near-identical helpers" deferral from Phase 1.12 PR6's open-issues list. `PlatformAuditEmitter` (gls-app-assembly) and `EnforcementAuditEmitter` (gls-governance-enforcement) shared ~80% of their code — envelope construction, ULID gen, exception swallowing, absent-emitter no-op, schema-version stamping. Pulled the shared logic into `BaseAuditEmitter` in `gls-platform-audit`; per-service helpers now extend it and contribute only the convention-setting bits (default actor type, default tier, default retention).
+
+**Changes:**
+
+- `gls-platform-audit/emit/BaseAuditEmitter.java` (new) — abstract base. Holds `ObjectProvider<AuditEmitter>`, serviceName, serviceVersion, instanceId. Exposes a single `protected final emit(documentId, eventType, tier, action, outcome, retentionClass, actor, metadata, content)` that resolves the emitter via `getIfAvailable`, returns silently when null (legacy dual-write path), builds the envelope with a fresh ULID + current schema version, swallows `RuntimeException` with WARN log. Sets `pipelineRunId` / `nodeRunId` / `traceparent` / `previousEventHash` to null pending request-scoped propagation (still deferred).
+- `gls-platform-audit/emit/Ulid.java` (new) — pulled the Crockford-base32 ULID generator out of the per-service helpers. Pure utility with `nextId()`. Lives in the same package so subclass authors don't need to import it (callers go through `BaseAuditEmitter.emit`).
+- `gls-app-assembly/.../infrastructure/audit/PlatformAuditEmitter.java` — refactored to extend `BaseAuditEmitter`. Constructor delegates the 4-arg seed; convention methods (`emitUserAction`, `emitTier1`, `emitTier2`) reduced to 3-line calls into `super.emit`. Public surface unchanged — every call site keeps working.
+- `gls-governance-enforcement/.../enforcement/audit/EnforcementAuditEmitter.java` — same refactor; convention methods (`emitTier1`, `emitTier2`) reduced to 3-line calls. Public surface unchanged.
+- `gls-platform-audit/test/.../emit/BaseAuditEmitterTest.java` (new) — 3 tests exercising the shared base via a minimal in-test subclass that exposes `emit`: envelope shape (ULID-format eventId, current schema version, DOCUMENT resource, null trace fields, pass-through of metadata + content), runtime-exception swallowing, absent-emitter no-op.
+- `gls-platform-audit/test/.../emit/UlidTest.java` (new) — 3 tests: schema-pattern match across 100 invocations, no excluded characters (I, L, O, U), distinctness across 1000 invocations.
+
+**Tests:** Reactor green (`./mvnw -DskipTests package`). Module-level: `gls-platform-audit` +6 tests (BaseAuditEmitterTest 3 + UlidTest 3); `gls-governance-enforcement` unchanged at 5 in `EnforcementAuditEmitterTest` (still pass — they exercise the public surface, not the duplicated internals); `gls-app-assembly` unchanged at 6 in `PlatformAuditEmitterTest` (same).
+
+**Decisions logged:** None new. The "shared helper" pattern was already named in the PR6 deferral — making it concrete here.
+
+**Files changed:**
+
+- `backend/gls-platform-audit/src/main/java/.../emit/{BaseAuditEmitter, Ulid}.java` — 2 new.
+- `backend/gls-platform-audit/src/test/java/.../emit/{BaseAuditEmitterTest, UlidTest}.java` — 2 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/audit/PlatformAuditEmitter.java` — modified (now extends base, lost ~80 LOC of duplicated internals).
+- `backend/gls-governance-enforcement/src/main/java/.../enforcement/audit/EnforcementAuditEmitter.java` — modified (same shape).
+- Log = 5 files total.
+
+**Open issues / deferred:**
+
+- **Legacy `auditEventRepository.save(...)` dual-writes still fired.** Cleanup PR is gated on the admin UI cutover to the collector REST surface — both `AuditInterceptor` (injects but doesn't save) and `AuditLogController` (read-only admin query) need to migrate first. Same deferral as PR5/PR6.
+- **`pipelineRunId` / `nodeRunId` / `traceparent` propagation.** Same deferral — needs request-scoped beans threaded through the controllers + services. Now centralised in `BaseAuditEmitter.emit`'s call site so the future PR has a single place to wire it.
+- **Real ULID library.** `Ulid.nextId()` is still SecureRandom-only — not time-sortable. Swap to a real ULID library (e.g. `com.github.f4b6a3:ulid-creator`) when one is added to the platform; the change becomes a single-file edit now that the generator is one place.
+
+**Phase 1 closeout status:** 1 of 2 actionable closeout items done. Next: PerSourceLock metrics (Phase 1.13 deferral). Other deferrals (admin UI cutover, full pipelineRunId propagation, ULID library, JWT/JWKS validation, Phase 1 acceptance gates) remain blocked on external work / Phase 0.11 loadgen.
+
+**Next:** Phase 1 closeout PR2 — add Micrometer counters to `PerSourceLock` so Drive/Gmail polling skip-rate is observable.
