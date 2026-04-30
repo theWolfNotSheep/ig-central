@@ -8,6 +8,8 @@ import co.uk.wolfnotsheep.document.repositories.AuditEventRepository;
 import co.uk.wolfnotsheep.document.repositories.ConnectedDriveRepository;
 import co.uk.wolfnotsheep.document.models.AuditEvent;
 import co.uk.wolfnotsheep.document.services.DocumentService;
+import co.uk.wolfnotsheep.infrastructure.audit.PlatformAuditEmitter;
+import co.uk.wolfnotsheep.platformaudit.envelope.Outcome;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -23,13 +25,16 @@ public class FilingService {
     private final DocumentService documentService;
     private final ConnectedDriveRepository driveRepository;
     private final AuditEventRepository auditEventRepository;
+    private final PlatformAuditEmitter platformAudit;
 
     public FilingService(DocumentService documentService,
                          ConnectedDriveRepository driveRepository,
-                         AuditEventRepository auditEventRepository) {
+                         AuditEventRepository auditEventRepository,
+                         PlatformAuditEmitter platformAudit) {
         this.documentService = documentService;
         this.driveRepository = driveRepository;
         this.auditEventRepository = auditEventRepository;
+        this.platformAudit = platformAudit;
     }
 
     public DocumentModel fileDocument(String documentId, String driveId, String folderId, String performedBy) {
@@ -73,6 +78,12 @@ public class FilingService {
                 Map.of("driveId", driveId,
                         "folderId", folderId != null ? folderId : "root",
                         "provider", providerType.name())));
+        platformAudit.emitUserAction(documentId, "DOCUMENT_FILED", "FILE",
+                performedBy, Outcome.SUCCESS,
+                Map.of("driveId", driveId,
+                        "folderId", folderId != null ? folderId : "root",
+                        "provider", providerType.name()),
+                null);
 
         log.info("Document {} filed to drive {} folder {} by {}", documentId, driveId, folderId, performedBy);
         return saved;
@@ -95,6 +106,8 @@ public class FilingService {
         auditEventRepository.save(new AuditEvent(
                 documentId, "DOCUMENT_RETURNED_TO_TRIAGE", performedBy, "USER",
                 Map.of()));
+        platformAudit.emitUserAction(documentId, "DOCUMENT_RETURNED_TO_TRIAGE", "RETURN_TO_TRIAGE",
+                performedBy, Outcome.SUCCESS, Map.of(), null);
 
         log.info("Document {} returned to triage by {}", documentId, performedBy);
         return saved;
@@ -122,6 +135,8 @@ public class FilingService {
         auditEventRepository.save(new AuditEvent(
                 documentId, "DOCUMENT_RETURNED_TO_INBOX", performedBy, "USER",
                 Map.of()));
+        platformAudit.emitUserAction(documentId, "DOCUMENT_RETURNED_TO_INBOX", "RETURN_TO_INBOX",
+                performedBy, Outcome.SUCCESS, Map.of(), null);
 
         log.info("Document {} returned to inbox by {}", documentId, performedBy);
         return saved;

@@ -24,8 +24,10 @@ import co.uk.wolfnotsheep.governance.repositories.PipelineBlockRepository;
 import co.uk.wolfnotsheep.governance.models.PiiTypeDefinition.ApprovalStatus;
 import co.uk.wolfnotsheep.governance.repositories.PiiTypeDefinitionRepository;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
+import co.uk.wolfnotsheep.infrastructure.audit.PlatformAuditEmitter;
 import co.uk.wolfnotsheep.infrastructure.services.DocumentAccessService;
 import co.uk.wolfnotsheep.infrastructure.services.ElasticsearchIndexService;
+import co.uk.wolfnotsheep.platformaudit.envelope.Outcome;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.data.domain.Page;
@@ -68,6 +70,7 @@ public class DocumentController {
     private final MetadataSchemaRepository metadataSchemaRepo;
     private final co.uk.wolfnotsheep.document.repositories.AuditEventRepository auditEventRepository;
     private final co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService;
+    private final PlatformAuditEmitter platformAudit;
 
     public DocumentController(DocumentService documentService,
                               GovernanceService governanceService,
@@ -81,7 +84,8 @@ public class DocumentController {
                               PiiRedactionService piiRedactionService,
                               MetadataSchemaRepository metadataSchemaRepo,
                               co.uk.wolfnotsheep.document.repositories.AuditEventRepository auditEventRepository,
-                              co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService) {
+                              co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService,
+                              PlatformAuditEmitter platformAudit) {
         this.documentService = documentService;
         this.governanceService = governanceService;
         this.rabbitTemplate = rabbitTemplate;
@@ -95,6 +99,7 @@ public class DocumentController {
         this.metadataSchemaRepo = metadataSchemaRepo;
         this.auditEventRepository = auditEventRepository;
         this.throttleService = throttleService;
+        this.platformAudit = platformAudit;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -153,11 +158,19 @@ public class DocumentController {
                         java.util.Map.of("action", "VIEW", "reason", "Insufficient permissions",
                                 "sensitivity", doc.getSensitivityLabel() != null ? doc.getSensitivityLabel().name() : "",
                                 "category", doc.getCategoryName() != null ? doc.getCategoryName() : "")));
+                platformAudit.emitUserAction(id, "ACCESS_DENIED", "VIEW", um.getEmail(),
+                        Outcome.FAILURE,
+                        java.util.Map.of("sensitivity", doc.getSensitivityLabel() != null ? doc.getSensitivityLabel().name() : "",
+                                "category", doc.getCategoryName() != null ? doc.getCategoryName() : ""),
+                        java.util.Map.of("reason", "Insufficient permissions"));
                 return ResponseEntity.status(403).build();
             }
         }
         auditEventRepository.save(new AuditEvent(id, "DOCUMENT_VIEWED", user.getUsername(), "USER",
                 java.util.Map.of("fileName", doc.getOriginalFileName() != null ? doc.getOriginalFileName() : doc.getFileName())));
+        platformAudit.emitUserAction(id, "DOCUMENT_VIEWED", "VIEW", user.getUsername(),
+                Outcome.SUCCESS, java.util.Map.of(),
+                java.util.Map.of("fileName", doc.getOriginalFileName() != null ? doc.getOriginalFileName() : doc.getFileName()));
         return ResponseEntity.ok(doc);
     }
 
@@ -173,11 +186,19 @@ public class DocumentController {
                         java.util.Map.of("action", "DOWNLOAD", "reason", "Insufficient permissions",
                                 "sensitivity", doc.getSensitivityLabel() != null ? doc.getSensitivityLabel().name() : "",
                                 "category", doc.getCategoryName() != null ? doc.getCategoryName() : "")));
+                platformAudit.emitUserAction(id, "ACCESS_DENIED", "DOWNLOAD", um.getEmail(),
+                        Outcome.FAILURE,
+                        java.util.Map.of("sensitivity", doc.getSensitivityLabel() != null ? doc.getSensitivityLabel().name() : "",
+                                "category", doc.getCategoryName() != null ? doc.getCategoryName() : ""),
+                        java.util.Map.of("reason", "Insufficient permissions"));
                 return ResponseEntity.status(403).build();
             }
         }
         auditEventRepository.save(new AuditEvent(id, "DOCUMENT_DOWNLOADED", user.getUsername(), "USER",
                 java.util.Map.of("fileName", doc.getOriginalFileName() != null ? doc.getOriginalFileName() : doc.getFileName())));
+        platformAudit.emitUserAction(id, "DOCUMENT_DOWNLOADED", "DOWNLOAD", user.getUsername(),
+                Outcome.SUCCESS, java.util.Map.of(),
+                java.util.Map.of("fileName", doc.getOriginalFileName() != null ? doc.getOriginalFileName() : doc.getFileName()));
 
         InputStream stream = documentService.downloadFile(id);
         return ResponseEntity.ok()
@@ -300,11 +321,19 @@ public class DocumentController {
                         java.util.Map.of("action", "VIEW", "reason", "Insufficient permissions",
                                 "sensitivity", doc.getSensitivityLabel() != null ? doc.getSensitivityLabel().name() : "",
                                 "category", doc.getCategoryName() != null ? doc.getCategoryName() : "")));
+                platformAudit.emitUserAction(doc.getId(), "ACCESS_DENIED", "VIEW", um.getEmail(),
+                        Outcome.FAILURE,
+                        java.util.Map.of("sensitivity", doc.getSensitivityLabel() != null ? doc.getSensitivityLabel().name() : "",
+                                "category", doc.getCategoryName() != null ? doc.getCategoryName() : ""),
+                        java.util.Map.of("reason", "Insufficient permissions"));
                 return ResponseEntity.status(403).build();
             }
         }
         auditEventRepository.save(new AuditEvent(doc.getId(), "DOCUMENT_VIEWED", user.getUsername(), "USER",
                 java.util.Map.of("fileName", doc.getOriginalFileName() != null ? doc.getOriginalFileName() : doc.getFileName())));
+        platformAudit.emitUserAction(doc.getId(), "DOCUMENT_VIEWED", "VIEW", user.getUsername(),
+                Outcome.SUCCESS, java.util.Map.of(),
+                java.util.Map.of("fileName", doc.getOriginalFileName() != null ? doc.getOriginalFileName() : doc.getFileName()));
         return ResponseEntity.ok(doc);
     }
 

@@ -3632,3 +3632,45 @@ Reactor: full backend reactor green.
 **Phase 1.12 status:** **all 5 plan items at least partially ticked.** PR5 covers the first service migration (gls-governance-enforcement); PR6+ migrates the remaining services (gls-app-assembly document/classification flows, connectors). Phase 1.12 substantially complete with the cutover-completion PR sequence still ahead.
 
 **Next:** Phase 1.12 PR6 — migrate `gls-app-assembly` document + classification flows to `gls-platform-audit`. Largest remaining migration; same dual-write pattern.
+
+## 2026-04-30 — Phase 1.12 PR6 — Migrate gls-app-assembly to AuditEmitter
+
+**Done:** Second service migration. `gls-app-assembly` now dual-writes audit events from three call surfaces: `FilingService` (3 sites), `ReviewQueueController` (4 sites), `DocumentController` (5 sites — 3 ACCESS_DENIED + DOCUMENT_VIEWED ×2 + DOCUMENT_DOWNLOADED). 12 emit sites total. Same dual-write pattern as PR5 — legacy `auditEventRepository.save(...)` retains alongside the new `platformAudit.emit*(...)` call.
+
+**Why a separate helper rather than reusing PR5's:**
+
+`gls-governance-enforcement`'s `EnforcementAuditEmitter` defaults to SYSTEM actor — appropriate because every emit there is service-driven. `gls-app-assembly`'s emits are mostly USER actor (DOCUMENT_VIEWED is a person clicking a document, ACCESS_DENIED is RBAC tripping on a user request). Inlining USER-actor support into the enforcement helper would muddle its surface; a thin separate helper here is clearer. When a third migration lands (likely connectors in Phase 1.13), pull the shared helper into `gls-platform-audit` to avoid copy-paste drift.
+
+**Changes:**
+
+- `audit/PlatformAuditEmitter.java` (new) — same shape as `EnforcementAuditEmitter` but exposes three methods: `emitUserAction(documentId, eventType, action, userId, outcome, metadata, content)` (DOMAIN tier, USER actor, 7Y default — the common case here), `emitTier1(...)` (DOMAIN, SYSTEM actor — for system-driven Tier 1 events), `emitTier2(...)` (SYSTEM tier, 30D default).
+- `services/filing/FilingService.java` — added `PlatformAuditEmitter` constructor parameter; dual-write at 3 sites (DOCUMENT_FILED, DOCUMENT_RETURNED_TO_TRIAGE, DOCUMENT_RETURNED_TO_INBOX).
+- `controllers/review/ReviewQueueController.java` — added `PlatformAuditEmitter`; dual-write at 4 sites (CLASSIFICATION_APPROVED, CLASSIFICATION_OVERRIDDEN, CLASSIFICATION_REJECTED, PII_REPORTED).
+- `controllers/documents/DocumentController.java` — added `PlatformAuditEmitter`; dual-write at 5 sites including 3 ACCESS_DENIED paths (with `Outcome.FAILURE`).
+- `pom.xml` — added `gls-platform-audit` dependency.
+- `audit/PlatformAuditEmitterTest.java` (new) — 6 focused tests: USER actor + DOMAIN tier + 7Y default, SYSTEM actor + DOMAIN tier (emitTier1), SYSTEM tier + 30D default (emitTier2), exception swallowing, absent-emitter no-op, null retentionClass defaults to 7Y.
+
+**Tests:** 79 / 0 in `gls-app-assembly` (was 73; +6 new for `PlatformAuditEmitterTest`). Existing controller + service tests unchanged — Mockito's `@InjectMocks` absorbs the new constructor parameter via no-arg null injection.
+
+Reactor: full backend reactor green (`./mvnw -DskipTests package`).
+
+**Decisions logged:** None new. Same dual-write rationale as PR5.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/pom.xml` — modified.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/audit/PlatformAuditEmitter.java` — 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/{services/filing/FilingService, controllers/review/ReviewQueueController, controllers/documents/DocumentController}.java` — 3 modified.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/audit/PlatformAuditEmitterTest.java` — 1 new.
+- Plan + log = 7 files total.
+
+**Open issues / deferred:**
+
+- **Two near-identical helpers.** `EnforcementAuditEmitter` (PR5) and `PlatformAuditEmitter` (this PR) share ~80% of their code — envelope construction, ULID gen, exception swallowing, absent-emitter no-op. When the connector migration lands, pull the shared base into `gls-platform-audit` (e.g. `BaseAuditEmitterHelper`) and reduce each service-specific helper to just the convention-setting bits (default tier, default actor, default retention).
+- **No `pipelineRunId` / `nodeRunId` / `traceparent` propagation.** Same deferral as PR5 — needs request-scoped beans threaded through the controllers + services.
+- **Legacy emissions still fired.** Cleanup PR comes after admin UI cutover verifies the new pipeline.
+- **`AuditInterceptor.java` and `AuditLogController.java` not migrated yet.** Both reference `AuditEventRepository` per the survey, but neither writes events — `AuditLogController` is read-only (admin UI query surface), `AuditInterceptor` injects but doesn't `save()`. Both eventually move to consume the collector's REST surface; tracked alongside the admin UI cutover.
+
+**Phase 1.12 status:** **all 5 plan items ticked** with the connectors migration deferred to Phase 1.13. Phase 1.12 substantially complete; cleanup PRs (delete legacy emissions, retire `AuditEventRepository`, migrate admin UI to query collector REST) come after the new pipeline soaks.
+
+**Next:** Phase 1.13 (`Connectors family review`) — audit `gls-connectors` (Drive, Gmail), conform to new contract surface, add `gls-platform-audit` integration. The connector migration is the third audit emit site so it's worth pulling the shared helper into `gls-platform-audit` first to avoid a third copy.
