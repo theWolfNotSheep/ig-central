@@ -3406,3 +3406,72 @@ Tier 1 is the compliance audit-of-record. Search-friendly indexing (categoryId, 
 - **AsyncAPI `audit/asyncapi.yaml` info.version drift.** The file's `info.version: 0.2.0` is older than the on-disk `VERSION: 0.3.0`. Cosmetic but should reconcile in a small follow-up.
 
 **Next:** Phase 1.12 PR2 — greenfield `gls-audit-collector` Maven module: Spring Boot entry, two `@RabbitListener`s (Tier 1 + Tier 2), JobStore mirror, hash-chain consumer-side validation, Mongo backends initially (real backends in PR3 / PR4), Dockerfile + compose entry. Tests lifted from the indexing-worker pattern.
+
+## 2026-04-30 — Phase 1.12 PR2 — Audit-collector module
+
+**Done:** New greenfield `gls-audit-collector` Maven module. Consumes `audit.tier1.*` + `audit.tier2.*` from RabbitMQ on its own bound queues (single Tier 1 queue per CSV #4 single-writer, separate Tier 2 queue for horizontal scale). Persists each envelope to a Mongo collection (`audit_tier1_events` / `audit_tier2_events`); the collector's REST surface from PR1 reads back through the same store. Tier 1 consumer validates the per-resource hash chain on receipt — mismatched chains are dropped with a structured log line, not persisted.
+
+**Contracts touched:** None new (consumes the v0.1.0 surface from PR1).
+
+**New module surface:**
+
+- `GlsAuditCollectorApplication` — Spring Boot entry. Scans `auditcollector` package; `@EnableMongoRepositories` for the `store` package.
+- `consumer/AuditRabbitConfig` — declares `gls.audit.tier1.collector` (bound to `audit.tier1.*`) and `gls.audit.tier2.collector` (bound to `audit.tier2.*`) on the existing `gls.audit` topic exchange. The Tier 1 queue is single-writer; horizontal scale will gate it via ShedLock once a second collector replica becomes a real concern.
+- `consumer/EnvelopeMapper` — extracts denormalised fields from the free-form envelope map into typed `StoredAuditEvent` rows. Preserves the full envelope verbatim on `StoredAuditEvent.envelope` so the contract response can round-trip the raw payload regardless of which fields we happen to denormalise today.
+- `consumer/Tier1Consumer` — happy/unhappy-path per CLAUDE.md: chain-broken events are dropped + logged (acked, not requeued); duplicates are idempotent no-ops; null / missing-required-fields envelopes are dropped with a warning.
+- `consumer/Tier2Consumer` — no chain validation. Idempotent on `eventId` via Mongo unique-key conflict.
+- `chain/EventHasher` — deterministic SHA-256 of the canonical identity string `eventId|eventType|timestamp|resourceType:resourceId|previousEventHash`. The chain protects identity + ordering; content protection is the publisher's `Tier1HashTransformer` job (already done in Phase 0.7).
+- `chain/ChainBrokenException` — typed exception carrying the offending event id, expected hash, and computed hash for downstream logging / metrics.
+- `chain/ChainVerifier` — walks a per-resource chain oldest → newest, recomputes the hash sequence, returns OK / BROKEN / NOT_FOUND. Used by the contracted `GET /v1/chains/{resourceType}/{resourceId}/verify` endpoint.
+- `store/StoredAuditEvent` (abstract) + `StoredTier1Event` (`@Document(collection = "audit_tier1_events")`) + `StoredTier2Event` (`@Document(collection = "audit_tier2_events")`) — Mongo-mapped event rows with composite indexes `idx_resource_chain` (chain lookup) and `idx_tier2_search` (eventType + timestamp DESC for the Tier 2 search filters).
+- `store/Tier1Repository` + `Tier2Repository` — Spring Data Mongo repos with the chain-lookup query methods.
+- `web/EventsController` — `GET /v1/events` (Tier 2 dynamic Mongo query with `documentId` / `eventType` / `actorService` / `from` / `to` filters + cursor pagination) and `GET /v1/events/{eventId}` (consults Tier 1 then Tier 2 via id index). Page token is intentionally simple (zero-padded page index); future revisions can swap to opaque base64 without breaking the contract.
+- `web/ChainsController` — implements `GET /v1/chains/{resourceType}/{resourceId}/verify` against `ChainVerifier`.
+- `web/MetaController` — capabilities advertise tiers `[AUDIT_TIER_1, AUDIT_TIER_2]`; health returns 200 UP.
+- `web/AuditCollectorExceptionHandler` — RFC 7807 problem+json envelope per CSV #17. `AuditEventNotFoundException` → 404; `AuditResourceNotFoundException` → 404; `AuditQueryInvalidException` → 422; `DataAccessResourceFailureException` → 503 `AUDIT_BACKEND_UNAVAILABLE`; `RuntimeException` catch-all → 500.
+
+**Module pom + Dockerfile + compose:**
+
+- `pom.xml` — new artifact `co.uk.wolfnotsheep.auditcollector:gls-audit-collector`. Dependencies: `gls-platform-audit` (envelope record types), Spring Boot starters (webmvc, actuator, data-mongodb, amqp), jakarta.validation + swagger-annotations, openapi-generator plugin wired to `contracts/audit-collector/openapi.yaml`. `interfaceOnly=true`.
+- `Dockerfile` — repo-root context, mirrors slm/enforcement/indexing-worker layout. JDK 25 build → JRE 25 runtime. `EXPOSE 8099`. Healthcheck on `/actuator/health`.
+- `docker-compose.yml` — new `gls-audit-collector` service after `gls-indexing-worker`. Wires Mongo + Rabbit (depends_on both healthy). No ES dependency yet — that lands in PR3 when Tier 2 storage moves to Elasticsearch.
+- `backend/pom.xml` + `backend/bom/pom.xml` — module registration + per-deployable version property `gls.audit.collector.version`.
+
+**Application config:** Port 8099 (next after 8098). Critically, sets `gls.platform.audit.relay.enabled=false` — the collector is consume-only; if the relay scheduled task ran here, it would emit events from this container's outbox alongside the events it's already consuming, creating an emit-loop. Operators don't need to think about this; the override is in `application.yaml`.
+
+**Tests:** 26 / 0 failures.
+
+- `EventHasherTest` (6) — hash format (sha256: prefix, 64 hex chars), determinism, sensitivity to eventId/resource/previousHash changes, null-row handling.
+- `ChainVerifierTest` (5) — empty chain → NOT_FOUND, single first-in-chain OK, multi-event chain OK, broken link reports BROKEN with offending id + hashes, first event with non-null previousHash flagged BROKEN.
+- `EnvelopeMapperTest` (4) — Tier 1 full denormalisation, Tier 1 missing optional fields → null, Tier 2 marks SYSTEM, invalid timestamp → null.
+- `Tier1ConsumerTest` (6) — first-in-chain persisted; correct chain link persisted; wrong chain link dropped (no insert); duplicate key idempotent; null envelope discarded; missing-resource discarded.
+- `MetaControllerTest` (2) — capabilities tier list, health UP/200.
+- `ChainsControllerTest` (3) — OK / BROKEN response shapes, NOT_FOUND throws `AuditResourceNotFoundException`.
+
+Reactor: full backend reactor green. Existing platform-audit suite (18 tests) still passing.
+
+**Decisions logged:** None new. The collector is a consumer of decisions already locked in CSV #3 / #4 / #6 / #17 / #18.
+
+**Files changed:**
+
+- `backend/gls-audit-collector/{pom.xml, Dockerfile, src/main/resources/application.yaml}` — 3 new.
+- `backend/gls-audit-collector/src/main/java/.../auditcollector/{GlsAuditCollectorApplication, chain/{EventHasher, ChainBrokenException, ChainVerifier}, consumer/{AuditRabbitConfig, EnvelopeMapper, Tier1Consumer, Tier2Consumer}, store/{StoredAuditEvent, StoredTier1Event, StoredTier2Event, Tier1Repository, Tier2Repository}, web/{EventsController, ChainsController, MetaController, AuditCollectorExceptionHandler, AuditEventNotFoundException, AuditQueryInvalidException, AuditResourceNotFoundException}}.java` — 19 new.
+- `backend/gls-audit-collector/src/test/java/.../auditcollector/{chain/{EventHasherTest, ChainVerifierTest}, consumer/{EnvelopeMapperTest, Tier1ConsumerTest}, web/{MetaControllerTest, ChainsControllerTest}}.java` — 6 new.
+- `backend/pom.xml` — module registration.
+- `backend/bom/pom.xml` — version property + dependency entry.
+- `docker-compose.yml` — new service entry.
+- Plan + log = ~32 files total.
+
+**Open issues / deferred:**
+
+- **Tier 2 stays on Mongo for now.** PR3 will switch to Elasticsearch (already in the stack). The `EventsController`'s search uses `MongoTemplate` — swapping to ES means a thin `Tier2Store` interface with two implementations and a feature flag, similar to the indexing-worker cutover.
+- **Tier 1 stays on Mongo without role-based deny enforcement.** PR4 adds the role-based-deny / append-only enforcement (Mongo collection with `db.collection.changeStream` denied for everything but the collector's service account). True S3 Object Lock is a future follow-up.
+- **No id-to-tier index.** `getEvent(eventId)` consults Tier 1 then Tier 2; for the Mongo first-cut this is two lookups. Once Tier 2 moves to ES (PR3), we'll want a small "events_index" Mongo collection mapping `eventId → (tier, timestamp)` so the controller dispatches to the right backend in O(1).
+- **Search supports a single `eventType` only.** Bump the contract to `eventType[]` once the implementation is exercised.
+- **No DLX wiring** on `gls.audit.tier1.collector` — broken-chain events are acked + logged today. A Phase 2 reliability pass should bind a DLX for forensics.
+- **No ShedLock yet** on the Tier 1 consumer. Single-writer is enforced by single-replica today; a second collector container would currently double-write. Add ShedLock guard in PR3 / PR4 when scaling becomes real.
+- **Service-account JWT** — contract declares it, no validator wired (Phase 0.5 deferral).
+
+**Phase 1.12 status:** 2 of 5 plan items ticked (deployable + chain validation). Remaining: Tier 2 ES backend (PR3), Tier 1 hardened backend (PR4), service migrations from `AuditEventRepository` (PR5+).
+
+**Next:** Phase 1.12 PR3 — swap Tier 2 storage from Mongo to the existing Elasticsearch container. New `Tier2Store` interface with `MongoTier2Store` (current) + `EsTier2Store` (new) implementations behind `gls.audit.collector.tier2-backend=mongo|es` config flag (default `mongo` until ES indices + ILM are wired).
