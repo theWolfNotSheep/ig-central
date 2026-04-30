@@ -3183,3 +3183,48 @@ Reactor: 67 tests / 0 failures across `gls-app-assembly` + `gls-governance-enfor
 **Phase 1.10 status:** **all three plan checkboxes ticked** (deployable split + contract + rollback feature flag). Phase 1.10 complete with the audit/JWT/integration-test deferrals above.
 
 **Next:** Phase 1.11 (`gls-indexing-worker`) — greenfield service consuming `gls.documents.classified`, writes document body + `extractedMetadata` to Elasticsearch. Or close-off any of the deferred Phase 1.10 follow-ups once their prerequisites land.
+
+## 2026-04-30 — Phase 1.11 PR1 — Indexing-worker contract
+
+**Done:** First PR of Phase 1.11. Lays the contract for the upcoming `gls-indexing-worker` deployable. Today the indexing logic lives in `gls-app-assembly` as `ElasticsearchIndexService` (301 lines, called from `DocumentController` / `MonitoringController` / `PipelineWebhookController`). Phase 1.11 carves it into a new module that consumes `document.classified` from RabbitMQ + exposes a small REST admin surface for sync escape hatches.
+
+**Contracts touched:**
+
+- `contracts/indexing-worker/{VERSION, CHANGELOG.md, README.md, openapi.yaml}` — new (v0.1.0). REST admin surface only; the primary path is the Rabbit consumer declared in `messaging/asyncapi.yaml`.
+- `contracts/messaging/{VERSION, CHANGELOG.md, asyncapi.yaml}` — bumped 0.3.0 → 0.4.0. The `documentClassified` channel + `consumeDocumentClassified` operation descriptions add `gls-indexing-worker` as a third consumer alongside `ClassificationEnforcementConsumer` and `PipelineExecutionConsumer`. No payload change; each consumer binds its own queue so the broker fans out the existing `DocumentClassifiedEvent` to all three.
+
+**REST surface (admin escape hatches + ops):**
+
+- `POST /v1/index/{documentId}?nodeRunId=…` — sync re-index a single document; idempotent on `nodeRunId` per CSV #16. 200 / 404 (`DOCUMENT_NOT_FOUND`) / 409 (in-flight) / 422 (`INDEX_MAPPING_CONFLICT` — document parked in `index_quarantine`) / 503 (`INDEX_BACKEND_UNAVAILABLE`).
+- `DELETE /v1/index/{documentId}` — remove from index; idempotent (200 with `result: NOT_FOUND` if already absent).
+- `POST /v1/reindex` — async bulk reindex; returns 202 + `Location: /v1/jobs/{nodeRunId}`. Optional `statusFilter[]` to restrict the walk; default skips `DISPOSED`.
+- `GET /v1/jobs/{nodeRunId}` — poll bulk-reindex job; `result` carries `ReindexSummary` (totalDocuments, indexedCount, skippedCount, failedCount, durationMs).
+- `GET /v1/capabilities`, `GET /actuator/health` — standard meta surface (advertises `tiers: [INDEXING]`).
+
+**Why an HTTP surface for a primarily-Rabbit worker:**
+
+- **Admin escape hatches.** The existing `MonitoringController.reindexAll` is operator-driven (button in the admin UI). An admin needs a way to force re-index without re-classifying — that's the `POST /v1/index/{documentId}` endpoint.
+- **Disposition cleanup.** `DocumentController` calls `removeDocument` after disposition. Admin actions (delete, archive) need an explicit removal path; the Rabbit consumer is index-only.
+- **Bulk reindex** is operator-triggered (after schema migration, after a long ES outage) — needs an HTTP entry point with poll-able job state. The contracted async pattern matches the established `JobStore` shape from sibling workers.
+
+**Why no payload change to `DocumentClassifiedEvent`:**
+
+The indexing worker re-fetches the canonical `DocumentModel` from Mongo by id — same pattern the enforcement worker uses. The event envelope is a notification, not the indexable record. Adding fields to the event would couple all three consumers to one consumer's needs.
+
+**Spectral lint:** clean (`No results with a severity of 'error' found!`). AsyncAPI lint: clean (1 info-level note that 3.1.0 is newer than 3.0.0; we're consistent with the rest of the repo on 3.0.0).
+
+**Decisions logged:** None new. The "AsyncAPI is the equivalent of OpenAPI for async interfaces" rule was already established in CLAUDE.md.
+
+**Files changed:**
+
+- `contracts/indexing-worker/{VERSION, CHANGELOG.md, README.md, openapi.yaml}` — 4 new.
+- `contracts/messaging/{VERSION, CHANGELOG.md, asyncapi.yaml}` — 3 modified.
+- Plan + log = 9 files total.
+
+**Open issues / deferred:**
+
+- **Search endpoint.** The existing `ElasticsearchIndexService.search(queryJson)` is a read-only passthrough used by some controllers. Not contracted here — search likely stays in `gls-app-assembly` (or moves to a separate search service later). The indexing worker is write-only for the Phase 1.11 cutover.
+- **Generator-smoke wiring.** `contracts-smoke` only validates `hello-world` today. Add the indexing-worker spec to its surface in a small follow-up so a contract change without a regenerate is caught at CI rather than at module compile-time.
+- **Service-account JWT.** Contract declares `serviceJwt` security; worker won't validate until JWKS infra lands (Phase 0.5 deferral).
+
+**Next:** Phase 1.11 PR2 — greenfield `gls-indexing-worker` Maven module: Spring Boot entry + `@RabbitListener` on `gls.documents.classified` + ES write logic (lifted from `ElasticsearchIndexService`) + HTTP controllers implementing the contract + per-service error handling (INDEX_FAILED status + `index_quarantine` mapping-conflict bin) + Dockerfile + compose entry. Tests lifted from the slm-worker / enforcement-worker pattern.

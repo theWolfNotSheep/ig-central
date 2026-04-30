@@ -86,7 +86,11 @@ channels:
       result is produced. **Consumers:**
       `ClassificationEnforcementConsumer` (always);
       `PipelineExecutionConsumer` (when the engine is running in the
-      pipeline-resume mode that uses this channel).
+      pipeline-resume mode that uses this channel);
+      `gls-indexing-worker` (Phase 1.11) — writes searchable fields
+      + `extractedMetadata` to Elasticsearch. See
+      `contracts/indexing-worker/`. Each consumer binds its own queue
+      so the broker fans out the event to all of them.
     messages:
       documentClassifiedMessage:
         $ref: '#/components/messages/DocumentClassified'
@@ -232,8 +236,9 @@ operations:
       $ref: '#/channels/documentClassified'
     summary: |
       Consumed by `ClassificationEnforcementConsumer` for governance
-      enforcement and (in some pipeline modes) by
-      `PipelineExecutionConsumer`.
+      enforcement, (in some pipeline modes) by
+      `PipelineExecutionConsumer`, and (Phase 1.11 onward) by
+      `gls-indexing-worker` for Elasticsearch indexing.
     messages:
       - $ref: '#/channels/documentClassified/messages/documentClassifiedMessage'
 

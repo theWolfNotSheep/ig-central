@@ -318,9 +318,9 @@ Per CSV #2 (DECIDED hybrid).
 
 ### 1.11 `gls-indexing-worker` (NEW)
 
-- [ ] Greenfield service consuming `gls.documents.classified`.
+- [ ] Greenfield service consuming `gls.documents.classified`. Phase 1.11 PR1: contract scaffolding under `contracts/indexing-worker/` (REST admin surface) + `contracts/messaging/asyncapi.yaml` v0.4.0 declares `gls-indexing-worker` as a third consumer of `documentClassified` alongside `ClassificationEnforcementConsumer` and `PipelineExecutionConsumer`. No new channel; reuses existing `DocumentClassifiedEvent`. PR2 wires the Spring Boot module + Rabbit listener; PR3 cuts the in-process `ElasticsearchIndexService` callers over.
 - [ ] Writes document body + `extractedMetadata` to Elasticsearch.
-- [ ] Per-service error handling: ES down → INDEX_FAILED with retry; mapping conflict → quarantine collection.
+- [ ] Per-service error handling: ES down → INDEX_FAILED with retry; mapping conflict → quarantine collection. Phase 1.11 PR1: contracted via `code=INDEX_BACKEND_UNAVAILABLE` (503) and `code=INDEX_MAPPING_CONFLICT` (422) on the REST surface; matching Rabbit-side handling lands in PR2 (consumer dead-letters mapping conflicts to `index_quarantine` Mongo collection; ES transport failures set `INDEX_FAILED` doc status for retry from monitoring page).
 
 ### 1.12 `gls-audit-collector` (Tier 1 + Tier 2)
 

@@ -4,6 +4,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-30
+
+### Changed
+
+- `documentClassified` channel + `consumeDocumentClassified` operation
+  descriptions add `gls-indexing-worker` (Phase 1.11) as a third
+  consumer alongside `ClassificationEnforcementConsumer` and
+  `PipelineExecutionConsumer`. No new channel, no payload change —
+  the indexing worker reuses the existing `DocumentClassifiedEvent`
+  envelope. Each consumer binds its own queue so the broker fans out
+  to all three.
+
 ## [0.3.0] — 2026-04-26
 
 ### Added
