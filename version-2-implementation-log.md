@@ -4444,3 +4444,35 @@ Reactor green via `./mvnw -DskipTests package`.
 - **Body preview not included.** `ReplayPreview` includes only metadata + size; the body is not surfaced (could be large / contain sensitive data). A separate `?includeBody=true` flag with an admin warning would address operator forensics needs.
 
 **Next:** PR-G — leader-status admin endpoint + `@SchedulerLock` skip-rate metric.
+
+## 2026-04-30 — Phase 2.4 PR3 — Scheduler-lock observability
+
+**Done:** Two deferred items closed:
+
+1. **`@SchedulerLock` skip-rate metric** (deferred from Phase 2.4 PR1 #108). New `MetricsLockProvider` decorator wraps the `MongoLockProvider` in `gls-platform-audit`'s `AuditRelayLockConfig`. Every `lock()` call now ticks `scheduler.lock{name, outcome=acquired|skipped}`. Operators see leader-election dynamics — how often a given scheduled task's tick was held by another replica (skipped) vs acquired locally. High skip rate on a single lock name = busy leader (expected); equal counts across replicas = even rotation; one replica acquiring 100% = others never trying / always losing the race. Decorator is auto-applied to every consumer of platform-audit's `LockProvider` bean (gls-app-assembly, gls-indexing-worker, gls-audit-collector — every module using `@SchedulerLock`).
+2. **Leader-status admin endpoint** (deferred from Phase 2.4 PR2 #112). New `GET /api/admin/scheduler/locks` reads ShedLock's `shedLock` Mongo collection directly and returns each row: lock name, `lockUntil`, `lockedAt`, `lockedBy` hostname, plus a derived `active` boolean (`lockUntil > now`). Operators see at a glance which replica is leader for each named lock right now.
+
+**Changes:**
+
+- `gls-platform-audit/.../autoconfigure/MetricsLockProvider.java` (new) — decorator implementing `LockProvider`. `lock()` delegates and increments the counter tagged by lock name + outcome. Null `MeterRegistry` → silent pass-through.
+- `gls-platform-audit/.../autoconfigure/AuditRelayLockConfig.java` — `auditRelayLockProvider` bean now wraps `MongoLockProvider` in `MetricsLockProvider` when a `MeterRegistry` is available; falls back to bare `MongoLockProvider` otherwise. Bean signature changed (added `ObjectProvider<MeterRegistry>`).
+- `gls-app-assembly/.../infrastructure/controllers/admin/SchedulerLocksController.java` (new) — `GET /api/admin/scheduler/locks`. Reads from the `shedLock` collection (configurable via `gls.shedlock.collection`). Returns `LocksResponse(collection, queriedAt, List<LockRow>)`.
+- `gls-platform-audit/.../autoconfigure/MetricsLockProviderTest.java` (new) — 4 tests: acquired-lock counter; unavailable-lock counter; per-name segregation; null `MeterRegistry` no-op.
+
+**Tests:** `gls-platform-audit` 34 / 0 (was 30; +4 new). `gls-app-assembly` 115 / 0 (controller is thin — no test added; covered by the existing admin endpoint smoke tests when they run against a real Spring context). Reactor green.
+
+**Decisions logged:** None new. The decorator-on-the-bean approach was the load-bearing choice — putting metrics in the LockProvider means every ShedLock-using consumer gets them automatically without per-module wiring.
+
+**Files changed:**
+
+- `backend/gls-platform-audit/src/main/java/.../autoconfigure/{AuditRelayLockConfig, MetricsLockProvider}.java` — 1 modified + 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/SchedulerLocksController.java` — 1 new.
+- `backend/gls-platform-audit/src/test/java/.../autoconfigure/MetricsLockProviderTest.java` — 1 new.
+- Log = 5 files total.
+
+**Open issues / deferred:**
+
+- **No SchedulerLocksController integration test.** The endpoint is a thin Mongo read; testing it requires `@WebMvcTest` with a mocked `MongoTemplate` + `getCollection()` chain. Smoke-tested via the broader admin endpoint suite in deployed environments. Add focused test if regressions appear.
+- **No leader-change event log.** The endpoint shows current state; historical "this replica was leader for these intervals" requires either a Mongo audit collection on lock transitions or scraping the Prometheus counter over time. Operators read the Prometheus history for now.
+
+**Next:** All deferred follow-ups within reach are now shipped. Remaining gaps are blocked or low-priority architectural workstreams: 2.1 `classification_outbox` (blocked on §6.5), 2.2 Anthropic 429 honoring (blocked on Spring AI), 2.5 chaos integration tests (blocked on infra), per-tenant tags (architectural), Phase 3 admin UI (different shape).

@@ -1,9 +1,11 @@
 package co.uk.wolfnotsheep.platformaudit.autoconfigure;
 
 import com.mongodb.client.MongoClient;
+import io.micrometer.core.instrument.MeterRegistry;
 import net.javacrumbs.shedlock.core.LockProvider;
 import net.javacrumbs.shedlock.provider.mongo.MongoLockProvider;
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -40,7 +42,13 @@ public class AuditRelayLockConfig {
     @ConditionalOnMissingBean(LockProvider.class)
     public LockProvider auditRelayLockProvider(
             MongoClient mongoClient,
-            @Value("${spring.data.mongodb.database:governance_led_storage_main}") String database) {
-        return new MongoLockProvider(mongoClient.getDatabase(database));
+            @Value("${spring.data.mongodb.database:governance_led_storage_main}") String database,
+            ObjectProvider<MeterRegistry> meterRegistryProvider) {
+        LockProvider mongo = new MongoLockProvider(mongoClient.getDatabase(database));
+        MeterRegistry registry = meterRegistryProvider.getIfAvailable();
+        if (registry == null) {
+            return mongo;
+        }
+        return new MetricsLockProvider(mongo, registry);
     }
 }
