@@ -4,6 +4,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication(scanBasePackages = {
         "co.uk.wolfnotsheep.indexing",
@@ -15,6 +16,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
         "co.uk.wolfnotsheep.document.repositories"
 })
 @EnableAsync
+@EnableScheduling
 public class GlsIndexingWorkerApplication {
 
     public static void main(String[] args) {
