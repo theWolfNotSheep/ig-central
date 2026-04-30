@@ -142,8 +142,12 @@ public class ClassifyController implements ClassifyApi {
             ResponseEntity<ClassifyResponse> response = doClassify(traceparent, request, idempotencyKey);
             ClassifyResponse body = response.getBody();
             cacheCompleted(request.getNodeRunId(), body);
-            metrics.recordSuccess(timer, body == null || body.getTierOfDecision() == null
-                    ? null : body.getTierOfDecision().name());
+            String tier = body == null || body.getTierOfDecision() == null
+                    ? null : body.getTierOfDecision().name();
+            metrics.recordSuccess(timer, tier);
+            metrics.recordTierByCategory(tier, extractCategory(body));
+            metrics.recordCost(tier, body == null || body.getCostUnits() == null ? 0L
+                    : body.getCostUnits().longValue());
             return response;
         } catch (RuntimeException failure) {
             String code = errorCodeFor(failure);
@@ -321,6 +325,27 @@ public class ClassifyController implements ClassifyApi {
 
     private static String safeMessage(Throwable t) {
         return t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+    }
+
+    /**
+     * Extract a category identifier from the cascade response for the
+     * tier-by-category metric. Looks for {@code categoryCode} first
+     * (low-cardinality keyword like "HR_LETTERS"), falling back to
+     * {@code categoryId} (Mongo id) and then {@code category}
+     * (free-text name). Returns {@code null} if none present so the
+     * metrics layer can render it as {@code "unknown"}.
+     */
+    static String extractCategory(ClassifyResponse body) {
+        if (body == null || body.getResult() == null) return null;
+        Object result = body.getResult();
+        if (!(result instanceof java.util.Map<?, ?> map)) return null;
+        Object code = map.get("categoryCode");
+        if (code instanceof String s && !s.isBlank()) return s;
+        Object id = map.get("categoryId");
+        if (id instanceof String s && !s.isBlank()) return s;
+        Object name = map.get("category");
+        if (name instanceof String s && !s.isBlank()) return s;
+        return null;
     }
 
     private static String errorCodeFor(Throwable cause) {

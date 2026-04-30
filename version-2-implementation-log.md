@@ -4335,3 +4335,39 @@ Reactor green via `./mvnw -DskipTests package`.
 **Phase 2.2 status:** **4 of 5 plan items complete.** (1: Anthropic circuit breaker — done; 2: Anthropic 429 / `Retry-After` — blocked on Spring AI; 3: Ollama unreachable + Anthropic fallback — done here; 4: MCP unreachable confidence cap — done; 5: cost budget auto-degrade — done.)
 
 **Next:** Phase 2.6 PR2 — tier-of-decision histogram + cost-per-document metrics. Needs the cascade router to emit per-tier outcomes + per-document cost rollup.
+
+## 2026-04-30 — Phase 2.6 PR2 — Tier-of-decision per category + cost-per-document
+
+**Done:** Closed Phase 2.6 plan items 1 and 3. The cascade router's `ClassifyController` now emits two additional Micrometer metrics per successful classify:
+
+- `gls_router_classify_tier_by_category_total{tier, category}` — counter that splits the existing tier-of-decision counter by category. Operators can read the share of decisions handled at each tier per category — e.g. "PII scans hit BERT 95% of the time, financial classifications go to LLM 60%".
+- `gls_router_classify_cost_units_total{tier}` — counter incremented by `costUnits` per call, tagged by tier. Cost-per-document is the windowed mean (this counter / `gls_router_classify_result_total{outcome=success}`); cost-per-tier is the per-tag sum; daily-spend total is the windowed sum.
+
+**Changes:**
+
+- `gls-classifier-router/.../web/ExtractMetrics.java` — two new methods: `recordTierByCategory(tier, category)` and `recordCost(tier, costUnits)`. Both reuse the existing `safe()` helper for tag normalization (lowercase + `"unknown"` fallback for blank).
+- `gls-classifier-router/.../web/ClassifyController.java` — `handleSyncAcquired` now calls both new methods after a successful classify. New static helper `extractCategory(ClassifyResponse)` reads the cascade `result` map, preferring `categoryCode` (low-cardinality keyword) over `categoryId` (Mongo id) over `category` (free-text name); returns `null` when none present so `ExtractMetrics.safe()` renders it as `"unknown"`.
+- `gls-classifier-router/.../web/ExtractMetricsTest.java` (new) — 4 tests: tier+category counter increments correctly with lowercased tags; null/blank fall to `"unknown"`; cost counter increments by `costUnits` and skips zero/negative; null tier falls to unknown.
+- `gls-classifier-router/.../web/ClassifyControllerExtractCategoryTest.java` (new) — 7 tests: prefers `categoryCode`; falls back to `categoryId` then `category`; blank values skipped to next key; non-string values skipped; null body / null result return null.
+
+**Tests:** 110 / 0 in `gls-classifier-router` (was 99; +11 new across two test classes). Reactor green via `./mvnw -DskipTests package`.
+
+**Decisions logged:** None new. Cardinality decision documented in JavaDoc — `category` is bounded by the org's taxonomy size (typically tens to hundreds), so `O(tiers × categories)` is acceptable for typical Prometheus scales.
+
+**Files changed:**
+
+- `backend/gls-classifier-router/src/main/java/.../web/ExtractMetrics.java` — modified.
+- `backend/gls-classifier-router/src/main/java/.../web/ClassifyController.java` — modified.
+- `backend/gls-classifier-router/src/test/java/.../web/ExtractMetricsTest.java` — 1 new.
+- `backend/gls-classifier-router/src/test/java/.../web/ClassifyControllerExtractCategoryTest.java` — 1 new.
+- Log = 5 files total.
+
+**Open issues / deferred:**
+
+- **Async path doesn't record.** `runAsync` doesn't fire the new metrics — same shape as the existing `recordSuccess` which only runs in `handleSyncAcquired`. If async traffic dominates, both the tier counter and cost counter undercount; needs a parallel call inside `runAsync`. Tracked as a small follow-up.
+- **No per-tenant tag.** `category` is global across tenants. A multi-tenant deployment would want `tenantId` as an additional tag — needs request-scoped resolver, deferred.
+- **Plan items 4-5-6 (escalation rate, p50/p95/p99 latency by tier+mime, MCP availability impact) untouched.** Each requires either richer cascade-trace data (escalation chain length per call) or per-document mime tracking. Tracked.
+
+**Phase 2.6 status:** **plan items 1 (tier-of-decision histogram) and 3 (cost-per-document) complete.** Plan items 2 (escalation rate dashboard), 4 (p50/p95/p99 latency by tier and mime type), 5 (MCP availability impact on confidence), 6 (alerts on circuit breaker open / DLQ depth / stale documents / audit chain breaks) remain. Items 4-5-6 are cheap to add once the data points exist.
+
+**Next:** Phase 2 substantially complete. Remaining gaps are blocked or low-priority follow-ups: 2.1 `classification_outbox` reconciler (blocked on §6.5), 2.2 Anthropic 429 honoring (blocked on Spring AI), 2.5 chaos integration tests (blocked on infra). Phase 3 (admin UI) is the natural next major workstream; different shape from Phase 2 (React, not Java).
