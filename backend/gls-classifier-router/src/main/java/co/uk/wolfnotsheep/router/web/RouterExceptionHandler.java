@@ -4,6 +4,7 @@ import co.uk.wolfnotsheep.router.parse.BertBlockUnknownException;
 import co.uk.wolfnotsheep.router.parse.LlmBlockUnknownException;
 import co.uk.wolfnotsheep.router.parse.LlmJobFailedException;
 import co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException;
+import co.uk.wolfnotsheep.router.parse.RateLimitExceededException;
 import co.uk.wolfnotsheep.router.parse.SlmBlockUnknownException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,6 +78,19 @@ public class RouterExceptionHandler {
         log.warn("router I/O failure: {}", e.getMessage(), e);
         return problem(HttpStatus.SERVICE_UNAVAILABLE, "ROUTER_DEPENDENCY_UNAVAILABLE",
                 "A downstream cascade tier is unreachable", e.getMessage());
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ProblemDetail> handleRateLimit(RateLimitExceededException e) {
+        ResponseEntity<ProblemDetail> base = problem(HttpStatus.TOO_MANY_REQUESTS,
+                "ROUTER_RATE_LIMITED",
+                "Per-replica router rate limit exceeded", e.getMessage());
+        return ResponseEntity.status(base.getStatusCode())
+                .headers(h -> {
+                    base.getHeaders().forEach(h::addAll);
+                    h.add("Retry-After", "1");
+                })
+                .body(base.getBody());
     }
 
     private static ResponseEntity<ProblemDetail> problem(
