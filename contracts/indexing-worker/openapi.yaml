@@ -1,0 +1,411 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Indexing Worker
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    Post-classification indexing stage. The primary surface is the
+    Rabbit consumer on `document.classified` (declared in
+    `contracts/messaging/asyncapi.yaml`). This OpenAPI document
+    describes the **REST admin surface** for sync re-index, delete,
+    bulk reindex, and ops endpoints.
+
+    **Phase 1.11 first cut.** Contract lands now so the worker module
+    + admin UI can integrate against the surface while the deployable
+    wires up. Real HTTP controllers + Dockerfile + compose entry land
+    in PR2; cutover from in-process `ElasticsearchIndexService` lands
+    in PR3.
+
+    **Conventions referenced from `_shared/`:**
+    - Error envelope (RFC 7807 + extensions) — CSV #17.
+    - Service-account JWT — CSV #18.
+    - `traceparent` + `Idempotency-Key` headers — CSV #16 / #20.
+    - `Capabilities` shape — CSV #21.
+
+servers:
+  - url: http://gls-indexing-worker:8080
+    description: Internal Docker Compose hostname.
+  - url: http://localhost:8098
+    description: Local dev (override).
+
+tags:
+  - name: index
+    description: Single-document index + delete operations.
+  - name: reindex
+    description: Bulk reindex (async).
+  - name: jobs
+    description: Async-job poll surface.
+  - name: meta
+    description: Capabilities + health.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/index/{documentId}:
+    post:
+      operationId: indexDocument
+      tags: [index]
+      summary: Sync re-index a single document.
+      description: |
+        Admin escape hatch — re-fetches the document by id and writes
+        it to Elasticsearch. Idempotent within the 24h `nodeRunId`
+        TTL window (CSV #16).
+
+        Normal indexing flow is the Rabbit consumer on
+        `document.classified`; use this endpoint when an admin needs
+        to force a re-index without re-classifying.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/IdempotencyKey'
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+        - name: nodeRunId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+          description: Idempotency key (CSV #16).
+      responses:
+        '200':
+          description: Document indexed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndexResponse'
+        '404':
+          description: |
+            The referenced `documentId` doesn't resolve. Returned with
+            `code=DOCUMENT_NOT_FOUND`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '409':
+          $ref: '../_shared/idempotency.yaml#/components/responses/InFlight'
+        '422':
+          description: |
+            ES rejected the document (mapping conflict). Returned with
+            `code=INDEX_MAPPING_CONFLICT`. The document is parked in
+            the `index_quarantine` Mongo collection for admin review.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '../_shared/retry.yaml#/components/responses/TooManyRequests'
+        '503':
+          description: |
+            Elasticsearch unreachable or returned 5xx. Returned with
+            `code=INDEX_BACKEND_UNAVAILABLE`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+    delete:
+      operationId: deleteDocumentIndex
+      tags: [index]
+      summary: Remove a document from the index.
+      description: |
+        Removes the document from Elasticsearch. Used after disposition
+        / archival or as an admin escape hatch. 200 on success;
+        404-on-source-missing returns `code=DOCUMENT_NOT_INDEXED`.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: Document removed (or already absent — idempotent).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteResponse'
+        '503':
+          description: |
+            Elasticsearch unreachable or returned 5xx. Returned with
+            `code=INDEX_BACKEND_UNAVAILABLE`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/reindex:
+    post:
+      operationId: reindex
+      tags: [reindex]
+      summary: Kick off an async bulk reindex.
+      description: |
+        Walks every non-disposed document in Mongo and re-indexes it
+        into Elasticsearch. Long-running — returns 202 immediately
+        with `Location: /v1/jobs/{nodeRunId}` for the caller to poll.
+
+        Single-flight: if a reindex is already in flight (RUNNING
+        state in `JobStore`), returns 409 unless caller passes a new
+        `nodeRunId`. Idempotent on `nodeRunId` per CSV #16.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReindexRequest'
+      responses:
+        '202':
+          description: |
+            Reindex accepted; job dispatched. Poll `Location` for
+            status + summary.
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+                format: uri
+              description: Job poll URL — `/v1/jobs/{nodeRunId}`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAccepted'
+        '409':
+          $ref: '../_shared/idempotency.yaml#/components/responses/InFlight'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/jobs/{nodeRunId}:
+    get:
+      operationId: getJob
+      tags: [jobs]
+      summary: Poll an async job (bulk reindex).
+      description: |
+        Returns the current state of an async job dispatched via
+        `POST /v1/reindex`. Status is one of `PENDING`, `RUNNING`,
+        `COMPLETED`, `FAILED`. When `COMPLETED`, the body carries a
+        `ReindexSummary` (counts of indexed / skipped / failed).
+      parameters:
+        - name: nodeRunId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        '200':
+          description: Job state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobStatus'
+        '404':
+          description: No job exists for this nodeRunId.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Service capability advertisement.
+      description: |
+        Standard `Capabilities` shape (CSV #21). Reports the
+        worker's supported feature set so clients (admin UI, ops
+        tooling) can negotiate without hardcoding.
+      responses:
+        '200':
+          description: Capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: '../_shared/capabilities.yaml#/components/schemas/Capabilities'
+
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [meta]
+      summary: Liveness + readiness probe.
+      description: |
+        Liveness reflects process state. Readiness flips UP only
+        when Mongo + Elasticsearch + RabbitMQ are reachable.
+      security: []
+      responses:
+        '200':
+          description: Up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Not ready (Mongo, ES, or RabbitMQ unreachable).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    IndexResponse:
+      type: object
+      required: [nodeRunId, documentId, indexName, durationMs]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+          maxLength: 64
+        documentId:
+          type: string
+          maxLength: 64
+        indexName:
+          type: string
+          maxLength: 128
+          description: Elasticsearch index the document was written to.
+        version:
+          type: integer
+          minimum: 0
+          description: ES `_version` after the upsert.
+        durationMs:
+          type: integer
+          minimum: 0
+
+    DeleteResponse:
+      type: object
+      required: [documentId, result]
+      additionalProperties: false
+      properties:
+        documentId:
+          type: string
+          maxLength: 64
+        result:
+          type: string
+          enum: [DELETED, NOT_FOUND]
+          description: |
+            `DELETED` when ES returned 200 + `result=deleted`;
+            `NOT_FOUND` when the document wasn't in the index (idempotent).
+
+    ReindexRequest:
+      type: object
+      required: [nodeRunId]
+      additionalProperties: false
+      properties:
+        nodeRunId:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Idempotency key (CSV #16).
+        statusFilter:
+          type: array
+          maxItems: 32
+          description: |
+            Optional — only reindex documents in these statuses.
+            Default: every status except `DISPOSED`.
+          items:
+            type: string
+            maxLength: 32
+
+    JobAccepted:
+      type: object
+      required: [nodeRunId, status, pollUrl]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING]
+        pollUrl:
+          type: string
+          format: uri
+
+    JobStatus:
+      type: object
+      required: [nodeRunId, status]
+      properties:
+        nodeRunId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        summary:
+          $ref: '#/components/schemas/ReindexSummary'
+        errorCode:
+          type: string
+        errorMessage:
+          type: string
+
+    ReindexSummary:
+      type: object
+      additionalProperties: false
+      description: |
+        Outcome counts when a bulk reindex completes. Each field is
+        optional; absence means none of that category was encountered.
+      properties:
+        totalDocuments:
+          type: integer
+          minimum: 0
+          description: Total documents considered (pre-filter).
+        indexedCount:
+          type: integer
+          minimum: 0
+        skippedCount:
+          type: integer
+          minimum: 0
+          description: |
+            Documents skipped — typically `DISPOSED` or filtered out
+            by `statusFilter`.
+        failedCount:
+          type: integer
+          minimum: 0
+          description: |
+            Documents whose index write failed. See worker logs +
+            `index_quarantine` collection for details.
+        durationMs:
+          type: integer
+          minimum: 0
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'
