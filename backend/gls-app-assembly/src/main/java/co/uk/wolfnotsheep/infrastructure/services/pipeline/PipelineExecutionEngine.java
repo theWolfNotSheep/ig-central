@@ -119,6 +119,11 @@ public class PipelineExecutionEngine {
     // extract-metadata-${schemaId} PROMPT block). Observe-only.
     private final MetadataExtractionDispatcher metadataExtractionDispatcher;
 
+    // Phase 1.10 PR3 — optional sync HTTP path through gls-enforcement-worker.
+    // Bean is conditionally registered via @ConditionalOnProperty; default OFF
+    // — when absent, the engine keeps calling the in-process EnforcementService.
+    private final ObjectProvider<EnforcementWorkerClient> enforcementWorkerClientProvider;
+
     public PipelineExecutionEngine(TextExtractionService textExtractionService,
                                    DocumentService documentService,
                                    ObjectStorageService objectStorage,
@@ -145,7 +150,8 @@ public class PipelineExecutionEngine {
                                    ObjectProvider<ClassifierRouterClient> classifierRouterClientProvider,
                                    ObjectProvider<co.uk.wolfnotsheep.governance.services.PolicyBlockResolver> policyBlockResolverProvider,
                                    PolicyScanDispatcher policyScanDispatcher,
-                                   MetadataExtractionDispatcher metadataExtractionDispatcher) {
+                                   MetadataExtractionDispatcher metadataExtractionDispatcher,
+                                   ObjectProvider<EnforcementWorkerClient> enforcementWorkerClientProvider) {
         this.textExtractionService = textExtractionService;
         this.documentService = documentService;
         this.objectStorage = objectStorage;
@@ -173,6 +179,7 @@ public class PipelineExecutionEngine {
         this.policyBlockResolverProvider = policyBlockResolverProvider;
         this.policyScanDispatcher = policyScanDispatcher;
         this.metadataExtractionDispatcher = metadataExtractionDispatcher;
+        this.enforcementWorkerClientProvider = enforcementWorkerClientProvider;
     }
 
     // ── Main entry point: execute pipeline from the beginning ─────────
@@ -1565,7 +1572,7 @@ public class PipelineExecutionEngine {
                 + " [retention=" + applyRetention + ", storage=" + applyStorage + ", policies=" + applyPolicies + "]", null);
 
         try {
-            DocumentModel enforced = enforcementService.enforce(event);
+            DocumentModel enforced = applyEnforcement(doc, event, node);
             if (enforced != null) {
                 // Clear fields the admin toggled off
                 if (!applyRetention) {
@@ -1595,6 +1602,29 @@ public class PipelineExecutionEngine {
                     "Enforcement failed: " + e.getMessage(), System.currentTimeMillis() - start);
             throw new PipelineStageException("ENFORCEMENT", e);
         }
+    }
+
+    /**
+     * Phase 1.10 PR3 — dispatch enforcement either to the HTTP worker
+     * (when {@code pipeline.enforcement-worker.enabled=true}) or to
+     * the in-process {@link EnforcementService} (default). Both paths
+     * persist the document to Mongo internally; this method returns
+     * the freshly-fetched {@link DocumentModel} so the caller can
+     * apply per-node toggle clearing + status routing on top.
+     */
+    private DocumentModel applyEnforcement(DocumentModel doc, DocumentClassifiedEvent event, VisualNode node) {
+        EnforcementWorkerClient client = enforcementWorkerClientProvider.getIfAvailable();
+        if (client == null) {
+            return enforcementService.enforce(event);
+        }
+        String nodeRunId = node != null && node.id() != null && !node.id().isBlank()
+                ? "enforce-" + doc.getId() + "-" + node.id()
+                : "enforce-" + doc.getId() + "-" + System.currentTimeMillis();
+        EnforcementWorkerClient.Outcome outcome = client.enforce(nodeRunId, event);
+        log.info("[Engine] enforcement-worker outcome doc={} migrated={} tierBefore={} tierAfter={} durationMs={}",
+                doc.getId(), outcome.storageMigrated(),
+                outcome.storageTierBefore(), outcome.storageTierAfter(), outcome.durationMs());
+        return documentService.getById(doc.getId());
     }
 
     private void handleHumanReview(DocumentModel doc, DocumentClassifiedEvent event, VisualNode node) {

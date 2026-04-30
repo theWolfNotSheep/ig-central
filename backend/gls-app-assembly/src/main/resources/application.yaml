@@ -130,6 +130,17 @@ pipeline:
     enabled: ${PIPELINE_CLASSIFIER_ROUTER_ENABLED:false}
     url: ${PIPELINE_CLASSIFIER_ROUTER_URL:http://gls-classifier-router:8080}
     timeout-ms: ${PIPELINE_CLASSIFIER_ROUTER_TIMEOUT_MS:90000}
+  enforcement-worker:
+    # Phase 1.10 PR3 cutover. When true, the engine calls
+    # gls-enforcement-worker synchronously over HTTP instead of
+    # invoking the in-process EnforcementService. The worker writes
+    # the document to Mongo before responding; the engine re-fetches
+    # to apply per-node toggle clearing + status routing. Default
+    # false so the legacy in-process path remains primary; flip to
+    # true to roll forward.
+    enabled: ${PIPELINE_ENFORCEMENT_WORKER_ENABLED:false}
+    url: ${PIPELINE_ENFORCEMENT_WORKER_URL:http://gls-enforcement-worker:8097}
+    timeout-ms: ${PIPELINE_ENFORCEMENT_WORKER_TIMEOUT_MS:60000}
 
 logging:
   level:
