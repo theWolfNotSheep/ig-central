@@ -621,8 +621,14 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: docker
       SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
+      # Tier 2 backend (Phase 1.12 PR3): `mongo` (default) or `es`.
+      # Flip to `es` once the audit_tier2_events ES index is wired
+      # for ILM in production. Mongo remains the safe default until
+      # ES indexing is observed.
+      GLS_AUDIT_TIER2_BACKEND: ${GLS_AUDIT_TIER2_BACKEND:-mongo}
     depends_on:
       mongo: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }

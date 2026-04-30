@@ -3475,3 +3475,56 @@ Reactor: full backend reactor green. Existing platform-audit suite (18 tests) st
 **Phase 1.12 status:** 2 of 5 plan items ticked (deployable + chain validation). Remaining: Tier 2 ES backend (PR3), Tier 1 hardened backend (PR4), service migrations from `AuditEventRepository` (PR5+).
 
 **Next:** Phase 1.12 PR3 — swap Tier 2 storage from Mongo to the existing Elasticsearch container. New `Tier2Store` interface with `MongoTier2Store` (current) + `EsTier2Store` (new) implementations behind `gls.audit.collector.tier2-backend=mongo|es` config flag (default `mongo` until ES indices + ILM are wired).
+
+## 2026-04-30 — Phase 1.12 PR3 — Tier 2 backend swap behind config flag
+
+**Done:** Refactored Tier 2 storage in `gls-audit-collector` behind a `Tier2Store` interface. The existing Mongo logic moved into `MongoTier2Store` (the default, conditional on `gls.audit.collector.tier2-backend=mongo` or absent). New `EsTier2Store` activates when the flag is `es` — talks to the existing Elasticsearch container via JDK `HttpClient` (mirrors the `gls-indexing-worker` pattern; no spring-data-elasticsearch dep). Both implementations satisfy the same narrow contract: `save(event)` (idempotent on `eventId`), `findById(eventId)`, `search(criteria, pageIndex, pageSize)`. Tier2Consumer + EventsController dispatch through the interface.
+
+**Bug found + fixed:** the original PR2 `EventsController.listEvents` called `query.addCriteria(Criteria.where("timestamp")...)` twice (once for `from`, once for `to`), which Mongo's `BasicDocument` rejects with `InvalidMongoDbApiUsage: can't add a second 'timestamp' criteria`. The refactor consolidates both bounds into a single `Criteria.where("timestamp").gte(...).lt(...)` call. Caught by the `MongoTier2StoreTest` filter test — the bug existed in `main` but wasn't covered by tests until the refactor pulled the search logic out of the controller.
+
+**Contracts touched:** None new. Internal storage swap; the OpenAPI surface is unchanged.
+
+**Changes:**
+
+- `store/Tier2Store.java` (new) — interface declaring the three operations + a `SearchCriteria` record (single struct rather than five nullable parameters per call).
+- `store/MongoTier2Store.java` (new) — `@ConditionalOnProperty(... matchIfMissing = true)`. Wraps the existing `Tier2Repository` + `MongoTemplate` query logic from PR2's `EventsController` and `Tier2Consumer`. Includes the timestamp-criteria fix.
+- `store/EsTier2Store.java` (new) — `@ConditionalOnProperty(havingValue = "es")`. JDK `HttpClient` against `${spring.elasticsearch.uris}/audit_tier2_events`. `@PostConstruct ensureIndex()` creates the index with explicit mappings on the denormalised filter fields (keyword) + a `dynamic: true` envelope object so envelope drift survives. Save = `PUT /_doc/{eventId}` (upsert, idempotent). Search = `POST /_search` with `bool/filter` query for active criteria + `match_all` when none.
+- `consumer/Tier2Consumer.java` — now injects `Tier2Store` instead of `Tier2Repository`. Idempotency is the backend's responsibility per the interface contract — both implementations swallow duplicate-key signals internally.
+- `web/EventsController.java` — now injects `Tier2Store` for search + single fetch. The `MongoTemplate` dependency moved to `MongoTier2Store`.
+- `application.yaml` — new `gls.audit.collector.tier2-backend` key (env override `GLS_AUDIT_TIER2_BACKEND`); default `mongo`. Added `spring.elasticsearch.uris` so the ES backend can be exercised on the existing stack.
+- `docker-compose.yml` — collector service gets `SPRING_ELASTICSEARCH_URIS=http://elasticsearch:9200` and `GLS_AUDIT_TIER2_BACKEND=${GLS_AUDIT_TIER2_BACKEND:-mongo}`.
+
+**Why no `Tier2Repository` cleanup yet:**
+
+`Tier2Repository` is now only used by `MongoTier2Store`; the controller + consumer no longer reference it. Could be inlined as a private interface inside the Mongo store, but that's a cosmetic refactor. Left as-is so PR3 stays surgical — a follow-up can collapse the redundant indirection once we're sure no other module reaches into it.
+
+**Tests:** 36 / 0 in module (was 26; +10 new for the storage abstraction).
+
+- `MongoTier2StoreTest` (5) — happy-path insert; `DuplicateKeyException` swallowed for idempotency; `findById` delegates; `search` with all filters builds and runs query; `search` with empty criteria still calls template.
+- `EsTier2StoreTest` (5) — JDK-builtin `HttpServer` driven, mirrors `EsIndexingService` test pattern: `save` PUTs to `/_doc/{eventId}` with body sanity; `findById` returns empty on 404; `findById` parses `_source` into `StoredTier2Event`; `search` POSTs `bool/filter` and parses hits; `search` with no filters uses `match_all`.
+
+Existing tests unchanged — `Tier1ConsumerTest`, `EventHasherTest`, `ChainVerifierTest`, `MetaControllerTest`, `ChainsControllerTest`, `EnvelopeMapperTest` all still green.
+
+Reactor: full backend reactor green (`./mvnw -DskipTests package`).
+
+**Decisions logged:** None new. Backend selection mirrors the established `pipeline.indexing-worker.enabled` cutover pattern from Phase 1.11 PR3.
+
+**Files changed:**
+
+- `backend/gls-audit-collector/src/main/java/.../store/{Tier2Store, MongoTier2Store, EsTier2Store}.java` — 3 new.
+- `backend/gls-audit-collector/src/main/java/.../{consumer/Tier2Consumer, web/EventsController}.java` — 2 modified (constructor + dispatch swap).
+- `backend/gls-audit-collector/src/main/resources/application.yaml` — modified.
+- `backend/gls-audit-collector/src/test/java/.../store/{MongoTier2StoreTest, EsTier2StoreTest}.java` — 2 new.
+- `docker-compose.yml` — modified.
+- Plan + log = 9 files total.
+
+**Open issues / deferred:**
+
+- **OpenSearch + S3 ILM.** Real production goal per CSV #3. PR3 ships ES on the existing single-node Elasticsearch container; ILM (hot → warm → cold → delete) and an OpenSearch cluster are a Phase 2 hardening pass.
+- **`Tier2Repository` is now a single-implementation indirection.** Could be inlined into `MongoTier2Store` in a small follow-up.
+- **No `id-to-tier` index.** `EventsController.getEvent(eventId)` consults Tier 1 first then Tier 2 — two lookups for any miss. Adding a small `events_index` Mongo collection mapping `eventId → tier` would make this O(1). Tracked alongside the same deferral from PR2.
+- **No bulk reindex from Mongo to ES.** Once ES becomes the chosen backend, historical events in `audit_tier2_events` Mongo collection won't migrate. A small admin endpoint `POST /v1/admin/migrate-tier2` is a follow-up; until then, operators can either accept the gap or replay events from the original outbox.
+
+**Phase 1.12 status:** 3 of 5 plan items ticked (deployable + chain validation + Tier 2 backend swap). Remaining: hardened Tier 1 backend (PR4), service migrations from `AuditEventRepository` (PR5+).
+
+**Next:** Phase 1.12 PR4 — Tier 1 hardened backend. Mongo append-only with role-based deny per CSV #3 (the simplest first cut: collection-level role grants only INSERT for the collector's service account; UPDATE / DELETE explicitly denied). True S3 Object Lock remains a future follow-up.

@@ -1,29 +1,33 @@
 package co.uk.wolfnotsheep.auditcollector.consumer;
 
 import co.uk.wolfnotsheep.auditcollector.store.StoredTier2Event;
-import co.uk.wolfnotsheep.auditcollector.store.Tier2Repository;
+import co.uk.wolfnotsheep.auditcollector.store.Tier2Store;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
 /**
  * Consumes {@code audit.tier2.*} from the worker's bound queue.
- * No chain validation — Tier 2 is the operational store.
- * Idempotent on {@code eventId} (Mongo unique-key conflict → no-op).
+ * No chain validation — Tier 2 is the operational store. Storage
+ * dispatches through {@link Tier2Store}; the active backend
+ * (Mongo / ES) is chosen by
+ * {@code gls.audit.collector.tier2-backend} per the PR3 cutover
+ * pattern. Idempotency is the backend's responsibility — the
+ * interface contract demands {@code save} be a no-op on duplicate
+ * {@code eventId}.
  */
 @Component
 public class Tier2Consumer {
 
     private static final Logger log = LoggerFactory.getLogger(Tier2Consumer.class);
 
-    private final Tier2Repository tier2Repo;
+    private final Tier2Store tier2Store;
 
-    public Tier2Consumer(Tier2Repository tier2Repo) {
-        this.tier2Repo = tier2Repo;
+    public Tier2Consumer(Tier2Store tier2Store) {
+        this.tier2Store = tier2Store;
     }
 
     @RabbitListener(queues = AuditRabbitConfig.QUEUE_TIER2)
@@ -37,11 +41,7 @@ public class Tier2Consumer {
             log.warn("tier2 consumer: envelope missing eventId — discarding");
             return;
         }
-        try {
-            tier2Repo.insert(row);
-            log.debug("tier2 stored eventId={} eventType={}", row.getEventId(), row.getEventType());
-        } catch (DuplicateKeyException e) {
-            log.debug("tier2 idempotent: eventId {} already persisted", row.getEventId());
-        }
+        tier2Store.save(row);
+        log.debug("tier2 stored eventId={} eventType={}", row.getEventId(), row.getEventType());
     }
 }

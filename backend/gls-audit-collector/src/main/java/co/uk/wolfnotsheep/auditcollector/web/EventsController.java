@@ -4,15 +4,9 @@ import co.uk.wolfnotsheep.auditcollector.api.EventsApi;
 import co.uk.wolfnotsheep.auditcollector.model.AuditEvent;
 import co.uk.wolfnotsheep.auditcollector.model.EventListResponse;
 import co.uk.wolfnotsheep.auditcollector.store.StoredAuditEvent;
-import co.uk.wolfnotsheep.auditcollector.store.StoredTier1Event;
 import co.uk.wolfnotsheep.auditcollector.store.StoredTier2Event;
 import co.uk.wolfnotsheep.auditcollector.store.Tier1Repository;
-import co.uk.wolfnotsheep.auditcollector.store.Tier2Repository;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
+import co.uk.wolfnotsheep.auditcollector.store.Tier2Store;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -22,9 +16,11 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Implements {@link EventsApi}. Tier 2 search via Mongo dynamic
- * queries; Tier 1 / Tier 2 single-event fetch consults both
- * collections (the id is unique across both per ULID semantics).
+ * Implements {@link EventsApi}. Tier 2 search dispatches through
+ * {@link Tier2Store}; the active backend (Mongo / ES) is selected
+ * by {@code gls.audit.collector.tier2-backend}. Single-event fetch
+ * consults Tier 1 first, then Tier 2 — the id is unique across both
+ * per ULID semantics, so order doesn't matter for correctness.
  */
 @RestController
 public class EventsController implements EventsApi {
@@ -33,15 +29,11 @@ public class EventsController implements EventsApi {
     private static final int MAX_PAGE_SIZE = 500;
 
     private final Tier1Repository tier1Repo;
-    private final Tier2Repository tier2Repo;
-    private final MongoTemplate mongoTemplate;
+    private final Tier2Store tier2Store;
 
-    public EventsController(Tier1Repository tier1Repo,
-                            Tier2Repository tier2Repo,
-                            MongoTemplate mongoTemplate) {
+    public EventsController(Tier1Repository tier1Repo, Tier2Store tier2Store) {
         this.tier1Repo = tier1Repo;
-        this.tier2Repo = tier2Repo;
-        this.mongoTemplate = mongoTemplate;
+        this.tier2Store = tier2Store;
     }
 
     @Override
@@ -57,15 +49,12 @@ public class EventsController implements EventsApi {
                 : Math.min(pageSize, MAX_PAGE_SIZE);
         int page = decodePageToken(pageToken);
 
-        Query query = new Query();
-        if (documentId != null) query.addCriteria(Criteria.where("documentId").is(documentId));
-        if (eventType != null) query.addCriteria(Criteria.where("eventType").is(eventType));
-        if (actorService != null) query.addCriteria(Criteria.where("actorService").is(actorService));
-        if (from != null) query.addCriteria(Criteria.where("timestamp").gte(from.toInstant()));
-        if (to != null) query.addCriteria(Criteria.where("timestamp").lt(to.toInstant()));
-        query.with(PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "timestamp")));
+        Tier2Store.SearchCriteria criteria = new Tier2Store.SearchCriteria(
+                documentId, eventType, actorService,
+                from == null ? null : from.toInstant(),
+                to == null ? null : to.toInstant());
 
-        List<StoredTier2Event> rows = mongoTemplate.find(query, StoredTier2Event.class);
+        List<StoredTier2Event> rows = tier2Store.search(criteria, page, size);
 
         EventListResponse body = new EventListResponse();
         List<AuditEvent> events = new ArrayList<>(rows.size());
@@ -81,7 +70,7 @@ public class EventsController implements EventsApi {
     public ResponseEntity<AuditEvent> getEvent(String traceparent, String eventId) {
         Optional<? extends StoredAuditEvent> hit = tier1Repo.findById(eventId)
                 .<StoredAuditEvent>map(r -> r)
-                .or(() -> tier2Repo.findById(eventId).map(r -> r));
+                .or(() -> tier2Store.findById(eventId).map(r -> r));
         StoredAuditEvent row = hit.orElseThrow(() -> new AuditEventNotFoundException(eventId));
         return ResponseEntity.ok(toApiEvent(row));
     }
