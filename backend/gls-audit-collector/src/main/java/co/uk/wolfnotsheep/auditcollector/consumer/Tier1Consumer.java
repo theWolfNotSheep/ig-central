@@ -2,12 +2,12 @@ package co.uk.wolfnotsheep.auditcollector.consumer;
 
 import co.uk.wolfnotsheep.auditcollector.chain.ChainBrokenException;
 import co.uk.wolfnotsheep.auditcollector.chain.EventHasher;
+import co.uk.wolfnotsheep.auditcollector.store.AppendOnlyViolationException;
 import co.uk.wolfnotsheep.auditcollector.store.StoredTier1Event;
-import co.uk.wolfnotsheep.auditcollector.store.Tier1Repository;
+import co.uk.wolfnotsheep.auditcollector.store.Tier1Store;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -20,14 +20,18 @@ import java.util.Optional;
  * doesn't match the recomputed hash of the latest stored event for
  * the same resource are rejected (logged + acked, not requeued).
  *
+ * <p>Storage dispatches through {@link Tier1Store}; the active
+ * backend (Mongo append-only today; S3 Object Lock in a future PR)
+ * is chosen by {@code gls.audit.collector.tier1-backend}.
+ *
  * <p>Per CLAUDE.md happy/unhappy-path:
  * <ul>
  *   <li>{@link ChainBrokenException} → log error, ack the message
  *       (don't infinite-requeue a permanently broken chain). A real
  *       deployment binds a DLX to capture for forensics; that's a
  *       Phase 2 reliability follow-up.</li>
- *   <li>{@link DuplicateKeyException} → already persisted; idempotent
- *       no-op.</li>
+ *   <li>{@link AppendOnlyViolationException} → already persisted;
+ *       idempotent no-op.</li>
  *   <li>Other unexpected → rethrow so AMQP requeues per broker config.</li>
  * </ul>
  */
@@ -36,10 +40,10 @@ public class Tier1Consumer {
 
     private static final Logger log = LoggerFactory.getLogger(Tier1Consumer.class);
 
-    private final Tier1Repository tier1Repo;
+    private final Tier1Store tier1Store;
 
-    public Tier1Consumer(Tier1Repository tier1Repo) {
-        this.tier1Repo = tier1Repo;
+    public Tier1Consumer(Tier1Store tier1Store) {
+        this.tier1Store = tier1Store;
     }
 
     @RabbitListener(queues = AuditRabbitConfig.QUEUE_TIER1)
@@ -57,21 +61,20 @@ public class Tier1Consumer {
 
         try {
             validateChain(row);
-            tier1Repo.insert(row);
+            tier1Store.append(row);
             log.debug("tier1 stored eventId={} resource={}:{}",
                     row.getEventId(), row.getResourceType(), row.getResourceId());
         } catch (ChainBrokenException e) {
             log.error("tier1 chain broken: {}", e.getMessage());
             // ack — broken chain is permanent state; don't requeue
-        } catch (DuplicateKeyException e) {
+        } catch (AppendOnlyViolationException e) {
             log.debug("tier1 idempotent: eventId {} already persisted", row.getEventId());
         }
     }
 
     private void validateChain(StoredTier1Event incoming) {
-        Optional<StoredTier1Event> latest =
-                tier1Repo.findFirstByResourceTypeAndResourceIdOrderByTimestampDesc(
-                        incoming.getResourceType(), incoming.getResourceId());
+        Optional<StoredTier1Event> latest = tier1Store.findLatestForResource(
+                incoming.getResourceType(), incoming.getResourceId());
 
         String expected = incoming.getPreviousEventHash();
         String computed = latest.map(EventHasher::hashOf).orElse(null);

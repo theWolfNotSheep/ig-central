@@ -3528,3 +3528,58 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 1.12 status:** 3 of 5 plan items ticked (deployable + chain validation + Tier 2 backend swap). Remaining: hardened Tier 1 backend (PR4), service migrations from `AuditEventRepository` (PR5+).
 
 **Next:** Phase 1.12 PR4 — Tier 1 hardened backend. Mongo append-only with role-based deny per CSV #3 (the simplest first cut: collection-level role grants only INSERT for the collector's service account; UPDATE / DELETE explicitly denied). True S3 Object Lock remains a future follow-up.
+
+## 2026-04-30 — Phase 1.12 PR4 — Tier 1 hardened backend (append-only)
+
+**Done:** Refactored Tier 1 storage in `gls-audit-collector` behind a `Tier1Store` interface that intentionally exposes only `append` + reads — no `save`, `update`, or `delete` methods. `AppendOnlyMongoTier1Store` is the default implementation, using `MongoRepository.insert()` (the only write primitive that throws on collision rather than upserting) and translating `DuplicateKeyException` into a typed `AppendOnlyViolationException` the consumer treats as idempotent. The mutating-method-absence is enforced by a reflection-based test so future PRs can't quietly add `save`.
+
+**Contracts touched:** None new. Internal storage swap mirroring PR3's Tier 2 abstraction.
+
+**Changes:**
+
+- `store/Tier1Store.java` (new) — interface with `append(event)`, `findById(eventId)`, `findLatestForResource(type, id)`, `findChainAsc(type, id)`. Deliberately narrow.
+- `store/AppendOnlyViolationException.java` (new) — typed exception so the consumer can tell "duplicate" apart from "Mongo unreachable" without inspecting Spring exception classes. Distinct from `Tier2Store`'s silent-swallow approach because the Tier 1 surface is more sensitive — exposing the typed exception makes it explicit at the call site that the consumer's idempotent-no-op behaviour is a deliberate decision.
+- `store/AppendOnlyMongoTier1Store.java` (new) — `@ConditionalOnProperty(... matchIfMissing = true)`. Wraps the existing `Tier1Repository` reads + `repo.insert()` for the write path. Translates `DuplicateKeyException` → `AppendOnlyViolationException`.
+- `consumer/Tier1Consumer.java` — now injects `Tier1Store` instead of `Tier1Repository`. Catches `AppendOnlyViolationException` for idempotent no-op handling (replaces the old `DuplicateKeyException` catch).
+- `chain/ChainVerifier.java` — now injects `Tier1Store`. Calls `findChainAsc(type, id)` instead of the repo method directly.
+- `web/EventsController.java` — `getEvent(eventId)` now consults `Tier1Store.findById` first then `Tier2Store.findById`.
+- `application.yaml` — new `gls.audit.collector.tier1-backend` key (env override `GLS_AUDIT_TIER1_BACKEND`); default `mongo`. Inline comment documents the operator-side hardening: grant only `insert` + `find` on `audit_tier1_events`; deny `update` / `delete` / `dropCollection` / `renameCollectionSameDB`.
+
+**Why a typed exception (not silent swallow):**
+
+The Tier 2 path absorbs duplicates inside `MongoTier2Store.save()` because Tier 2 is operational data and there's no architectural concern about an unintended overwrite. Tier 1 is the audit-of-record — making the duplicate signal explicit at the call site lets the consumer's "idempotent no-op" behaviour be a deliberate decision rather than an accident of API choice. If a future PR ever needs to react differently to a duplicate Tier 1 event (e.g. metric-counter, dead-letter for forensics), the typed exception makes that easy without changing the store's contract.
+
+**Why a reflection-test rather than just relying on the interface shape:**
+
+The `Tier1Store` interface intentionally has no mutating methods — but a future PR could add `save(StoredTier1Event)` thinking it's harmless. The reflection test (`interface_does_not_expose_update_or_delete`) gives a compile/test-time signal that the architectural intent is being violated. Cheap insurance against drift.
+
+**Tests:** 42 / 0 in module (was 36; +6 new for `AppendOnlyMongoTier1StoreTest`).
+
+- `AppendOnlyMongoTier1StoreTest` (6) — `append` calls `repo.insert`; `DuplicateKeyException` translates to `AppendOnlyViolationException` with eventId in the message; `findById` / `findLatestForResource` / `findChainAsc` delegate cleanly; reflection test verifies the interface has no `save` / `update` / `delete` / `deleteById` / `deleteAll` methods.
+- `Tier1ConsumerTest` (6) — updated to use `Tier1Store` mock. The "duplicate is idempotent" test now throws `AppendOnlyViolationException` via `doThrow().when().append()` rather than `repo.insert` throwing `DuplicateKeyException`. Same behaviour, different surface.
+- `ChainVerifierTest` (5) — updated to use `Tier1Store` mock. Method swap from `findByResourceTypeAndResourceIdOrderByTimestampAsc` to `findChainAsc`.
+- Existing `EventHasherTest`, `EnvelopeMapperTest`, `MetaControllerTest`, `ChainsControllerTest`, `MongoTier2StoreTest`, `EsTier2StoreTest` unchanged.
+
+Reactor: full backend reactor green.
+
+**Decisions logged:** None new. The "interface as architectural guard" pattern is implicit in CLAUDE.md "Audit Relay Pattern" — making it concrete for Tier 1 here.
+
+**Files changed:**
+
+- `backend/gls-audit-collector/src/main/java/.../store/{Tier1Store, AppendOnlyMongoTier1Store, AppendOnlyViolationException}.java` — 3 new.
+- `backend/gls-audit-collector/src/main/java/.../{consumer/Tier1Consumer, chain/ChainVerifier, web/EventsController}.java` — 3 modified.
+- `backend/gls-audit-collector/src/main/resources/application.yaml` — modified.
+- `backend/gls-audit-collector/src/test/java/.../{store/AppendOnlyMongoTier1StoreTest}.java` — 1 new.
+- `backend/gls-audit-collector/src/test/java/.../{consumer/Tier1ConsumerTest, chain/ChainVerifierTest}.java` — 2 modified.
+- Plan + log = 11 files total.
+
+**Open issues / deferred:**
+
+- **Tier1Repository is now a single-implementation indirection.** Could inline into `AppendOnlyMongoTier1Store` in a follow-up — same shape as the `Tier2Repository` deferral from PR3.
+- **No datastore-level deny enforcement is automated.** The application.yaml comment documents the role grants operators should configure, but the collector container doesn't itself enforce them — that's intentional (the collector runs as a different service account than the deployment-script-driven Mongo user; verification belongs in deployment validation, not the running service).
+- **No S3 Object Lock backend yet.** The `Tier1Store` interface is ready for one (`@ConditionalOnProperty(havingValue = "s3-object-lock")`), but the implementation needs the AWS SDK + bucket config + ILM mode. Tracked as a future follow-up; Mongo append-only with role-based deny meets CSV #3's RECOMMENDED option for the first cut.
+- **Reflection test is a structural guard, not a functional one.** It catches accidental future additions of `save`/`update`/`delete` on `Tier1Store`, but a sufficiently determined refactor could rename the methods to `persist` / `mutate`. Acceptable risk — the test exists to surface intent during code review.
+
+**Phase 1.12 status:** **4 of 5 plan items ticked** (deployable + chain validation + Tier 2 swap + Tier 1 hardening). Remaining: service migrations from `AuditEventRepository` (PR5+) — touches every service that emits audit events today.
+
+**Next:** Phase 1.12 PR5 — start migrating services from the legacy `AuditEventRepository.save()` calls to `gls-platform-audit`'s `AuditEmitter`. Recommended order: `gls-governance-enforcement` (highest event volume, already touched in Phase 1.10), then `gls-app-assembly` document/classification flows, then connectors. Each migration is a small focused PR; they can land independently because the legacy and new paths don't conflict (publisher-side outbox already deployed in Phase 0.7).

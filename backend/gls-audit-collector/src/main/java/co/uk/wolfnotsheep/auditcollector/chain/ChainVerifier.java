@@ -1,7 +1,7 @@
 package co.uk.wolfnotsheep.auditcollector.chain;
 
 import co.uk.wolfnotsheep.auditcollector.store.StoredTier1Event;
-import co.uk.wolfnotsheep.auditcollector.store.Tier1Repository;
+import co.uk.wolfnotsheep.auditcollector.store.Tier1Store;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -22,16 +22,16 @@ import java.util.List;
 @Service
 public class ChainVerifier {
 
-    private final Tier1Repository tier1Repo;
+    private final Tier1Store tier1Store;
 
-    public ChainVerifier(Tier1Repository tier1Repo) {
-        this.tier1Repo = tier1Repo;
+    public ChainVerifier(Tier1Store tier1Store) {
+        this.tier1Store = tier1Store;
     }
 
     public Result verify(String resourceType, String resourceId) {
         Instant started = Instant.now();
         List<StoredTier1Event> chain =
-                tier1Repo.findByResourceTypeAndResourceIdOrderByTimestampAsc(resourceType, resourceId);
+                tier1Store.findChainAsc(resourceType, resourceId);
         if (chain.isEmpty()) {
             return Result.notFound(resourceType, resourceId,
                     Duration.between(started, Instant.now()).toMillis());

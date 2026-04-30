@@ -1,7 +1,7 @@
 package co.uk.wolfnotsheep.auditcollector.chain;
 
 import co.uk.wolfnotsheep.auditcollector.store.StoredTier1Event;
-import co.uk.wolfnotsheep.auditcollector.store.Tier1Repository;
+import co.uk.wolfnotsheep.auditcollector.store.Tier1Store;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -15,18 +15,18 @@ import static org.mockito.Mockito.when;
 
 class ChainVerifierTest {
 
-    private Tier1Repository tier1Repo;
+    private Tier1Store tier1Store;
     private ChainVerifier verifier;
 
     @BeforeEach
     void setUp() {
-        tier1Repo = mock(Tier1Repository.class);
-        verifier = new ChainVerifier(tier1Repo);
+        tier1Store = mock(Tier1Store.class);
+        verifier = new ChainVerifier(tier1Store);
     }
 
     @Test
     void empty_chain_returns_NOT_FOUND() {
-        when(tier1Repo.findByResourceTypeAndResourceIdOrderByTimestampAsc("DOCUMENT", "doc-x"))
+        when(tier1Store.findChainAsc("DOCUMENT", "doc-x"))
                 .thenReturn(List.of());
 
         ChainVerifier.Result r = verifier.verify("DOCUMENT", "doc-x");
@@ -38,7 +38,7 @@ class ChainVerifierTest {
     @Test
     void single_first_in_chain_event_with_null_previousHash_is_OK() {
         StoredTier1Event first = build("E1", Instant.parse("2026-04-30T10:00:00Z"), null);
-        when(tier1Repo.findByResourceTypeAndResourceIdOrderByTimestampAsc("DOCUMENT", "doc-1"))
+        when(tier1Store.findChainAsc("DOCUMENT", "doc-1"))
                 .thenReturn(List.of(first));
 
         ChainVerifier.Result r = verifier.verify("DOCUMENT", "doc-1");
@@ -57,7 +57,7 @@ class ChainVerifierTest {
         String h2 = EventHasher.hashOf(e2);
         StoredTier1Event e3 = build("E3", Instant.parse("2026-04-30T10:02:00Z"), h2);
 
-        when(tier1Repo.findByResourceTypeAndResourceIdOrderByTimestampAsc("DOCUMENT", "doc-1"))
+        when(tier1Store.findChainAsc("DOCUMENT", "doc-1"))
                 .thenReturn(List.of(e1, e2, e3));
 
         ChainVerifier.Result r = verifier.verify("DOCUMENT", "doc-1");
@@ -75,7 +75,7 @@ class ChainVerifierTest {
         StoredTier1Event e2 = build("E2", Instant.parse("2026-04-30T10:01:00Z"),
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000");
 
-        when(tier1Repo.findByResourceTypeAndResourceIdOrderByTimestampAsc("DOCUMENT", "doc-1"))
+        when(tier1Store.findChainAsc("DOCUMENT", "doc-1"))
                 .thenReturn(List.of(e1, e2));
 
         ChainVerifier.Result r = verifier.verify("DOCUMENT", "doc-1");
@@ -91,7 +91,7 @@ class ChainVerifierTest {
         // First-in-chain MUST have null previousHash; non-null breaks the invariant.
         StoredTier1Event first = build("E1", Instant.parse("2026-04-30T10:00:00Z"),
                 "sha256:abc");
-        when(tier1Repo.findByResourceTypeAndResourceIdOrderByTimestampAsc("DOCUMENT", "doc-1"))
+        when(tier1Store.findChainAsc("DOCUMENT", "doc-1"))
                 .thenReturn(List.of(first));
 
         ChainVerifier.Result r = verifier.verify("DOCUMENT", "doc-1");

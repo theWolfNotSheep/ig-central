@@ -1,11 +1,12 @@
 package co.uk.wolfnotsheep.auditcollector.consumer;
 
 import co.uk.wolfnotsheep.auditcollector.chain.EventHasher;
+import co.uk.wolfnotsheep.auditcollector.store.AppendOnlyViolationException;
 import co.uk.wolfnotsheep.auditcollector.store.StoredTier1Event;
-import co.uk.wolfnotsheep.auditcollector.store.Tier1Repository;
+import co.uk.wolfnotsheep.auditcollector.store.Tier1Store;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.dao.DuplicateKeyException;
+import org.mockito.Mockito;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -14,6 +15,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -22,32 +24,32 @@ import static org.mockito.Mockito.when;
 
 class Tier1ConsumerTest {
 
-    private Tier1Repository tier1Repo;
+    private Tier1Store tier1Store;
     private Tier1Consumer consumer;
 
     @BeforeEach
     void setUp() {
-        tier1Repo = mock(Tier1Repository.class);
-        consumer = new Tier1Consumer(tier1Repo);
+        tier1Store = mock(Tier1Store.class);
+        consumer = new Tier1Consumer(tier1Store);
     }
 
     @Test
     void first_in_chain_event_with_null_previousHash_is_persisted() {
         Map<String, Object> envelope = envelope("E1", "DOCUMENT_CLASSIFIED",
                 "2026-04-30T10:00:00Z", "DOCUMENT", "doc-1", null);
-        when(tier1Repo.findFirstByResourceTypeAndResourceIdOrderByTimestampDesc("DOCUMENT", "doc-1"))
+        when(tier1Store.findLatestForResource("DOCUMENT", "doc-1"))
                 .thenReturn(Optional.empty());
 
         consumer.onTier1(envelope);
 
-        verify(tier1Repo, times(1)).insert(any(StoredTier1Event.class));
+        verify(tier1Store, times(1)).append(any(StoredTier1Event.class));
     }
 
     @Test
     void event_with_correct_previousHash_chains_onto_existing_tail() {
         StoredTier1Event tail = build("E1", Instant.parse("2026-04-30T10:00:00Z"),
                 "DOCUMENT", "doc-1", null);
-        when(tier1Repo.findFirstByResourceTypeAndResourceIdOrderByTimestampDesc("DOCUMENT", "doc-1"))
+        when(tier1Store.findLatestForResource("DOCUMENT", "doc-1"))
                 .thenReturn(Optional.of(tail));
         String correctHash = EventHasher.hashOf(tail);
 
@@ -56,14 +58,14 @@ class Tier1ConsumerTest {
 
         consumer.onTier1(envelope);
 
-        verify(tier1Repo, times(1)).insert(any(StoredTier1Event.class));
+        verify(tier1Store, times(1)).append(any(StoredTier1Event.class));
     }
 
     @Test
     void event_with_wrong_previousHash_is_dropped_not_persisted() {
         StoredTier1Event tail = build("E1", Instant.parse("2026-04-30T10:00:00Z"),
                 "DOCUMENT", "doc-1", null);
-        when(tier1Repo.findFirstByResourceTypeAndResourceIdOrderByTimestampDesc("DOCUMENT", "doc-1"))
+        when(tier1Store.findLatestForResource("DOCUMENT", "doc-1"))
                 .thenReturn(Optional.of(tail));
 
         Map<String, Object> envelope = envelope("E2", "DOCUMENT_CLASSIFIED",
@@ -72,26 +74,26 @@ class Tier1ConsumerTest {
 
         // No exception escapes — broken chain is acked + dropped per CLAUDE.md happy/unhappy.
         assertThatNoException().isThrownBy(() -> consumer.onTier1(envelope));
-        verify(tier1Repo, never()).insert(any(StoredTier1Event.class));
+        verify(tier1Store, never()).append(any(StoredTier1Event.class));
     }
 
     @Test
-    void duplicate_key_is_idempotent_no_op() {
+    void append_only_violation_is_idempotent_no_op() {
         Map<String, Object> envelope = envelope("E1", "DOCUMENT_CLASSIFIED",
                 "2026-04-30T10:00:00Z", "DOCUMENT", "doc-1", null);
-        when(tier1Repo.findFirstByResourceTypeAndResourceIdOrderByTimestampDesc("DOCUMENT", "doc-1"))
+        when(tier1Store.findLatestForResource("DOCUMENT", "doc-1"))
                 .thenReturn(Optional.empty());
-        when(tier1Repo.insert(any(StoredTier1Event.class)))
-                .thenThrow(new DuplicateKeyException("dup"));
+        doThrow(new AppendOnlyViolationException("E1"))
+                .when(tier1Store).append(any(StoredTier1Event.class));
 
         // No exception escapes — duplicate is treated as already-persisted.
         assertThatNoException().isThrownBy(() -> consumer.onTier1(envelope));
     }
 
     @Test
-    void null_envelope_is_dropped_without_calling_repo() {
+    void null_envelope_is_dropped_without_calling_store() {
         consumer.onTier1(null);
-        verify(tier1Repo, never()).insert(any(StoredTier1Event.class));
+        verify(tier1Store, never()).append(any(StoredTier1Event.class));
     }
 
     @Test
@@ -103,7 +105,7 @@ class Tier1ConsumerTest {
                 "timestamp", "2026-04-30T10:00:00Z"
         ));
         consumer.onTier1(envelope);
-        verify(tier1Repo, never()).insert(any(StoredTier1Event.class));
+        verify(tier1Store, never()).append(any(StoredTier1Event.class));
     }
 
     private static Map<String, Object> envelope(String eventId, String eventType, String ts,
