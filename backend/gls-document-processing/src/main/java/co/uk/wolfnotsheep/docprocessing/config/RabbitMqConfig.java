@@ -3,11 +3,19 @@ package co.uk.wolfnotsheep.docprocessing.config;
 import org.springframework.amqp.core.*;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.json.JsonMapper;
 
+/**
+ * RabbitMQ topology for the legacy in-process document-processing path.
+ *
+ * <p>Phase 2.3 — supports {@code gls.rabbit.quorum-queues.enabled=true}
+ * for Raft-replicated queues. See {@code gls-app-assembly}'s
+ * {@code RabbitMqConfig} for the migration runbook.
+ */
 @Configuration
 @ConditionalOnProperty(name = "pipeline.execution-engine.enabled", havingValue = "false", matchIfMissing = true)
 public class RabbitMqConfig {
@@ -20,6 +28,22 @@ public class RabbitMqConfig {
     public static final String ROUTING_INGESTED = "document.ingested";
     public static final String ROUTING_PROCESSED = "document.processed";
 
+    private final boolean quorumQueues;
+
+    public RabbitMqConfig(
+            @Value("${gls.rabbit.quorum-queues.enabled:false}") boolean quorumQueues) {
+        this.quorumQueues = quorumQueues;
+    }
+
+    /** Visible for testing. */
+    QueueBuilder durable(String name) {
+        QueueBuilder builder = QueueBuilder.durable(name);
+        if (quorumQueues) {
+            builder.quorum();
+        }
+        return builder;
+    }
+
     @Bean
     public TopicExchange documentExchange() {
         return new TopicExchange(EXCHANGE, true, false);
@@ -27,12 +51,12 @@ public class RabbitMqConfig {
 
     @Bean
     public Queue ingestedQueue() {
-        return QueueBuilder.durable(QUEUE_INGESTED).build();
+        return durable(QUEUE_INGESTED).build();
     }
 
     @Bean
     public Queue processedQueue() {
-        return QueueBuilder.durable(QUEUE_PROCESSED).build();
+        return durable(QUEUE_PROCESSED).build();
     }
 
     @Bean

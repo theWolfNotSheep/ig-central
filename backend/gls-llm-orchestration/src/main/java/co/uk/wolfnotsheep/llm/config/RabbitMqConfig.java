@@ -5,6 +5,7 @@ import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFacto
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.json.JsonMapper;
@@ -12,6 +13,10 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * RabbitMQ topology for the LLM classification worker.
  * All queues route rejected/failed messages to the dead-letter exchange.
+ *
+ * <p>Phase 2.3 — supports {@code gls.rabbit.quorum-queues.enabled=true}
+ * for Raft-replicated queues. See the analogous config in
+ * {@code gls-app-assembly} for the migration runbook.
  */
 @Configuration
 public class RabbitMqConfig {
@@ -35,6 +40,22 @@ public class RabbitMqConfig {
     public static final String ROUTING_LLM_JOB_REQUESTED = "pipeline.llm.requested";
     public static final String ROUTING_LLM_JOB_COMPLETED = "pipeline.llm.completed";
 
+    private final boolean quorumQueues;
+
+    public RabbitMqConfig(
+            @Value("${gls.rabbit.quorum-queues.enabled:false}") boolean quorumQueues) {
+        this.quorumQueues = quorumQueues;
+    }
+
+    /** Visible for testing. */
+    QueueBuilder durable(String name) {
+        QueueBuilder builder = QueueBuilder.durable(name);
+        if (quorumQueues) {
+            builder.quorum();
+        }
+        return builder;
+    }
+
     @Bean
     public TopicExchange documentExchange() {
         return new TopicExchange(EXCHANGE, true, false);
@@ -47,7 +68,7 @@ public class RabbitMqConfig {
 
     @Bean
     public Queue deadLetterQueue() {
-        return QueueBuilder.durable(QUEUE_DLQ).build();
+        return durable(QUEUE_DLQ).build();
     }
 
     @Bean
@@ -57,21 +78,21 @@ public class RabbitMqConfig {
 
     @Bean
     public Queue processedQueue() {
-        return QueueBuilder.durable(QUEUE_PROCESSED)
+        return durable(QUEUE_PROCESSED)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .build();
     }
 
     @Bean
     public Queue classifiedQueue() {
-        return QueueBuilder.durable(QUEUE_CLASSIFIED)
+        return durable(QUEUE_CLASSIFIED)
                 .withArgument("x-dead-letter-exchange", DLX_EXCHANGE)
                 .build();
     }
 
     @Bean
     public Queue failedQueue() {
-        return QueueBuilder.durable(QUEUE_FAILED).build();
+        return durable(QUEUE_FAILED).build();
     }
 
     @Bean
@@ -98,7 +119,7 @@ public class RabbitMqConfig {
 
     @Bean
     public Queue llmJobsQueue() {
-        return QueueBuilder.durable(QUEUE_LLM_JOBS)
+        return durable(QUEUE_LLM_JOBS)
                 .withArgument("x-dead-letter-exchange", PIPELINE_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", "pipeline.dlq")
                 .build();
@@ -106,7 +127,7 @@ public class RabbitMqConfig {
 
     @Bean
     public Queue llmCompletedQueue() {
-        return QueueBuilder.durable(QUEUE_LLM_COMPLETED)
+        return durable(QUEUE_LLM_COMPLETED)
                 .withArgument("x-dead-letter-exchange", PIPELINE_EXCHANGE)
                 .withArgument("x-dead-letter-routing-key", "pipeline.dlq")
                 .build();

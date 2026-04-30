@@ -4086,3 +4086,47 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 2.3 status:** Plan item 1 (per-worker semaphore on in-flight calls) — already in place from Phase 1.6 PR4 (`RateLimitGate`). Plan item 3 (quorum queues) — first module migrated (5 modules total). Items 2 (router 429 + `Retry-After`) and 4 (DLQ reprocessing data path) untouched.
 
 **Next:** Phase 2.3 PR2 — apply the same quorum-queue pattern to `gls-llm-orchestration` (the second-most-central RabbitMqConfig). Or pivot to plan item 2 (router 429) which is a smaller change but lower priority since the router already falls through to lower tiers on dispatch failure.
+
+## 2026-04-30 — Phase 2.3 PR2 — Quorum-queue opt-in for the remaining 4 modules
+
+**Done:** Closed Phase 2.3 plan item 3 — every `RabbitMqConfig` in the codebase now supports the `gls.rabbit.quorum-queues.enabled` flag. Same pattern as PR1: per-module constructor + `durable(name)` helper that conditionally calls `.quorum()`. Default `false` everywhere; operators flip the flag globally and follow the per-queue delete-then-redeploy runbook.
+
+**Why batched:** Four modules with the same mechanical pattern. Doing them one PR at a time would burn review overhead with no extra signal. Each module's queues are independent, so a single failure during deployment doesn't block another module — operators can flip the flag per-module if needed.
+
+**Changes (per module):**
+
+- `gls-llm-orchestration/llm/config/RabbitMqConfig.java` — 6 queues (deadLetter, processed, classified, failed, llmJobs, llmCompleted) all switched to the helper.
+- `gls-document-processing/docprocessing/config/RabbitMqConfig.java` — 2 queues (ingested, processed) on the legacy in-process pipeline.
+- `gls-indexing-worker/indexing/consumer/RabbitMqConfig.java` — 1 queue (`gls.documents.classified.indexing`).
+- `gls-governance-enforcement/enforcement/config/RabbitMqConfig.java` — 1 queue (legacy `classified` consumer).
+
+Plus matching `RabbitMqConfigQuorumTest` in each module — same shape as PR1's, scoped to the queues each module declares.
+
+**Tests:** All four modules green:
+- `gls-llm-orchestration` 3/0 new in `RabbitMqConfigQuorumTest`.
+- `gls-document-processing` 2/0 new.
+- `gls-indexing-worker` 2/0 new (module total 36, was 34).
+- `gls-governance-enforcement` 2/0 new (module total 37, was 35).
+
+Reactor green via `./mvnw -DskipTests package`.
+
+**Decisions logged:** None new — same as PR1.
+
+**Files changed:**
+
+- `backend/gls-llm-orchestration/src/main/java/.../llm/config/RabbitMqConfig.java` — modified.
+- `backend/gls-document-processing/src/main/java/.../docprocessing/config/RabbitMqConfig.java` — modified.
+- `backend/gls-indexing-worker/src/main/java/.../indexing/consumer/RabbitMqConfig.java` — modified.
+- `backend/gls-governance-enforcement/src/main/java/.../enforcement/config/RabbitMqConfig.java` — modified.
+- 4 corresponding `RabbitMqConfigQuorumTest.java` — 4 new.
+- Log = 9 files total.
+
+**Open issues / deferred:**
+
+- **Publisher confirms / mandatory routing.** Same as PR1 — quorum queues solve the consumer-side message-loss half. Adding `setMandatory(true)` + `ConfirmCallback` / `ReturnsCallback` on every `RabbitTemplate` is a follow-up.
+- **Operator runbook still not in repo.** Per PR1, this needs `docs/runbooks/quorum-queue-migration.md` documenting the delete-then-redeploy steps for each queue. Tracked.
+- **No global quorum-queues toggle test.** A simple smoke test that boots each module's Spring context with the flag set + verifies it propagates would catch wiring regressions. Not added because each module's `RabbitMqConfigQuorumTest` already covers the per-queue contract.
+
+**Phase 2.3 status:** Plan items 1 (per-worker semaphore — already in place) and 3 (quorum queues) **complete**. Items 2 (router 429 + `Retry-After`) and 4 (DLQ reprocessing data path) remain.
+
+**Next:** Phase 2.4 (failover + leader election) — `gls-audit-collector` Tier 1 leader election via ShedLock; `gls-scheduler` leader election. The connector per-source watches piece is already done from Phase 1.13. Or 2.6 observability uplift if measurement-first is preferred. Phase 2.5 chaos tests are blocked on representative load.
