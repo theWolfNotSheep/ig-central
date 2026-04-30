@@ -6,6 +6,7 @@ import co.uk.wolfnotsheep.document.repositories.ConnectedDriveRepository;
 import co.uk.wolfnotsheep.document.repositories.GmailIngestCursorRepository;
 import co.uk.wolfnotsheep.governance.models.PipelineDefinition;
 import co.uk.wolfnotsheep.governance.repositories.PipelineDefinitionRepository;
+import co.uk.wolfnotsheep.infrastructure.services.connectors.PerSourceLock;
 import co.uk.wolfnotsheep.infrastructure.services.mail.GmailService.GmailMessageSummary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,17 +33,20 @@ public class GmailPollingScheduler {
     private final GmailIngestCursorRepository cursorRepo;
     private final GmailService gmailService;
     private final EmailIngestionService emailIngestionService;
+    private final PerSourceLock perSourceLock;
 
     public GmailPollingScheduler(PipelineDefinitionRepository pipelineRepo,
                                   ConnectedDriveRepository driveRepo,
                                   GmailIngestCursorRepository cursorRepo,
                                   GmailService gmailService,
-                                  EmailIngestionService emailIngestionService) {
+                                  EmailIngestionService emailIngestionService,
+                                  PerSourceLock perSourceLock) {
         this.pipelineRepo = pipelineRepo;
         this.driveRepo = driveRepo;
         this.cursorRepo = cursorRepo;
         this.gmailService = gmailService;
         this.emailIngestionService = emailIngestionService;
+        this.perSourceLock = perSourceLock;
     }
 
     @Scheduled(fixedDelay = 60000, initialDelay = 120000) // check every 60s, start after 2min
@@ -55,12 +59,18 @@ public class GmailPollingScheduler {
             for (PipelineDefinition.VisualNode node : pipeline.getVisualNodes()) {
                 if (!"gmailWatcher".equals(node.type())) continue;
 
-                try {
-                    processWatcherNode(pipeline, node);
-                } catch (Exception e) {
-                    log.error("Gmail watcher failed for pipeline {} node {}: {}",
-                            pipeline.getName(), node.id(), e.getMessage());
-                }
+                // Per-source lock keyed on (pipeline, node) so multiple replicas
+                // can poll different watchers concurrently but never the same
+                // one (Phase 1.13 — per-source watch sharding via ShedLock).
+                String lockName = "gmail-poll-" + pipeline.getId() + "-" + node.id();
+                perSourceLock.withLock(lockName, Duration.ofMinutes(5), () -> {
+                    try {
+                        processWatcherNode(pipeline, node);
+                    } catch (Exception e) {
+                        log.error("Gmail watcher failed for pipeline {} node {}: {}",
+                                pipeline.getName(), node.id(), e.getMessage());
+                    }
+                });
             }
         }
     }
