@@ -3950,3 +3950,39 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 2.1 status:** Plan items 1, 3, 4, 5 **complete**. Remaining: `classification_outbox` reconciler — depends on the outbox collection actually existing (it doesn't yet). When the §6.5 component lands, the reconciler is a small follow-up.
 
 **Next:** Either move to Phase 2.2 (vendor / external API resilience — Anthropic circuit breaker, Ollama fallback, MCP unreachable handling, cost budget enforcement), or tackle the `classification_outbox` workstream by first building the outbox itself. Phase 2.2 is the natural progression.
+
+## 2026-04-30 — Phase 2.2 PR1 — `CircuitBreaker` + `CircuitBreakerLlmService`
+
+**Done:** Started Phase 2.2 (vendor resilience). New `CircuitBreaker` primitive (CLOSED → OPEN → HALF_OPEN) plus `CircuitBreakerLlmService` decorator wraps the configured Anthropic / Ollama backend. Transport / 5xx failures (which the existing services surface as `RuntimeException`s) trip the breaker after `failure-threshold` consecutive failures. After `open-cooldown`, the next call probes via `HALF_OPEN`; success closes, failure re-opens with a fresh cooldown. Caller-side gates (`BudgetExceededException`, `RateLimitExceededException`) are explicitly *not* treated as failures — those reflect our own back-pressure, not upstream health.
+
+**Changes:**
+
+- `gls-llm-worker/backend/CircuitBreaker.java` (new) — pure logic, no LLM-specific knowledge. Atomic state reference + atomic failure counter. Constructor takes a `Clock` for deterministic testing. Threshold and cooldown validated at construction.
+- `gls-llm-worker/backend/CircuitBreakerLlmService.java` (new) — decorator implementing `LlmService`. On call: checks `breaker.beforeCall()`; if false, throws `CircuitBreakerOpenException`. Else delegates; on success calls `recordSuccess`; on `RuntimeException` (other than the two caller-gates) calls `recordFailure` then rethrows. `isReady()` returns false when the breaker is OPEN so the `/v1/capabilities` health surface reflects the upstream state.
+- `gls-llm-worker/backend/CircuitBreakerOpenException.java` (new) — typed exception so the controller advice can map cleanly to 503.
+- `gls-llm-worker/web/LlmExceptionHandler.java` — new `@ExceptionHandler` for `CircuitBreakerOpenException`: 503 with `code=LLM_UPSTREAM_UNAVAILABLE`, `Retry-After: 1` (conservative; the cascade router's own backoff drives the real wait).
+- `gls-llm-worker/backend/LlmBackendConfig.java` — both Anthropic and Ollama backends are now wrapped via a new `wrapWithCircuitBreaker` helper. Gated by `gls.llm.worker.circuit-breaker.enabled` (default `true`). Tunables: `failure-threshold` (default 5), `open-cooldown` (default `PT30S`).
+- `gls-llm-worker/test/.../backend/CircuitBreakerTest.java` (new) — 9 tests: initial state CLOSED; sub-threshold failures stay CLOSED; threshold failures open; success in CLOSED resets counter; OPEN→HALF_OPEN after cooldown (via injected clock); HALF_OPEN success → CLOSED; HALF_OPEN failure → OPEN with fresh cooldown; OPEN with no cooldown elapsed keeps rejecting; invalid config rejected.
+- `gls-llm-worker/test/.../backend/CircuitBreakerLlmServiceTest.java` (new) — 8 tests: success passes through and resets; runtime exception records failure; threshold failures open + short-circuit subsequent calls; `BudgetExceededException` doesn't count; `RateLimitExceededException` doesn't count; `isReady()` reflects breaker open; `activeBackend()` delegates; success after failures resets counter.
+
+**Tests:** 68 / 0 in `gls-llm-worker` (was 51; +17 new across the two test classes). Reactor green via `./mvnw -DskipTests package`.
+
+**Decisions logged:** None new. Caller-side gates not counting as failures is the load-bearing decision — without it, a hammered budget would trip the breaker and prevent the normal `429 Retry-After` path from working.
+
+**Files changed:**
+
+- `backend/gls-llm-worker/src/main/java/.../backend/{CircuitBreaker, CircuitBreakerLlmService, CircuitBreakerOpenException}.java` — 3 new.
+- `backend/gls-llm-worker/src/main/java/.../backend/LlmBackendConfig.java` — modified.
+- `backend/gls-llm-worker/src/main/java/.../web/LlmExceptionHandler.java` — modified.
+- `backend/gls-llm-worker/src/test/java/.../backend/{CircuitBreakerTest, CircuitBreakerLlmServiceTest}.java` — 2 new.
+- Log = 7 files total.
+
+**Open issues / deferred:**
+
+- **No fallback path between backends.** When the Anthropic breaker is OPEN, the worker returns 503; it doesn't try Ollama. The cascade router (`gls-classifier-router`) already has SLM/LLM fallback semantics for `LLM_NOT_CONFIGURED` and 5xx; the `LLM_UPSTREAM_UNAVAILABLE` 503 introduced here participates in that cascade. Direct in-worker fallback (so the worker swaps to Ollama transparently) is a Phase 2.2 PR2 candidate but creates an awkward coupling between the two backends.
+- **No 429 / `Retry-After` honoring on the Anthropic side itself.** The breaker treats every `RuntimeException` the same; a real HTTP 429 from Anthropic is currently mapped to `LLM_DEPENDENCY_UNAVAILABLE` 503 by `handleIo`, the breaker counts it as a failure, and the worker doesn't read the `Retry-After` header. Phase 2.2 PR2 plan item — needs Spring AI to surface the response status / headers, which it doesn't do cleanly today (the SDK wraps everything as `RuntimeException`).
+- **No per-backend metrics on breaker state.** Useful gauges: `llm.circuit_breaker.state{backend}` (0=CLOSED, 1=OPEN, 2=HALF_OPEN), `llm.circuit_breaker.consecutive_failures{backend}`. Tracked alongside the broader Phase 2.6 observability uplift; cheap to add when that PR lands.
+
+**Phase 2.2 status:** Plan item 1 (Anthropic circuit breaker) **complete** — the implementation is generic and applies to any backend. Item 2 (Anthropic 429 / `Retry-After`) untouched. Item 3 (Ollama unreachable + Anthropic fallback) untouched. Item 4 (MCP unreachable → confidence cap) untouched. Item 5 (cost budget enforcement) is mostly done from Phase 1.6 PR4 — needs the auto-degrade-to-SLM piece.
+
+**Next:** Phase 2.2 PR2 — wire the cascade router to fall through on `LLM_UPSTREAM_UNAVAILABLE` 503 (it likely already does via the existing 5xx handler, but confirm + test). Then MCP unreachable handling, then 429 / `Retry-After`.

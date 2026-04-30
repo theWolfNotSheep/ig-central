@@ -50,6 +50,9 @@ public class LlmBackendConfig {
             @Value("${gls.llm.worker.ollama.model:qwen2.5:32b}") String ollamaModel,
             @Value("${gls.llm.worker.ollama.temperature:0.1}") double ollamaTemperature,
             @Value("${gls.llm.worker.ollama.num-ctx:32768}") int ollamaNumCtx,
+            @Value("${gls.llm.worker.circuit-breaker.enabled:true}") boolean circuitBreakerEnabled,
+            @Value("${gls.llm.worker.circuit-breaker.failure-threshold:5}") int circuitBreakerFailureThreshold,
+            @Value("${gls.llm.worker.circuit-breaker.open-cooldown:PT30S}") java.time.Duration circuitBreakerOpenCooldown,
             ObjectProvider<ObjectMapper> mapperProvider) {
 
         ObjectMapper mapper = mapperProvider.getIfAvailable(ObjectMapper::new);
@@ -75,9 +78,11 @@ public class LlmBackendConfig {
             }
             log.info("llm: backend=anthropic model={} temperature={} maxTokens={}",
                     anthropicModel, anthropicTemperature, anthropicMaxTokens);
-            return new AnthropicLlmService(
+            LlmService base = new AnthropicLlmService(
                     model, resolver, anthropicModel, anthropicTemperature, anthropicMaxTokens,
                     mapper, toolCallbacks);
+            return wrapWithCircuitBreaker(base, "anthropic",
+                    circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown);
         }
 
         if ("ollama".equalsIgnoreCase(backend)) {
@@ -92,12 +97,28 @@ public class LlmBackendConfig {
             }
             log.info("llm: backend=ollama model={} temperature={} numCtx={}",
                     ollamaModel, ollamaTemperature, ollamaNumCtx);
-            return new OllamaLlmService(
+            LlmService base = new OllamaLlmService(
                     model, resolver, ollamaModel, ollamaTemperature, ollamaNumCtx, mapper,
                     toolCallbacks);
+            return wrapWithCircuitBreaker(base, "ollama",
+                    circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown);
         }
 
         log.info("llm: backend=none — every /v1/classify call will return LLM_NOT_CONFIGURED until a backend is wired");
         return new NotConfiguredLlmService();
+    }
+
+    private static LlmService wrapWithCircuitBreaker(
+            LlmService delegate, String backendName,
+            boolean enabled, int failureThreshold, java.time.Duration openCooldown) {
+        if (!enabled) {
+            log.info("llm: circuit breaker disabled for backend={}", backendName);
+            return delegate;
+        }
+        CircuitBreaker breaker = new CircuitBreaker(
+                "llm-" + backendName, failureThreshold, openCooldown);
+        log.info("llm: wrapped backend={} with circuit breaker (threshold={}, cooldown={})",
+                backendName, failureThreshold, openCooldown);
+        return new CircuitBreakerLlmService(delegate, breaker);
     }
 }

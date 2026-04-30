@@ -2,6 +2,7 @@ package co.uk.wolfnotsheep.llmworker.web;
 
 import co.uk.wolfnotsheep.llmworker.backend.BlockUnknownException;
 import co.uk.wolfnotsheep.llmworker.backend.BudgetExceededException;
+import co.uk.wolfnotsheep.llmworker.backend.CircuitBreakerOpenException;
 import co.uk.wolfnotsheep.llmworker.backend.LlmNotConfiguredException;
 import co.uk.wolfnotsheep.llmworker.backend.RateLimitExceededException;
 import org.slf4j.Logger;
@@ -52,6 +53,24 @@ public class LlmExceptionHandler {
         log.warn("llm I/O failure: {}", e.getMessage(), e);
         return problem(HttpStatus.SERVICE_UNAVAILABLE, "LLM_DEPENDENCY_UNAVAILABLE",
                 "An LLM backend dependency is unreachable", e.getMessage());
+    }
+
+    @ExceptionHandler(CircuitBreakerOpenException.class)
+    public ResponseEntity<ProblemDetail> handleBreakerOpen(CircuitBreakerOpenException e) {
+        log.debug("llm circuit breaker open: {}", e.getMessage());
+        ResponseEntity<ProblemDetail> base = problem(HttpStatus.SERVICE_UNAVAILABLE,
+                "LLM_UPSTREAM_UNAVAILABLE",
+                "Upstream LLM backend is unavailable (circuit breaker open)",
+                e.getMessage());
+        // Loose hint to the caller — the cooldown is the breaker's, not exposed
+        // here, so we emit a conservative 1s and let the caller's own backoff
+        // / cascade router decide.
+        return ResponseEntity.status(base.getStatusCode())
+                .headers(h -> {
+                    base.getHeaders().forEach(h::addAll);
+                    h.add("Retry-After", "1");
+                })
+                .body(base.getBody());
     }
 
     @ExceptionHandler(BudgetExceededException.class)
