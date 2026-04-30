@@ -1,5 +1,8 @@
 package co.uk.wolfnotsheep.router.parse;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,6 +30,17 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Thread-safe via {@link AtomicReference}. The contention model is
  * benign — many readers checking {@link #isExhausted()}, occasional
  * writers via {@link #markExhausted(Duration)}.
+ *
+ * <p>Phase 2.6 — when a {@link MeterRegistry} is supplied, exposes:
+ * <ul>
+ *   <li>{@code router.llm.budget.degraded} — counter, ticks per
+ *       {@link #markExhausted} call (an arming event, including
+ *       window-extensions).</li>
+ *   <li>{@code router.llm.budget.exhausted_until_epoch_s} — gauge,
+ *       holds the epoch-seconds of {@link #exhaustedUntil()} or 0 when
+ *       not exhausted. Lets dashboards render a "degrade until"
+ *       countdown.</li>
+ * </ul>
  */
 public class LlmBudgetGate {
 
@@ -34,14 +48,37 @@ public class LlmBudgetGate {
 
     private final Clock clock;
     private final AtomicReference<Instant> exhaustedUntil = new AtomicReference<>();
+    private final Counter degradedCounter;
 
     public LlmBudgetGate() {
-        this(Clock.systemUTC());
+        this(Clock.systemUTC(), null);
     }
 
     /** Visible for testing — inject a fake clock. */
     public LlmBudgetGate(Clock clock) {
+        this(clock, null);
+    }
+
+    public LlmBudgetGate(MeterRegistry meterRegistry) {
+        this(Clock.systemUTC(), meterRegistry);
+    }
+
+    public LlmBudgetGate(Clock clock, MeterRegistry meterRegistry) {
         this.clock = clock;
+        if (meterRegistry != null) {
+            this.degradedCounter = Counter.builder("router.llm.budget.degraded")
+                    .description("Count of LLM-budget-exhausted gate-arming events (worker returned 429 LLM_BUDGET_EXCEEDED)")
+                    .register(meterRegistry);
+            Gauge.builder("router.llm.budget.exhausted_until_epoch_s", this,
+                            g -> {
+                                Instant until = g.exhaustedUntil();
+                                return until == null ? 0.0 : until.getEpochSecond();
+                            })
+                    .description("Unix-seconds when the LLM budget gate clears; 0 when not exhausted")
+                    .register(meterRegistry);
+        } else {
+            this.degradedCounter = null;
+        }
     }
 
     /** @return whether the gate is currently in the exhausted state. */
@@ -83,6 +120,9 @@ public class LlmBudgetGate {
         Instant target = Instant.now(clock).plus(retryAfter);
         exhaustedUntil.updateAndGet(current ->
                 current == null || target.isAfter(current) ? target : current);
+        if (degradedCounter != null) {
+            degradedCounter.increment();
+        }
         log.warn("LLM budget gate: exhausted until {} (retryAfter={})", target, retryAfter);
     }
 

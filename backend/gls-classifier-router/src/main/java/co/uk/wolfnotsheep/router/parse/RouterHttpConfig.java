@@ -1,6 +1,8 @@
 package co.uk.wolfnotsheep.router.parse;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -46,8 +48,8 @@ public class RouterHttpConfig {
 
     @Bean
     @ConditionalOnProperty(prefix = "gls.router.cascade.llm-http", name = "enabled", havingValue = "true")
-    public LlmBudgetGate llmBudgetGate() {
-        return new LlmBudgetGate();
+    public LlmBudgetGate llmBudgetGate(ObjectProvider<MeterRegistry> meterRegistryProvider) {
+        return new LlmBudgetGate(meterRegistryProvider.getIfAvailable());
     }
 
     @Bean

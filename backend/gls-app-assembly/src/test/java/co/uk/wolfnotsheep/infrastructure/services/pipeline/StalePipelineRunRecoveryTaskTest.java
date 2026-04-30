@@ -288,4 +288,23 @@ class StalePipelineRunRecoveryTaskTest {
         verify(pipelineRunRepo, times(1)).save(any());
         verify(engine, times(1)).resumeRun("run-x");
     }
+
+    @Test
+    void detection_age_histogram_records_one_observation_per_stale_run() {
+        // Stale run is 20 minutes past — its age in seconds should be roughly that.
+        PipelineRun a = staleRun("run-a", PipelineRunStatus.RUNNING, 0);
+        PipelineRun b = staleRun("run-b", PipelineRunStatus.RUNNING, 0);
+        when(pipelineRunRepo.findByStatusAndUpdatedAtBefore(eq(PipelineRunStatus.RUNNING), any()))
+                .thenReturn(List.of(a, b));
+        when(pipelineRunRepo.findByStatusAndUpdatedAtBefore(eq(PipelineRunStatus.WAITING), any()))
+                .thenReturn(List.of());
+        when(nodeRunRepo.findByPipelineRunIdOrderByStartedAtAsc(any())).thenReturn(List.of());
+
+        task.recoverStalePipelineRuns();
+
+        var summary = meterRegistry.find("pipeline.stale.detected.age").summary();
+        assertThat(summary).isNotNull();
+        assertThat(summary.count()).isEqualTo(2);
+        assertThat(summary.mean()).isGreaterThanOrEqualTo(60.0);  // at least a minute past
+    }
 }

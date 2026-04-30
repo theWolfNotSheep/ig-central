@@ -150,4 +150,31 @@ class McpCappingLlmServiceTest {
         assertThatThrownBy(() -> new McpCappingLlmService(delegate, probe, 1.1f))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void cap_event_increments_confidence_capped_counter_with_backend_tag() {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        probe.setAvailable(false);
+        when(delegate.classify(any(), any(), any())).thenReturn(result(0.95f));
+        McpCappingLlmService cap = new McpCappingLlmService(delegate, probe, 0.7f, registry);
+
+        cap.classify("blk", 1, "doc");
+
+        assertThat(registry.get("llm.mcp.confidence_capped")
+                .tag("backend", "anthropic").counter().count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void no_cap_no_counter_increment() {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        probe.setAvailable(true);
+        when(delegate.classify(any(), any(), any())).thenReturn(result(0.95f));
+        McpCappingLlmService cap = new McpCappingLlmService(delegate, probe, 0.7f, registry);
+
+        cap.classify("blk", 1, "doc");
+
+        assertThat(registry.find("llm.mcp.confidence_capped").counter()).isNull();
+    }
 }

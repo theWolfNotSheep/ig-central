@@ -125,6 +125,37 @@ class CircuitBreakerLlmServiceTest {
     }
 
     @Test
+    void breaker_state_gauge_reflects_current_state() {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        CircuitBreakerLlmService instrumented = new CircuitBreakerLlmService(delegate, breaker, registry);
+        when(delegate.classify(any(), any(), any()))
+                .thenThrow(new UncheckedIOException("boom", new IOException()));
+
+        // CLOSED → state=0
+        assertThat(registry.get("llm.circuit_breaker.state")
+                .tag("backend", "anthropic").gauge().value()).isEqualTo(0.0);
+        assertThat(registry.get("llm.circuit_breaker.consecutive_failures")
+                .tag("backend", "anthropic").gauge().value()).isEqualTo(0.0);
+
+        // Drive to OPEN.
+        for (int i = 0; i < 3; i++) {
+            try { instrumented.classify("blk", 1, "doc"); } catch (RuntimeException ignored) {}
+        }
+        assertThat(registry.get("llm.circuit_breaker.state")
+                .tag("backend", "anthropic").gauge().value()).isEqualTo(2.0);
+    }
+
+    @Test
+    void absent_MeterRegistry_does_not_break_classify_path() {
+        // Same as the no-arg constructor — verify nothing throws when no registry is provided.
+        CircuitBreakerLlmService noMetrics = new CircuitBreakerLlmService(delegate, breaker);
+        when(delegate.classify(any(), any(), any())).thenReturn(sampleResult());
+        LlmResult result = noMetrics.classify("blk", 1, "doc");
+        assertThat(result).isNotNull();
+    }
+
+    @Test
     void successful_call_after_failures_resets_consecutive_count() {
         when(delegate.classify(any(), any(), any()))
                 .thenThrow(new UncheckedIOException("boom", new IOException()))
