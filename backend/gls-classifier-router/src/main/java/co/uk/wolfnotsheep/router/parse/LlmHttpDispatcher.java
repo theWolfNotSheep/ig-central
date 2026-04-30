@@ -33,6 +33,14 @@ import java.util.Map;
  *         (errorCode from body, default {@code LLM_NOT_CONFIGURED}).</li>
  *     <li>{@code 422} → {@link LlmBlockUnknownException} — surfaces
  *         as 422 {@code ROUTER_LLM_BLOCK_UNKNOWN}.</li>
+ *     <li>{@code 429} with {@code code=LLM_BUDGET_EXCEEDED} →
+ *         {@link LlmTierFallthroughException} with
+ *         {@code errorCode=LLM_BUDGET_EXHAUSTED}; the {@link LlmBudgetGate}
+ *         (if wired) is marked exhausted for the {@code Retry-After}
+ *         duration so subsequent calls short-circuit without HTTP.</li>
+ *     <li>{@code 429} with any other code (e.g. {@code LLM_RATE_LIMITED}) →
+ *         {@link LlmTierFallthroughException} with the body's code or
+ *         {@code LLM_HTTP_429}.</li>
  *     <li>Other 4xx / 5xx → {@link LlmTierFallthroughException} with
  *         {@code errorCode=LLM_HTTP_<status>}.</li>
  *     <li>Transport / parse failure →
@@ -48,20 +56,39 @@ public class LlmHttpDispatcher {
     private final URI classifyEndpoint;
     private final Duration timeout;
     private final ObjectMapper mapper;
+    private final LlmBudgetGate budgetGate;
+    private final Duration budgetFallbackRetryAfter;
 
     public LlmHttpDispatcher(HttpClient http, URI baseUrl, Duration timeout) {
-        this(http, baseUrl, timeout, new ObjectMapper());
+        this(http, baseUrl, timeout, new ObjectMapper(), null, Duration.ofHours(1));
     }
 
     public LlmHttpDispatcher(HttpClient http, URI baseUrl, Duration timeout, ObjectMapper mapper) {
+        this(http, baseUrl, timeout, mapper, null, Duration.ofHours(1));
+    }
+
+    public LlmHttpDispatcher(HttpClient http, URI baseUrl, Duration timeout,
+                             ObjectMapper mapper, LlmBudgetGate budgetGate,
+                             Duration budgetFallbackRetryAfter) {
         this.http = http;
         this.classifyEndpoint = baseUrl.resolve("/v1/classify");
         this.timeout = timeout;
         this.mapper = mapper;
+        this.budgetGate = budgetGate;
+        this.budgetFallbackRetryAfter = budgetFallbackRetryAfter == null
+                ? Duration.ofHours(1)
+                : budgetFallbackRetryAfter;
     }
 
     public LlmInferenceResult classify(String blockId, Integer blockVersion,
                                        String nodeRunId, String text) {
+        if (budgetGate != null && budgetGate.isExhausted()) {
+            log.debug("router: LLM budget gate exhausted (until {}) — short-circuiting to fallthrough",
+                    budgetGate.exhaustedUntil());
+            throw new LlmTierFallthroughException(
+                    "LLM_BUDGET_EXHAUSTED",
+                    "LLM budget exhausted until " + budgetGate.exhaustedUntil());
+        }
         Map<String, Object> body = buildRequestBody(blockId, blockVersion, nodeRunId, text);
         HttpRequest req;
         try {
@@ -104,10 +131,51 @@ public class LlmHttpDispatcher {
             throw new LlmBlockUnknownException(
                     "LLM block coords did not resolve: " + truncate(resp.body(), 256));
         }
+        if (status == 429) {
+            String code = extractCode(resp.body(), "LLM_HTTP_429");
+            if ("LLM_BUDGET_EXCEEDED".equals(code) && budgetGate != null) {
+                Duration retryAfter = parseRetryAfter(resp).orElse(budgetFallbackRetryAfter);
+                budgetGate.markExhausted(retryAfter);
+                log.warn("router: LLM tier returned 429 LLM_BUDGET_EXCEEDED — auto-degrading to SLM-only for {}",
+                        retryAfter);
+                throw new LlmTierFallthroughException(
+                        "LLM_BUDGET_EXHAUSTED",
+                        "LLM budget exceeded; degraded for " + retryAfter);
+            }
+            log.debug("router: LLM tier 429 ({}) — fallthrough", code);
+            throw new LlmTierFallthroughException(code, truncate(resp.body(), 256));
+        }
         String code = "LLM_HTTP_" + status;
         log.warn("router: LLM tier returned HTTP {}; treating as failure. body={}",
                 status, truncate(resp.body(), 256));
         throw new LlmTierFallthroughException(code, truncate(resp.body(), 256));
+    }
+
+    private static java.util.Optional<Duration> parseRetryAfter(HttpResponse<String> resp) {
+        return resp.headers().firstValue("Retry-After")
+                .flatMap(LlmHttpDispatcher::parseRetryAfterValue);
+    }
+
+    /**
+     * Parses an HTTP {@code Retry-After} header value. Supports the
+     * delta-seconds form (a non-negative integer); the HTTP-date form
+     * is treated as unsupported and returns empty so the caller falls
+     * back to its configured default.
+     */
+    static java.util.Optional<Duration> parseRetryAfterValue(String value) {
+        if (value == null || value.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        String trimmed = value.trim();
+        try {
+            long seconds = Long.parseLong(trimmed);
+            if (seconds < 0) {
+                return java.util.Optional.empty();
+            }
+            return java.util.Optional.of(Duration.ofSeconds(seconds));
+        } catch (NumberFormatException e) {
+            return java.util.Optional.empty();
+        }
     }
 
     private Map<String, Object> buildRequestBody(

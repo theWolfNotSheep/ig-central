@@ -4021,3 +4021,37 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 2.2 status:** Plan items 1 (Anthropic circuit breaker) and 4 (MCP confidence cap) **complete**. Items 2 (Anthropic 429 / `Retry-After`), 3 (Ollama unreachable + Anthropic fallback), 5 (cost budget auto-degrade-to-SLM) untouched.
 
 **Next:** Phase 2.2 PR3 — pick item 5 (cost budget auto-degrade) which builds on the existing `CostBudgetTracker` + extends to auto-degrade behaviour. Item 2 (429 honoring) is harder because Spring AI doesn't surface response headers cleanly. Item 3 needs an inter-backend fallback design first.
+
+## 2026-04-30 — Phase 2.2 PR3 — LLM budget auto-degrade gate
+
+**Done:** Closed Phase 2.2 plan item 5 ("cost budget gate enforcement — daily/job spending cap with auto-degrade to SLM-only"). The worker side already enforces the budget (Phase 1.6 PR4 — `CostBudgetTracker` returns 429 `LLM_BUDGET_EXCEEDED` with a `Retry-After: <seconds-until-midnight-UTC>` header). What was missing: the cascade router would round-trip to the worker on every classify call only to be told the budget is exhausted, every 5 seconds, until midnight — burning latency and load. The new `LlmBudgetGate` short-circuits future calls in-process for the duration of the worker's `Retry-After`, so the cascade falls through to the SLM tier without the wasted hop.
+
+**Changes:**
+
+- `gls-classifier-router/parse/LlmBudgetGate.java` (new) — atomic-reference state holder with `isExhausted()` (lazy clear when cool-down has elapsed), `exhaustedUntil()`, `markExhausted(Duration)`. The mark-method extends the window when a later expiry comes in but never shrinks it (a worker that recovers earlier than expected gets caught by the natural lazy-clear next time). Zero / negative / null durations floor to 1 second so a misconfigured worker can't cause a hot-loop.
+- `gls-classifier-router/parse/LlmHttpDispatcher.java` — added an `LlmBudgetGate` (optional) and `budgetFallbackRetryAfter` (default `PT1H`) to the constructor. Pre-call: if the gate is exhausted, throw `LLM_BUDGET_EXHAUSTED` fallthrough immediately (no HTTP). On a `429` response: parse `code` from the body; if it's `LLM_BUDGET_EXCEEDED`, parse the `Retry-After` header (delta-seconds form only — HTTP-date form is unsupported and falls back to the configured default), arm the gate, throw fallthrough. Other 429 codes (e.g. `LLM_RATE_LIMITED`) pass through without arming the gate — they recover in seconds, not hours, so synchronous retry is fine.
+- `gls-classifier-router/parse/RouterHttpConfig.java` — registered the gate as a bean and wired it into the dispatcher constructor, gated by the same `gls.router.cascade.llm-http.enabled` property.
+- `gls-classifier-router/test/.../parse/LlmBudgetGateTest.java` (new) — 8 tests against an injected step-clock: initial state; basic mark + exhausted-until; auto-clear after cool-down; window extends but doesn't shrink; zero / negative / null durations floor to 1 second; clear hook.
+- `gls-classifier-router/test/.../parse/LlmHttpDispatcherTest.java` — 5 new tests (was 6, now 11) using the existing `HttpServer` test harness: 429 `LLM_BUDGET_EXCEEDED` arms the gate and short-circuits subsequent calls (verified by the call counter); without `Retry-After` header the configured fallback applies; 429 `LLM_RATE_LIMITED` does NOT arm the gate; `parseRetryAfterValue` handles delta-seconds; returns empty for unsupported (HTTP-date / negative / non-numeric).
+
+**Tests:** 90 / 0 in `gls-classifier-router` (was 77; +13 new across the two test classes). Reactor green.
+
+**Decisions logged:** None new. Two design choices worth noting in the file (already documented in the JavaDoc):
+- Only `LLM_BUDGET_EXCEEDED` arms the gate. `LLM_RATE_LIMITED` (per-replica semaphore, recovers in seconds) does not — gating on it would degrade unnecessarily during transient burst.
+- `Retry-After` is parsed in delta-seconds form only. HTTP-date form would require time-zone handling for a corner case the worker doesn't currently emit; tracked as a follow-up if the form ever shows up.
+
+**Files changed:**
+
+- `backend/gls-classifier-router/src/main/java/.../router/parse/{LlmBudgetGate, LlmHttpDispatcher, RouterHttpConfig}.java` — 1 new + 2 modified.
+- `backend/gls-classifier-router/src/test/java/.../router/parse/{LlmBudgetGateTest, LlmHttpDispatcherTest}.java` — 1 new + 1 modified.
+- Log = 6 files total.
+
+**Open issues / deferred:**
+
+- **No metric on degrade events.** Useful: `router.llm.budget.degraded` counter ticking when the gate arms; gauge `router.llm.budget.exhausted_until_epoch_s` for dashboard visualisation. Tracked alongside the broader Phase 2.6 observability uplift.
+- **No `Retry-After` HTTP-date support.** The worker only ever emits delta-seconds (`CostBudgetTracker` formats with `seconds-until-midnight-UTC`), so this isn't a real gap today. If a future worker / vendor proxy emits HTTP-date form, parser returns empty and the cascade falls back to the configured `budget-fallback-retry-after` (default 1 h).
+- **Per-pipeline / per-tenant budgets not modelled.** The current gate is global per router replica. Per-tenant or per-pipeline degrade (where budget exhaustion in one tenant doesn't downgrade everyone else) needs the worker to emit a tenant identifier in the 429 envelope; that's out of scope for the resilience milestone but tracked.
+
+**Phase 2.2 status:** Plan items 1, 4, 5 **complete**. Items 2 (Anthropic 429 / `Retry-After` honoring inside the worker — gated by Spring AI not exposing response headers) and 3 (Ollama unreachable + Anthropic fallback inside the worker — needs inter-backend coordination design) remain. Both are deeper engineering bets relative to the high-leverage items already shipped.
+
+**Next:** Phase 2.3 (backpressure + rate limiting) is the natural progression. Items: per-worker semaphore on in-flight calls (already in place from Phase 1.6 PR4 via `RateLimitGate`); router 429 + `Retry-After` honoring orchestrator-side; Rabbit quorum queues + DLQ wiring; DLQ reprocessing UI hook (data path only, UI in Phase 3). The quorum-queue work is the largest piece — it touches every channel.

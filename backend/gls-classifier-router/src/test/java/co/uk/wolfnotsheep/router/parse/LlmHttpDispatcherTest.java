@@ -164,4 +164,112 @@ class LlmHttpDispatcherTest {
         assertThat(ex).isNotNull();
         assertThat(ex.errorCode()).isEqualTo("LLM_TRANSPORT_ERROR");
     }
+
+    @Test
+    void classify_429_LLM_BUDGET_EXCEEDED_marks_gate_and_falls_through() throws IOException {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        server.createContext("/v1/classify", exchange -> {
+            calls.incrementAndGet();
+            String body = "{\"code\":\"LLM_BUDGET_EXCEEDED\",\"detail\":\"daily cap\"}";
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Retry-After", "600");
+            exchange.sendResponseHeaders(429, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+        });
+        server.start();
+
+        LlmBudgetGate gate = new LlmBudgetGate();
+        LlmHttpDispatcher dispatcher = new LlmHttpDispatcher(
+                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build(),
+                URI.create("http://127.0.0.1:" + port),
+                Duration.ofSeconds(5),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                gate, Duration.ofHours(1));
+
+        // First call hits the worker and records the gate.
+        LlmTierFallthroughException first = (LlmTierFallthroughException)
+                catchThrowable(() -> dispatcher.classify("blk", null, null, "x"));
+        assertThat(first).isNotNull();
+        assertThat(first.errorCode()).isEqualTo("LLM_BUDGET_EXHAUSTED");
+        assertThat(gate.isExhausted()).isTrue();
+
+        // Second call short-circuits — never hits the server.
+        LlmTierFallthroughException second = (LlmTierFallthroughException)
+                catchThrowable(() -> dispatcher.classify("blk", null, null, "x"));
+        assertThat(second).isNotNull();
+        assertThat(second.errorCode()).isEqualTo("LLM_BUDGET_EXHAUSTED");
+        assertThat(calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void classify_429_LLM_BUDGET_EXCEEDED_without_Retry_After_uses_fallback() throws IOException {
+        server.createContext("/v1/classify", exchange -> {
+            String body = "{\"code\":\"LLM_BUDGET_EXCEEDED\"}";
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(429, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+        });
+        server.start();
+
+        LlmBudgetGate gate = new LlmBudgetGate();
+        LlmHttpDispatcher dispatcher = new LlmHttpDispatcher(
+                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build(),
+                URI.create("http://127.0.0.1:" + port),
+                Duration.ofSeconds(5),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                gate, Duration.ofMinutes(15));
+
+        LlmTierFallthroughException ex = (LlmTierFallthroughException)
+                catchThrowable(() -> dispatcher.classify("blk", null, null, "x"));
+        assertThat(ex).isNotNull();
+        assertThat(ex.errorCode()).isEqualTo("LLM_BUDGET_EXHAUSTED");
+        assertThat(gate.exhaustedUntil()).isNotNull();
+    }
+
+    @Test
+    void classify_429_LLM_RATE_LIMITED_does_not_arm_budget_gate() throws IOException {
+        server.createContext("/v1/classify", exchange -> {
+            String body = "{\"code\":\"LLM_RATE_LIMITED\"}";
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Retry-After", "1");
+            exchange.sendResponseHeaders(429, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+        });
+        server.start();
+
+        LlmBudgetGate gate = new LlmBudgetGate();
+        LlmHttpDispatcher dispatcher = new LlmHttpDispatcher(
+                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build(),
+                URI.create("http://127.0.0.1:" + port),
+                Duration.ofSeconds(5),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                gate, Duration.ofHours(1));
+
+        LlmTierFallthroughException ex = (LlmTierFallthroughException)
+                catchThrowable(() -> dispatcher.classify("blk", null, null, "x"));
+        assertThat(ex).isNotNull();
+        assertThat(ex.errorCode()).isEqualTo("LLM_RATE_LIMITED");
+        // Critically: the gate is NOT armed for rate-limited errors — those
+        // resolve in seconds, not hours.
+        assertThat(gate.isExhausted()).isFalse();
+    }
+
+    @Test
+    void parseRetryAfterValue_handles_well_formed_seconds() {
+        assertThat(LlmHttpDispatcher.parseRetryAfterValue("60"))
+                .contains(Duration.ofSeconds(60));
+        assertThat(LlmHttpDispatcher.parseRetryAfterValue("0"))
+                .contains(Duration.ZERO);
+        assertThat(LlmHttpDispatcher.parseRetryAfterValue(" 600 "))
+                .contains(Duration.ofSeconds(600));
+    }
+
+    @Test
+    void parseRetryAfterValue_returns_empty_for_unsupported_values() {
+        assertThat(LlmHttpDispatcher.parseRetryAfterValue(null)).isEmpty();
+        assertThat(LlmHttpDispatcher.parseRetryAfterValue("")).isEmpty();
+        assertThat(LlmHttpDispatcher.parseRetryAfterValue("Tue, 01 Jan 2030 00:00:00 GMT")).isEmpty();
+        assertThat(LlmHttpDispatcher.parseRetryAfterValue("-30")).isEmpty();
+        assertThat(LlmHttpDispatcher.parseRetryAfterValue("not a number")).isEmpty();
+    }
 }
