@@ -135,4 +135,35 @@ class Tier1ConsumerTest {
                 "test-svc", "SYSTEM", resourceType, resourceId,
                 "RECORD", "SUCCESS", "7Y", previousEventHash, Map.of());
     }
+
+    // ── Phase 2.4 PR2 — leader-election poll wiring ─────────────────────
+
+    @Test
+    void pollTier1_with_no_rabbit_template_is_a_silent_no_op() {
+        // Test-friendly single-arg constructor leaves rabbitTemplateProvider null.
+        Tier1Consumer noRabbit = new Tier1Consumer(tier1Store);
+
+        // Must not throw — and must not call the store (no messages came in).
+        noRabbit.pollTier1();
+        verify(tier1Store, never()).append(any(StoredTier1Event.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void pollTier1_with_absent_rabbit_or_converter_skips_cycle() {
+        org.springframework.beans.factory.ObjectProvider<org.springframework.amqp.rabbit.core.RabbitTemplate> rt =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        org.springframework.beans.factory.ObjectProvider<org.springframework.amqp.support.converter.MessageConverter> mc =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        org.springframework.beans.factory.ObjectProvider<io.micrometer.core.instrument.MeterRegistry> mr =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(rt.getIfAvailable()).thenReturn(null);
+        when(mc.getIfAvailable()).thenReturn(null);
+        when(mr.getIfAvailable()).thenReturn(null);
+
+        Tier1Consumer wired = new Tier1Consumer(tier1Store, rt, mc, mr);
+        wired.pollTier1();
+
+        verify(tier1Store, never()).append(any(StoredTier1Event.class));
+    }
 }
