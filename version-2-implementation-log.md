@@ -3820,3 +3820,36 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 2.1 status:** Plan item 1 (`StaleDocumentRecoveryTask`) — first half done (v2 detection + fail-out). Second half (auto-resume) is PR2. Remaining 2.1 items (classification_outbox reconciler, audit outbox replay, ES reconciliation, Hub pack import retry) untouched.
 
 **Next:** Phase 2.1 PR2 — `engine.resumeRun(pipelineRunId)` + wire the recovery task to call it instead of fail-out.
+
+## 2026-04-30 — Phase 2.1 PR2 — `engine.resumeRun` + wire stale recovery to auto-resume
+
+**Done:** Closed Phase 2.1 plan item 1 by adding the missing public engine entry point and wiring `StalePipelineRunRecoveryTask` to use it. Stale runs now auto-resume from `currentNodeIndex` (re-executing the just-failed node) up to `MAX_AUTO_RETRIES = 3`; only after exhausting retries does the task fall back to PR1's fail-out path. The "resets to last completed node; re-queues" half of the plan wording lands here — `currentNodeIndex` always points to the node we want to retry next (the engine sets it when advancing), so resuming from it implicitly skips over already-`SUCCEEDED` `NodeRun`s.
+
+**Changes:**
+
+- `infrastructure/services/pipeline/PipelineExecutionEngine.java` — new public method `resumeRun(String pipelineRunId)`. Mirrors `resumePipeline(LlmJobCompletedEvent)`'s shape but doesn't require an LLM completion event: loads the run + document, refuses terminal-status runs (`COMPLETED` / `FAILED` / `CANCELLED`), fails the run cleanly when the document has been deleted, otherwise stamps `status=RUNNING` + `updatedAt`, reconstructs a synthetic `DocumentIngestedEvent` from the document, and calls the private `walkNodes` from `currentNodeIndex`. Exceptions during the walk are caught and turned into `failRun` + `handleNodeError` so the run never sits half-resumed.
+- `infrastructure/services/pipeline/StalePipelineRunRecoveryTask.java` — new constructor parameter `ObjectProvider<PipelineExecutionEngine>` (engine is `@ConditionalOnProperty(pipeline.execution-engine.enabled)` so the bean can be absent in legacy v1-only deployments). Added `MAX_AUTO_RETRIES = 3`. Per-run algorithm replaced with a four-outcome state machine — `RESUMED` (engine present + retries remaining → re-queue via `engine.resumeRun`), `EXHAUSTED` (`retryCount >= MAX` → fail-out), `FAILED` (engine absent → fail-out, legacy fallback), `PERSIST_FAILED` (engine threw or save threw → leave for next cycle). New counters `pipeline.stale.resumed` and `pipeline.stale.exhausted` join PR1's `detected` + `failed`.
+- `PipelineExecutionEngineResumeRunTest.java` (new) — 4 early-exit tests for `resumeRun`: unknown pipeline run id is a silent no-op; terminal-status runs (`COMPLETED` / `FAILED` / `CANCELLED`) are refused; missing document fails the run via `failRun`; runnable run with present document sets `status=RUNNING` and saves before walking.
+- `StalePipelineRunRecoveryTaskTest.java` — extended from 8 → 9 tests. Existing test names refreshed to match the new behaviour. New scenarios covered: under-max-retries with engine present resumes (counter `pipeline.stale.resumed=1`); at-max-retries exhausts and fails-out (`pipeline.stale.exhausted=1`); engine absent falls back to fail-out (`pipeline.stale.failed=1`, legacy path); engine throwing leaves run for next cycle without false positives in any outcome counter.
+
+**Tests:** 99 / 0 in `gls-app-assembly` (was 94; +4 for `PipelineExecutionEngineResumeRunTest` + 1 net addition in `StalePipelineRunRecoveryTaskTest`). Reactor green.
+
+**Decisions logged:** None new. The engine's resume-from-arbitrary-node entry point closes a long-implicit gap — every previous in-engine entry assumed a fresh `DocumentIngestedEvent` (Phase 1.1) or LLM async completion (Phase 1.6 / 1.10). Making it explicit now means future admin "retry pipeline run" UI hooks and the Phase 2.1 reconciler / replay tasks all have one consistent entry point.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/pipeline/PipelineExecutionEngine.java` — modified (new `resumeRun` method only — `~70 LOC` added in a fresh section).
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/pipeline/StalePipelineRunRecoveryTask.java` — modified (constructor + state machine + counter additions).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/pipeline/PipelineExecutionEngineResumeRunTest.java` — 1 new.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/pipeline/StalePipelineRunRecoveryTaskTest.java` — modified.
+- Log = 5 files total.
+
+**Open issues / deferred:**
+
+- **Engine resume runs synchronously on the scheduler thread.** A long-running stale-run resume can starve the next iteration. Bounded today by the worst-case `walkNodes` runtime per stale run × number of stale runs per cycle. If this becomes visible in dashboards (cycle duration > scheduling interval), wrap the `engine.resumeRun` call in a bounded `ExecutorService` so the recovery task remains responsive.
+- **No `@SchedulerLock` on the recovery task itself.** Multi-replica deploys would have every replica running the task simultaneously and racing to resume the same run. The race is largely benign (engine refuses to resume a run that's already `RUNNING` once another replica's save lands, since `resumeRun` checks status — wait, it actually sets it to `RUNNING` regardless and re-walks) but doubles the resume work and inflates the retry counter twice. Add ShedLock leader-election alongside the analogous treatment for the legacy `StaleDocumentRecoveryTask`.
+- **No timer for run age at detection time.** Useful for SLO dashboards (p95 detection-lag = wall-time between a run going stale and being acted on). Add a `Timer` or distribution summary alongside the counters.
+
+**Phase 2.1 status:** Plan item 1 (`StaleDocumentRecoveryTask`) **complete**. Remaining 2.1 items (classification_outbox reconciler, audit outbox replay, ES reconciliation job, Hub pack import retry on `gls.config.changed` failure) untouched — each is its own PR.
+
+**Next:** Phase 2.1 PR3 — pick the next plan item. Audit outbox replay (`gls-audit-collector` startup drain) is the simplest and naturally pairs with the audit-collector code already shipped in 1.12. ES reconciliation needs `gls-indexing-worker` integration and is more involved.
