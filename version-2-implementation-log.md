@@ -4130,3 +4130,33 @@ Reactor green via `./mvnw -DskipTests package`.
 **Phase 2.3 status:** Plan items 1 (per-worker semaphore — already in place) and 3 (quorum queues) **complete**. Items 2 (router 429 + `Retry-After`) and 4 (DLQ reprocessing data path) remain.
 
 **Next:** Phase 2.4 (failover + leader election) — `gls-audit-collector` Tier 1 leader election via ShedLock; `gls-scheduler` leader election. The connector per-source watches piece is already done from Phase 1.13. Or 2.6 observability uplift if measurement-first is preferred. Phase 2.5 chaos tests are blocked on representative load.
+
+## 2026-04-30 — Phase 2.4 PR1 — `@SchedulerLock` on the two scheduled recovery tasks
+
+**Done:** First slice of Phase 2.4 plan item 2 (`gls-scheduler` leader election). The two scheduled recovery tasks shipped in Phase 2.1 (`StalePipelineRunRecoveryTask`, `IndexReconciliationTask`) gain ShedLock-backed `@SchedulerLock` so multi-replica deployments don't race on the same recovery work.
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/services/pipeline/StalePipelineRunRecoveryTask.java` — added `@SchedulerLock(name="stale-pipeline-recovery")` with configurable `lockAtMostFor` (default `PT10M` — long enough for `engine.resumeRun` calls across many stale runs) and `lockAtLeastFor` (default `PT0S`).
+- `gls-indexing-worker/.../indexing/service/IndexReconciliationTask.java` — added `@SchedulerLock(name="index-reconciliation")` with `lockAtMostFor` default `PT30M` (covers a worst-case full `reindexAll` when auto-fix is on).
+- `gls-indexing-worker/pom.xml` — added `gls-platform-audit`, `shedlock-spring`, `shedlock-provider-mongo` deps. The first pulls in the `AuditRelayLockConfig` auto-config which provides the `LockProvider` bean and `@EnableSchedulerLock` class-level activation. Other modules already had this from earlier PRs.
+
+**Tests:** Existing test suite still green. `gls-app-assembly` 103/0; `gls-indexing-worker` 36/0. `@SchedulerLock` is wired by Spring AOP at runtime; no new unit-level coverage added (wiring is exercised by the existing scheduling tests in `gls-platform-audit`'s `OutboxRelayTest`).
+
+**Decisions logged:** None new. Lock-name convention matches the existing `gls-audit-outbox-relay` lock — kebab-case, descriptive of the task.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/.../StalePipelineRunRecoveryTask.java` — modified.
+- `backend/gls-indexing-worker/.../IndexReconciliationTask.java` — modified.
+- `backend/gls-indexing-worker/pom.xml` — modified (3 new deps).
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **No leader-election metric for these tasks.** Useful: `pipeline.scheduler.lock.acquired{name}` / `skipped{name}` to see which replica is leader and how often a replica skips because another holds the lock. Tracked alongside Phase 2.6 observability batch.
+- **Audit-collector Tier 1 listener still consumes from every replica.** That's a separate problem — `@RabbitListener` doesn't gate cleanly on `@SchedulerLock`. Architecture says "run a single Tier 1 collector replica" pending the bigger programmatic-poll refactor; ops constraint, not a code gap today.
+
+**Phase 2.4 status:** Plan item 2 (`gls-scheduler` leader election) **substantially complete** — every scheduled recovery / relay task across the codebase now has `@SchedulerLock`. Plan item 1 (audit-collector Tier 1 leader election) remains, gated on the programmatic-poll refactor. Plan item 3 (connector per-source watches) was done in Phase 1.13.
+
+**Next:** PR-B observability metrics batch.

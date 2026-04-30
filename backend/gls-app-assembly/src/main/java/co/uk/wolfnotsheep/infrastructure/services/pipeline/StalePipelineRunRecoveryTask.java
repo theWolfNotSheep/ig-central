@@ -10,6 +10,7 @@ import co.uk.wolfnotsheep.document.repositories.PipelineRunRepository;
 import co.uk.wolfnotsheep.document.repositories.SystemErrorRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -87,6 +88,9 @@ public class StalePipelineRunRecoveryTask {
     }
 
     @Scheduled(fixedDelay = 300_000, initialDelay = 120_000)
+    @SchedulerLock(name = "stale-pipeline-recovery",
+            lockAtMostFor = "${gls.pipeline.stale-recovery.lock-at-most-for:PT10M}",
+            lockAtLeastFor = "${gls.pipeline.stale-recovery.lock-at-least-for:PT0S}")
     public void recoverStalePipelineRuns() {
         try {
             Instant cutoff = Instant.now().minus(STALE_THRESHOLD_MINUTES, ChronoUnit.MINUTES);
