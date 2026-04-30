@@ -433,6 +433,78 @@ public class PipelineExecutionEngine {
         }
     }
 
+    // ── Resume: arbitrary entry point (used by recovery + admin retry) ──
+
+    /**
+     * Resume a paused or stalled {@link PipelineRun} from its current
+     * {@code currentNodeIndex}. Mirrors {@link #resumePipeline}'s shape but
+     * doesn't require an {@link LlmJobCompletedEvent} — the caller is
+     * responsible for having reset the run to a runnable state (e.g. by
+     * advancing {@code currentNodeIndex} past a stale node and incrementing
+     * {@code retryCount}).
+     *
+     * <p>Used by Phase 2.1 PR2's stale-pipeline recovery task; can also be
+     * called from an admin "retry pipeline run" endpoint.
+     *
+     * <p>Behaviour:
+     * <ul>
+     *   <li>If the run doesn't exist or is in a terminal state
+     *       ({@link PipelineRunStatus#COMPLETED} / {@link PipelineRunStatus#FAILED}
+     *       / {@link PipelineRunStatus#CANCELLED}), logs and returns — never throws.</li>
+     *   <li>If the document has been deleted, fails the run with
+     *       {@code error="RESUME: Document not found"} and returns.</li>
+     *   <li>Otherwise sets {@code status=RUNNING}, stamps {@code updatedAt},
+     *       reconstructs the synthetic {@link DocumentIngestedEvent}, and
+     *       walks from {@code currentNodeIndex}.</li>
+     * </ul>
+     */
+    public void resumeRun(String pipelineRunId) {
+        PipelineRun run = pipelineRunRepo.findById(pipelineRunId).orElse(null);
+        if (run == null) {
+            log.warn("[Engine] resumeRun: PipelineRun {} not found — nothing to resume", pipelineRunId);
+            return;
+        }
+        if (run.getStatus() == PipelineRunStatus.COMPLETED
+                || run.getStatus() == PipelineRunStatus.FAILED
+                || run.getStatus() == PipelineRunStatus.CANCELLED) {
+            log.warn("[Engine] resumeRun: PipelineRun {} status is {} — refusing to resume terminal run",
+                    pipelineRunId, run.getStatus());
+            return;
+        }
+
+        DocumentModel doc = documentService.getById(run.getDocumentId());
+        if (doc == null) {
+            log.error("[Engine] resumeRun: Document {} not found for PipelineRun {}",
+                    run.getDocumentId(), pipelineRunId);
+            failRun(run, "RESUME", "Document not found during resume");
+            return;
+        }
+
+        PipelineDefinition pipeline = resolvePipeline(doc);
+        List<VisualNode> executionOrder = topologicalSort(pipeline);
+
+        DocumentIngestedEvent ingestedEvent = new DocumentIngestedEvent(
+                doc.getId(), doc.getFileName(), doc.getMimeType(),
+                doc.getFileSizeBytes(), doc.getStorageBucket(), doc.getStorageKey(),
+                doc.getUploadedBy(), doc.getCreatedAt(), null);
+
+        run.setStatus(PipelineRunStatus.RUNNING);
+        run.setUpdatedAt(Instant.now());
+        pipelineRunRepo.save(run);
+
+        log.info("[Engine] Resuming PipelineRun {} for document {} from nodeIndex={}",
+                pipelineRunId, doc.getId(), run.getCurrentNodeIndex());
+
+        try {
+            walkNodes(run, doc, ingestedEvent, pipeline, executionOrder, run.getCurrentNodeIndex());
+        } catch (Exception e) {
+            log.error("[Engine] resumeRun walk failed for PipelineRun {}: {}",
+                    pipelineRunId, e.getMessage(), e);
+            failRun(run, "RESUME", e.getMessage());
+            handleNodeError(doc.getId(), doc.getFileName(), "PIPELINE_RESUME", e, null);
+        }
+    }
+
     // ── Core graph walker ─────────────────────────────────────────────
 
     /**
