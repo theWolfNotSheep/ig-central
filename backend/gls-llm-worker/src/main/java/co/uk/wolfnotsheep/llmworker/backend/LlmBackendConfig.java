@@ -53,6 +53,9 @@ public class LlmBackendConfig {
             @Value("${gls.llm.worker.circuit-breaker.enabled:true}") boolean circuitBreakerEnabled,
             @Value("${gls.llm.worker.circuit-breaker.failure-threshold:5}") int circuitBreakerFailureThreshold,
             @Value("${gls.llm.worker.circuit-breaker.open-cooldown:PT30S}") java.time.Duration circuitBreakerOpenCooldown,
+            @Value("${gls.llm.worker.mcp.confidence-cap.enabled:true}") boolean mcpCapEnabled,
+            @Value("${gls.llm.worker.mcp.confidence-cap.max-confidence:0.7}") float mcpCapMaxConfidence,
+            ObjectProvider<McpAvailabilityProbe> mcpAvailabilityProbeProvider,
             ObjectProvider<ObjectMapper> mapperProvider) {
 
         ObjectMapper mapper = mapperProvider.getIfAvailable(ObjectMapper::new);
@@ -81,8 +84,10 @@ public class LlmBackendConfig {
             LlmService base = new AnthropicLlmService(
                     model, resolver, anthropicModel, anthropicTemperature, anthropicMaxTokens,
                     mapper, toolCallbacks);
-            return wrapWithCircuitBreaker(base, "anthropic",
+            LlmService withBreaker = wrapWithCircuitBreaker(base, "anthropic",
                     circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown);
+            return wrapWithMcpCap(withBreaker, mcpAvailabilityProbeProvider,
+                    mcpCapEnabled, mcpCapMaxConfidence);
         }
 
         if ("ollama".equalsIgnoreCase(backend)) {
@@ -100,8 +105,10 @@ public class LlmBackendConfig {
             LlmService base = new OllamaLlmService(
                     model, resolver, ollamaModel, ollamaTemperature, ollamaNumCtx, mapper,
                     toolCallbacks);
-            return wrapWithCircuitBreaker(base, "ollama",
+            LlmService withBreaker = wrapWithCircuitBreaker(base, "ollama",
                     circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown);
+            return wrapWithMcpCap(withBreaker, mcpAvailabilityProbeProvider,
+                    mcpCapEnabled, mcpCapMaxConfidence);
         }
 
         log.info("llm: backend=none — every /v1/classify call will return LLM_NOT_CONFIGURED until a backend is wired");
@@ -120,5 +127,22 @@ public class LlmBackendConfig {
         log.info("llm: wrapped backend={} with circuit breaker (threshold={}, cooldown={})",
                 backendName, failureThreshold, openCooldown);
         return new CircuitBreakerLlmService(delegate, breaker);
+    }
+
+    private static LlmService wrapWithMcpCap(
+            LlmService delegate,
+            ObjectProvider<McpAvailabilityProbe> probeProvider,
+            boolean enabled, float maxConfidence) {
+        if (!enabled) {
+            log.info("llm: MCP confidence cap disabled");
+            return delegate;
+        }
+        McpAvailabilityProbe probe = probeProvider.getIfAvailable();
+        if (probe == null) {
+            log.warn("llm: MCP confidence cap enabled but McpAvailabilityProbe bean missing — skipping wrap");
+            return delegate;
+        }
+        log.info("llm: wrapped LLM service with MCP confidence cap (maxConfidence={})", maxConfidence);
+        return new McpCappingLlmService(delegate, probe, maxConfidence);
     }
 }
