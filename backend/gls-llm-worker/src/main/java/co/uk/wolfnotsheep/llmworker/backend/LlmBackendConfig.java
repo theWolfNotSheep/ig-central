@@ -1,6 +1,7 @@
 package co.uk.wolfnotsheep.llmworker.backend;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.anthropic.AnthropicChatModel;
@@ -56,6 +57,7 @@ public class LlmBackendConfig {
             @Value("${gls.llm.worker.mcp.confidence-cap.enabled:true}") boolean mcpCapEnabled,
             @Value("${gls.llm.worker.mcp.confidence-cap.max-confidence:0.7}") float mcpCapMaxConfidence,
             ObjectProvider<McpAvailabilityProbe> mcpAvailabilityProbeProvider,
+            ObjectProvider<MeterRegistry> meterRegistryProvider,
             ObjectProvider<ObjectMapper> mapperProvider) {
 
         ObjectMapper mapper = mapperProvider.getIfAvailable(ObjectMapper::new);
@@ -85,9 +87,10 @@ public class LlmBackendConfig {
                     model, resolver, anthropicModel, anthropicTemperature, anthropicMaxTokens,
                     mapper, toolCallbacks);
             LlmService withBreaker = wrapWithCircuitBreaker(base, "anthropic",
-                    circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown);
+                    circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown,
+                    meterRegistryProvider);
             return wrapWithMcpCap(withBreaker, mcpAvailabilityProbeProvider,
-                    mcpCapEnabled, mcpCapMaxConfidence);
+                    mcpCapEnabled, mcpCapMaxConfidence, meterRegistryProvider);
         }
 
         if ("ollama".equalsIgnoreCase(backend)) {
@@ -106,9 +109,10 @@ public class LlmBackendConfig {
                     model, resolver, ollamaModel, ollamaTemperature, ollamaNumCtx, mapper,
                     toolCallbacks);
             LlmService withBreaker = wrapWithCircuitBreaker(base, "ollama",
-                    circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown);
+                    circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown,
+                    meterRegistryProvider);
             return wrapWithMcpCap(withBreaker, mcpAvailabilityProbeProvider,
-                    mcpCapEnabled, mcpCapMaxConfidence);
+                    mcpCapEnabled, mcpCapMaxConfidence, meterRegistryProvider);
         }
 
         log.info("llm: backend=none — every /v1/classify call will return LLM_NOT_CONFIGURED until a backend is wired");
@@ -117,7 +121,8 @@ public class LlmBackendConfig {
 
     private static LlmService wrapWithCircuitBreaker(
             LlmService delegate, String backendName,
-            boolean enabled, int failureThreshold, java.time.Duration openCooldown) {
+            boolean enabled, int failureThreshold, java.time.Duration openCooldown,
+            ObjectProvider<MeterRegistry> meterRegistryProvider) {
         if (!enabled) {
             log.info("llm: circuit breaker disabled for backend={}", backendName);
             return delegate;
@@ -126,13 +131,15 @@ public class LlmBackendConfig {
                 "llm-" + backendName, failureThreshold, openCooldown);
         log.info("llm: wrapped backend={} with circuit breaker (threshold={}, cooldown={})",
                 backendName, failureThreshold, openCooldown);
-        return new CircuitBreakerLlmService(delegate, breaker);
+        MeterRegistry registry = meterRegistryProvider == null ? null : meterRegistryProvider.getIfAvailable();
+        return new CircuitBreakerLlmService(delegate, breaker, registry);
     }
 
     private static LlmService wrapWithMcpCap(
             LlmService delegate,
             ObjectProvider<McpAvailabilityProbe> probeProvider,
-            boolean enabled, float maxConfidence) {
+            boolean enabled, float maxConfidence,
+            ObjectProvider<MeterRegistry> meterRegistryProvider) {
         if (!enabled) {
             log.info("llm: MCP confidence cap disabled");
             return delegate;
@@ -143,6 +150,7 @@ public class LlmBackendConfig {
             return delegate;
         }
         log.info("llm: wrapped LLM service with MCP confidence cap (maxConfidence={})", maxConfidence);
-        return new McpCappingLlmService(delegate, probe, maxConfidence);
+        MeterRegistry registry = meterRegistryProvider == null ? null : meterRegistryProvider.getIfAvailable();
+        return new McpCappingLlmService(delegate, probe, maxConfidence, registry);
     }
 }

@@ -156,4 +156,39 @@ class PerSourceLockTest {
         assertThat(PerSourceLock.sourceOf("drive-poll-abc")).isEqualTo("drive");
         assertThat(PerSourceLock.sourceOf("gmail-poll-x-y")).isEqualTo("gmail");
     }
+
+    @Test
+    void successful_action_records_duration_timer() {
+        when(provider.lock(any(LockConfiguration.class))).thenReturn(Optional.of(lock));
+
+        helper.withLock("drive-poll-1", Duration.ofMinutes(5),
+                () -> { try { Thread.sleep(5); } catch (InterruptedException ignored) {} });
+
+        var timer = meterRegistry.find("connector.lock.action.duration").tag("source", "drive").timer();
+        assertThat(timer).isNotNull();
+        assertThat(timer.count()).isEqualTo(1);
+        assertThat(timer.totalTime(java.util.concurrent.TimeUnit.MILLISECONDS)).isGreaterThan(0.0);
+    }
+
+    @Test
+    void absent_LockProvider_path_also_records_duration_timer() {
+        PerSourceLock noProvider = new PerSourceLock(providerOf(null), meterRegistryProviderOf(meterRegistry));
+
+        noProvider.withLock("gmail-poll-x-y", Duration.ofMinutes(5),
+                () -> { try { Thread.sleep(2); } catch (InterruptedException ignored) {} });
+
+        var timer = meterRegistry.find("connector.lock.action.duration").tag("source", "gmail").timer();
+        assertThat(timer).isNotNull();
+        assertThat(timer.count()).isEqualTo(1);
+    }
+
+    @Test
+    void skipped_iteration_does_not_record_duration_timer() {
+        when(provider.lock(any(LockConfiguration.class))).thenReturn(Optional.empty());
+
+        helper.withLock("drive-poll-1", Duration.ofMinutes(5), () -> {});
+
+        assertThat(meterRegistry.find("connector.lock.action.duration").tag("source", "drive").timer())
+                .isNull();
+    }
 }

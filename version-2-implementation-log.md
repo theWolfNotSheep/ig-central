@@ -4160,3 +4160,45 @@ Reactor green via `./mvnw -DskipTests package`.
 **Phase 2.4 status:** Plan item 2 (`gls-scheduler` leader election) **substantially complete** — every scheduled recovery / relay task across the codebase now has `@SchedulerLock`. Plan item 1 (audit-collector Tier 1 leader election) remains, gated on the programmatic-poll refactor. Plan item 3 (connector per-source watches) was done in Phase 1.13.
 
 **Next:** PR-B observability metrics batch.
+
+## 2026-04-30 — Phase 2.6 PR1 — Observability metrics batch
+
+**Done:** Wired all the deferred Micrometer metrics flagged in earlier PRs in one pass. Five separate metrics across three modules; each is small but together they unblock dashboards for the resilience features shipped over the rest of Phase 2.
+
+**Changes:**
+
+- `gls-llm-worker/.../backend/CircuitBreakerLlmService.java` — new optional `MeterRegistry` constructor parameter. When supplied, registers two gauges tagged by `backend`: `llm.circuit_breaker.state` (0=CLOSED, 1=HALF_OPEN, 2=OPEN) and `llm.circuit_breaker.consecutive_failures`. The breaker reference is captured in the gauge closure so values track in real time without per-call overhead.
+- `gls-llm-worker/.../backend/McpCappingLlmService.java` — new optional `MeterRegistry` constructor. On every cap event, increments `llm.mcp.confidence_capped{backend=...}` (lazily registered).
+- `gls-llm-worker/.../backend/LlmBackendConfig.java` — threads `ObjectProvider<MeterRegistry>` through both `wrapWithCircuitBreaker` and `wrapWithMcpCap` so the wrapping wires registries into the new constructor parameters; existing no-registry constructors retained for tests / legacy callers.
+- `gls-classifier-router/.../parse/LlmBudgetGate.java` — new constructor accepting `MeterRegistry`. Registers a `router.llm.budget.degraded` counter that ticks per `markExhausted` call (window-extensions count too — they're the same arming event), and a `router.llm.budget.exhausted_until_epoch_s` gauge that holds the unix-seconds expiry (or 0 when not exhausted) so dashboards can render a "degrade until" countdown.
+- `gls-classifier-router/.../parse/RouterHttpConfig.java` — bean factory now passes the registry through to the gate.
+- `gls-app-assembly/.../infrastructure/services/connectors/PerSourceLock.java` — new `Timer` `connector.lock.action.duration{source}` records the action runtime under the lock. Recorded on both the with-lock-acquired path and the no-LockProvider fall-through path; skipped iterations don't record (no work happened).
+- `gls-app-assembly/.../infrastructure/services/pipeline/StalePipelineRunRecoveryTask.java` — new `DistributionSummary` `pipeline.stale.detected.age` (base unit seconds, percentiles p50/p95/p99) records the wall-time gap between each stale run's `updatedAt` and the moment of detection. Tight distribution near the stale threshold confirms the task runs on schedule; long tail signals a paused replica.
+
+**Tests:** All affected modules green:
+
+- `gls-llm-worker` 88 / 0 (was 84; +2 in `CircuitBreakerLlmServiceTest` covering state-gauge transitions + no-registry path; +2 in `McpCappingLlmServiceTest` covering counter increment + no-cap-no-counter).
+- `gls-classifier-router` 92 / 0 (was 90; +2 in `LlmBudgetGateTest` for degraded counter + exhausted-until gauge).
+- `gls-app-assembly` 107 / 0 (was 103; +3 in `PerSourceLockTest` for action timer paths; +1 in `StalePipelineRunRecoveryTaskTest` for the age distribution).
+
+Reactor green via `./mvnw -DskipTests package`.
+
+**Decisions logged:** None new. The cardinality choices are conservative — `backend` (anthropic/ollama/unknown) on the LLM gauges, `source` (drive/gmail/unknown) on the connector timer; the budget gate has no tags (single global router-side gate); the stale-age summary has no tags either (per-task distribution).
+
+**Files changed:**
+
+- `backend/gls-llm-worker/src/main/java/.../backend/{CircuitBreakerLlmService, McpCappingLlmService, LlmBackendConfig}.java` — modified.
+- `backend/gls-classifier-router/src/main/java/.../router/parse/{LlmBudgetGate, RouterHttpConfig}.java` — modified.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/{connectors/PerSourceLock, pipeline/StalePipelineRunRecoveryTask}.java` — modified.
+- 4 test files modified (CircuitBreakerLlmServiceTest, McpCappingLlmServiceTest, LlmBudgetGateTest, PerSourceLockTest, StalePipelineRunRecoveryTaskTest) — +10 new tests across the suite.
+- Log = 11 files total.
+
+**Open issues / deferred:**
+
+- **No metric for `@SchedulerLock` skip rate.** Useful: `pipeline.scheduler.lock.skipped{name}` counter so operators see how often a non-leader replica skipped a scheduled tick because another replica held the lock. ShedLock doesn't expose this directly — would need a wrapper bean. Tracked.
+- **No tier-of-decision histogram.** Phase 2.6 plan item 1 ("tier-of-decision histogram per category") is broader than the wiring done here — needs the cascade router to emit the chosen tier per call, then Micrometer aggregation per category. Not in scope for this batch; tracked as a follow-up.
+- **No cost-per-document.** Phase 2.6 plan item 3 — the LLM result already carries `costUnits`; need a per-document aggregator that emits `document.cost.units{tier=LLM|SLM|BERT}`. Tracked.
+
+**Phase 2.6 status:** Plan items 1 (tier-of-decision histogram) and 3 (cost-per-document) untouched. Plan items 4-5-6 (escalation rate, p50/p95/p99 latency, MCP availability impact) need data points the cascade router doesn't currently aggregate. The five deferred metrics from earlier PRs are now live. ~60% done — the easier half.
+
+**Next:** PR-C router-side `RateLimitGate`.

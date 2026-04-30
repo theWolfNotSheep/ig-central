@@ -3,6 +3,7 @@ package co.uk.wolfnotsheep.infrastructure.services.connectors;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.Timer;
 import net.javacrumbs.shedlock.core.LockConfiguration;
 import net.javacrumbs.shedlock.core.LockProvider;
 import net.javacrumbs.shedlock.core.SimpleLock;
@@ -77,7 +78,12 @@ public class PerSourceLock {
             // Single-replica deployment without ShedLock — just run the action.
             // Count as "acquired" so dashboards reflect that the work happened.
             recordAcquired(source);
-            action.run();
+            long startNanos = System.nanoTime();
+            try {
+                action.run();
+            } finally {
+                recordActionDuration(source, System.nanoTime() - startNanos);
+            }
             return true;
         }
         LockConfiguration cfg = new LockConfiguration(
@@ -89,10 +95,12 @@ public class PerSourceLock {
             return false;
         }
         recordAcquired(source);
+        long startNanos = System.nanoTime();
         try {
             action.run();
             return true;
         } finally {
+            recordActionDuration(source, System.nanoTime() - startNanos);
             lock.get().unlock();
         }
     }
@@ -135,5 +143,17 @@ public class PerSourceLock {
                 .tags(Tags.of("source", source))
                 .register(registry)
                 .increment();
+    }
+
+    private void recordActionDuration(String source, long elapsedNanos) {
+        MeterRegistry registry = meterRegistryProvider.getIfAvailable();
+        if (registry == null) {
+            return;
+        }
+        Timer.builder("connector.lock.action.duration")
+                .description("Per-source connector poll action runtime under the lock — useful for tuning lockAtMostFor")
+                .tags(Tags.of("source", source))
+                .register(registry)
+                .record(elapsedNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
     }
 }

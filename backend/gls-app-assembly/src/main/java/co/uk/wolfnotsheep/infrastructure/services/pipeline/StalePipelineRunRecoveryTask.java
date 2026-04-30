@@ -9,6 +9,7 @@ import co.uk.wolfnotsheep.document.repositories.NodeRunRepository;
 import co.uk.wolfnotsheep.document.repositories.PipelineRunRepository;
 import co.uk.wolfnotsheep.document.repositories.SystemErrorRepository;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
@@ -98,10 +99,12 @@ public class StalePipelineRunRecoveryTask {
             int resumed = 0;
             int failed = 0;
             int exhausted = 0;
+            Instant now = Instant.now();
             for (PipelineRunStatus status : IN_FLIGHT_RUN_STATUSES) {
                 List<PipelineRun> stale = pipelineRunRepo.findByStatusAndUpdatedAtBefore(status, cutoff);
                 detected += stale.size();
                 for (PipelineRun run : stale) {
+                    recordDetectionAge(run, now);
                     Outcome outcome = handleStaleRun(run);
                     switch (outcome) {
                         case RESUMED -> resumed++;
@@ -245,5 +248,25 @@ public class StalePipelineRunRecoveryTask {
                 .description("Stale pipeline run recovery — count of v2 PipelineRuns the recovery task acted on")
                 .register(registry)
                 .increment(delta);
+    }
+
+    /**
+     * Record the wall-time gap between the stale run's last activity and
+     * the moment the recovery task observed it as stale. Useful for SLO
+     * dashboards (p95 detection-lag) — a tight distribution close to
+     * {@link #STALE_THRESHOLD_MINUTES} confirms the task is running on
+     * schedule; a long tail signals a backlog or a paused replica.
+     */
+    private void recordDetectionAge(PipelineRun run, Instant now) {
+        MeterRegistry registry = meterRegistryProvider.getIfAvailable();
+        if (registry == null || run.getUpdatedAt() == null) return;
+        long ageSeconds = java.time.Duration.between(run.getUpdatedAt(), now).getSeconds();
+        if (ageSeconds < 0) return;
+        DistributionSummary.builder("pipeline.stale.detected.age")
+                .description("Seconds between a stale PipelineRun's last activity and its detection by the recovery task")
+                .baseUnit("seconds")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry)
+                .record(ageSeconds);
     }
 }

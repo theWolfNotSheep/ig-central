@@ -96,4 +96,37 @@ class LlmBudgetGateTest {
         gate.clear();
         assertThat(gate.isExhausted()).isFalse();
     }
+
+    @Test
+    void degraded_counter_ticks_per_markExhausted_call() {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        LlmBudgetGate gate = new LlmBudgetGate(Clock.systemUTC(), registry);
+
+        gate.markExhausted(Duration.ofMinutes(10));
+        gate.markExhausted(Duration.ofMinutes(60));  // window-extension still counts as a degrade event
+
+        assertThat(registry.get("router.llm.budget.degraded").counter().count()).isEqualTo(2.0);
+    }
+
+    @Test
+    void exhausted_until_gauge_holds_epoch_seconds_and_resets_on_clear() {
+        StepClock clock = new StepClock(Instant.parse("2026-04-30T12:00:00Z"));
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        LlmBudgetGate gate = new LlmBudgetGate(clock, registry);
+
+        // Initial state — gauge reports 0.
+        assertThat(registry.get("router.llm.budget.exhausted_until_epoch_s").gauge().value())
+                .isEqualTo(0.0);
+
+        gate.markExhausted(Duration.ofMinutes(30));
+        long expectedEpoch = Instant.parse("2026-04-30T12:30:00Z").getEpochSecond();
+        assertThat(registry.get("router.llm.budget.exhausted_until_epoch_s").gauge().value())
+                .isEqualTo((double) expectedEpoch);
+
+        gate.clear();
+        assertThat(registry.get("router.llm.budget.exhausted_until_epoch_s").gauge().value())
+                .isEqualTo(0.0);
+    }
 }
