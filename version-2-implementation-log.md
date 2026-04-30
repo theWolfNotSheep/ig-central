@@ -3853,3 +3853,36 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 2.1 status:** Plan item 1 (`StaleDocumentRecoveryTask`) **complete**. Remaining 2.1 items (classification_outbox reconciler, audit outbox replay, ES reconciliation job, Hub pack import retry on `gls.config.changed` failure) untouched — each is its own PR.
 
 **Next:** Phase 2.1 PR3 — pick the next plan item. Audit outbox replay (`gls-audit-collector` startup drain) is the simplest and naturally pairs with the audit-collector code already shipped in 1.12. ES reconciliation needs `gls-indexing-worker` integration and is more involved.
+
+## 2026-04-30 — Phase 2.1 PR3 — Audit outbox startup replay
+
+**Done:** Closed Phase 2.1 plan item 3 ("Audit outbox replay: on `gls-audit-collector` restart, drains any unacked outbox rows"). The {@link OutboxRelay}'s `@Scheduled` poll already drains `PENDING` rows whose `nextRetryAt` is past — including immediately on the first poll after startup. The gap was rows still in backoff (`nextRetryAt` in the future): they sit waiting after a restart, even though the underlying transient failure that caused the backoff may already be resolved.
+
+**Why this scope:** The plan item names `gls-audit-collector` as the restart trigger, but the outbox lives on the emitter side (in `gls-platform-audit`, used by every service that emits audit events) — the collector is only a downstream consumer. The actual restart that matters is the relay's. So the closeout work belongs in `gls-platform-audit`, not `gls-audit-collector`.
+
+**Changes:**
+
+- `gls-platform-audit/relay/OutboxStartupReplay.java` (new) — listens for `ApplicationReadyEvent`, runs a single `MongoTemplate.updateMulti({status: PENDING, nextRetryAt: {$gt: now}}, {$set: {nextRetryAt: now}})`. The relay's next 5-second poll then picks them all up immediately. Attempt counter is preserved — persistent failures still hit `maxAttempts → FAILED` as before; we just compress the wall-clock time between attempts. Failures during replay are caught and logged (never blocks app boot). Counter `audit.outbox.startup_replay.reset` increments by the modified count when > 0.
+- `gls-platform-audit/relay/OutboxStartupReplayTest.java` (new) — 6 tests: backed-off rows reset + counter incremented; clean state is a no-op (counter never registered); query filters PENDING + future nextRetryAt only; update only touches nextRetryAt (attempts / lastError / status preserved); absent `MeterRegistry` doesn't break; `onApplicationReady` swallows exceptions so app boot can't be blocked.
+- `gls-platform-audit/autoconfigure/PlatformAuditAutoConfiguration.java` — register `OutboxStartupReplay` as a bean alongside `OutboxRelay`. Same gating: `@ConditionalOnProperty(name="gls.platform.audit.relay.enabled", matchIfMissing=true)` and `@ConditionalOnClass(RabbitTemplate.class)`. If the relay is off, there's nothing to replay into.
+
+**Tests:** 30 / 0 in `gls-platform-audit` (was 24; +6 new for `OutboxStartupReplayTest`). Reactor green.
+
+**Decisions logged:** None new. The plan item's wording ("on `gls-audit-collector` restart") is interpreted as "on relay restart" — clarified in the PR description and the next architecture-doc update.
+
+**Files changed:**
+
+- `backend/gls-platform-audit/src/main/java/.../platformaudit/relay/OutboxStartupReplay.java` — 1 new.
+- `backend/gls-platform-audit/src/main/java/.../platformaudit/autoconfigure/PlatformAuditAutoConfiguration.java` — modified.
+- `backend/gls-platform-audit/src/test/java/.../platformaudit/relay/OutboxStartupReplayTest.java` — 1 new.
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **`FAILED` rows are not auto-resurrected.** Rows that exceeded `maxAttempts` for transient AMQP failures stay `FAILED` even after a restart. Auto-resurrection risks cascading-failure loops if the underlying issue persists; the right shape is an admin-triggered "replay FAILED" action (future PR) where an operator confirms the cause is resolved before pulling the trigger.
+- **No metric for in-backoff age distribution.** A histogram of `(now - nextRetryAt)` across PENDING rows would show how much wall-time the restart-replay actually saves. Useful for operators tuning `pollInterval` / `backoffMax`. Not added here to keep PR small.
+- **Multi-replica startup races are benign but observable.** Each replica fires `ApplicationReadyEvent` and runs the replay; the first replica's bulk update modifies M rows, the others modify 0 (the rows already have `nextRetryAt` matching `now` from the first call). The counter correctly reflects this. If the noise becomes annoying in dashboards, gate the replay behind a `@SchedulerLock` like the relay's poll loop.
+
+**Phase 2.1 status:** Plan items 1 (`StaleDocumentRecoveryTask`) and 3 (audit outbox replay) **complete**. Remaining 2.1 items (`classification_outbox` reconciler per §6.5, ES reconciliation, Hub pack import retry on `gls.config.changed` failure) untouched — each is its own PR.
+
+**Next:** Phase 2.1 PR4 — pick another 2.1 item. Hub pack import retry is small and self-contained; ES reconciliation is bigger but unblocks a Phase 1 acceptance gate (search verification); `classification_outbox` reconciler depends on the outbox actually existing (need to check whether it's been built yet).

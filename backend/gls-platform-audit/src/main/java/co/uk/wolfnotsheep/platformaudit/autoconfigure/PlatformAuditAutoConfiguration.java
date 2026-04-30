@@ -6,9 +6,11 @@ import co.uk.wolfnotsheep.platformaudit.outbox.AuditOutboxRepository;
 import co.uk.wolfnotsheep.platformaudit.relay.OutboxRelay;
 import co.uk.wolfnotsheep.platformaudit.relay.OutboxRelayMetrics;
 import co.uk.wolfnotsheep.platformaudit.relay.OutboxRelayProperties;
+import co.uk.wolfnotsheep.platformaudit.relay.OutboxStartupReplay;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -76,5 +78,20 @@ public class PlatformAuditAutoConfiguration {
             OutboxRelayProperties properties,
             OutboxRelayMetrics metrics) {
         return new OutboxRelay(repository, rabbitTemplate, properties, metrics);
+    }
+
+    /**
+     * Phase 2.1 PR3 — drain backed-off PENDING outbox rows on application
+     * restart. Gated by the same property as the relay itself: if the relay
+     * isn't running, there's nothing to replay into.
+     */
+    @Bean
+    @ConditionalOnClass(RabbitTemplate.class)
+    @ConditionalOnProperty(prefix = "gls.platform.audit.relay", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnMissingBean(OutboxStartupReplay.class)
+    public OutboxStartupReplay outboxStartupReplay(
+            MongoTemplate mongoTemplate,
+            ObjectProvider<MeterRegistry> meterRegistryProvider) {
+        return new OutboxStartupReplay(mongoTemplate, meterRegistryProvider);
     }
 }
