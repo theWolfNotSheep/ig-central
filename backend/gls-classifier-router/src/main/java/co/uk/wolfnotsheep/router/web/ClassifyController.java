@@ -14,6 +14,7 @@ import co.uk.wolfnotsheep.router.model.ClassifyResponse;
 import co.uk.wolfnotsheep.router.model.JobAccepted;
 import co.uk.wolfnotsheep.router.parse.CascadeOutcome;
 import co.uk.wolfnotsheep.router.parse.CascadeService;
+import co.uk.wolfnotsheep.router.parse.RateLimitGate;
 import co.uk.wolfnotsheep.platformaudit.emit.AuditEmitter;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
@@ -53,6 +54,7 @@ public class ClassifyController implements ClassifyApi {
     private final ObjectMapper mapper;
     private final ObjectProvider<AuditEmitter> auditEmitterProvider;
     private final AsyncDispatcher asyncDispatcher;
+    private final RateLimitGate rateLimitGate;
     private final String serviceName;
     private final String serviceVersion;
     private final String instanceId;
@@ -64,6 +66,7 @@ public class ClassifyController implements ClassifyApi {
             ObjectMapper mapper,
             ObjectProvider<AuditEmitter> auditEmitterProvider,
             AsyncDispatcher asyncDispatcher,
+            RateLimitGate rateLimitGate,
             @Value("${spring.application.name:gls-classifier-router}") String serviceName,
             @Value("${gls.router.build.version:0.0.1-SNAPSHOT}") String serviceVersion,
             @Value("${HOSTNAME:unknown}") String instanceId) {
@@ -77,6 +80,7 @@ public class ClassifyController implements ClassifyApi {
                 .addMixIn(ClassifyRequestText.class, ClassifyRequestTextMixin.class);
         this.auditEmitterProvider = auditEmitterProvider;
         this.asyncDispatcher = asyncDispatcher;
+        this.rateLimitGate = rateLimitGate;
         this.serviceName = serviceName;
         this.serviceVersion = serviceVersion;
         this.instanceId = instanceId;
@@ -133,7 +137,7 @@ public class ClassifyController implements ClassifyApi {
     private ResponseEntity<ClassifyResponse> handleSyncAcquired(
             String traceparent, ClassifyRequest request, String idempotencyKey) {
         io.micrometer.core.instrument.Timer.Sample timer = metrics.startTimer();
-        try {
+        try (RateLimitGate.Token ignored = rateLimitGate.acquire()) {
             jobs.markRunning(request.getNodeRunId());
             ResponseEntity<ClassifyResponse> response = doClassify(traceparent, request, idempotencyKey);
             ClassifyResponse body = response.getBody();
@@ -322,6 +326,7 @@ public class ClassifyController implements ClassifyApi {
     private static String errorCodeFor(Throwable cause) {
         if (cause instanceof BlockNotFoundException) return "ROUTER_BLOCK_NOT_FOUND";
         if (cause instanceof JobInFlightException) return "IDEMPOTENCY_IN_FLIGHT";
+        if (cause instanceof co.uk.wolfnotsheep.router.parse.RateLimitExceededException) return "ROUTER_RATE_LIMITED";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmJobTimeoutException) return "ROUTER_LLM_TIMEOUT";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.LlmJobFailedException) return "ROUTER_LLM_FAILED";
         if (cause instanceof co.uk.wolfnotsheep.router.parse.BertBlockUnknownException) return "ROUTER_BERT_BLOCK_UNKNOWN";

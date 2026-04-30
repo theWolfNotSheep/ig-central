@@ -60,7 +60,16 @@ class ClassifyControllerTest {
                 mapper,
                 providerOf(auditEmitter),
                 asyncDispatcher,
+                disabledRateLimitGate(),
                 "gls-classifier-router", "0.0.1-SNAPSHOT", "test-instance");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static co.uk.wolfnotsheep.router.parse.RateLimitGate disabledRateLimitGate() {
+        org.springframework.beans.factory.ObjectProvider<io.micrometer.core.instrument.MeterRegistry> p =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(p.getIfAvailable()).thenReturn(null);
+        return new co.uk.wolfnotsheep.router.parse.RateLimitGate(0, 0L, p);
     }
 
     @SuppressWarnings("unchecked")

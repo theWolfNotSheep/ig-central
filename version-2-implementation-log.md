@@ -4202,3 +4202,36 @@ Reactor green via `./mvnw -DskipTests package`.
 **Phase 2.6 status:** Plan items 1 (tier-of-decision histogram) and 3 (cost-per-document) untouched. Plan items 4-5-6 (escalation rate, p50/p95/p99 latency, MCP availability impact) need data points the cascade router doesn't currently aggregate. The five deferred metrics from earlier PRs are now live. ~60% done — the easier half.
 
 **Next:** PR-C router-side `RateLimitGate`.
+
+## 2026-04-30 — Phase 2.3 PR3 — Router-side `RateLimitGate`
+
+**Done:** Closed Phase 2.3 plan item 1 ("per-worker semaphore on in-flight calls") for the cascade router itself. The pattern mirrors the existing `RateLimitGate` from `gls-llm-worker` (Phase 1.6 PR4) — per-replica fair semaphore, configurable permits + wait window, 429 with `Retry-After: 1` when exhausted. Default `permits=0` (disabled) so existing deployments pick up nothing on this PR until an operator opts in.
+
+**Changes:**
+
+- `gls-classifier-router/.../parse/RateLimitGate.java` (new) — `@Component` with `gls.router.rate-limit.permits` (default 0) and `gls.router.rate-limit.wait-ms` (default 0). When permits > 0, registers `router.rate_limit.permits.available` and `router.rate_limit.permits.total` gauges via the optional `MeterRegistry`. Returns an `AutoCloseable` `Token` from `acquire()` so callers use try-with-resources.
+- `gls-classifier-router/.../parse/RateLimitExceededException.java` (new) — typed exception so the controller advice maps to 429 cleanly.
+- `gls-classifier-router/.../web/ClassifyController.java` — wraps the sync classify body in `try (RateLimitGate.Token = rateLimitGate.acquire()) { ... }`. The async path doesn't gate (it returns 202 immediately and the limit applies when the dispatched work runs). `errorCodeFor` adds `ROUTER_RATE_LIMITED` so 429 metric tagging works.
+- `gls-classifier-router/.../web/RouterExceptionHandler.java` — new `@ExceptionHandler` for `RateLimitExceededException`: 429 `ROUTER_RATE_LIMITED` with `Retry-After: 1`. Same shape as the analogous handler in `gls-llm-worker`.
+- `gls-classifier-router/.../parse/RateLimitGateTest.java` (new) — 7 tests: zero permits = pass-through; single permit allows one at a time; `wait-ms` blocks briefly; try-with-resources releases; close is idempotent; gauges register when registry present; disabled gate doesn't register gauges.
+- Existing `ClassifyControllerTest` updated to construct the new `disabledRateLimitGate()` and pass through the constructor.
+
+**Tests:** 97 / 0 in `gls-classifier-router` (was 92; +7 new for `RateLimitGateTest`, plus existing controller tests still green after constructor wiring). Reactor green.
+
+**Decisions logged:** None new. The decision to gate the sync path only — async dispatching defers gate enforcement to the dispatched work — matches the existing LLM-worker behaviour and keeps the contract clean (caller gets 202 fast; rate-limit pressure shows up as queue depth on the async dispatcher, which is observable separately).
+
+**Files changed:**
+
+- `backend/gls-classifier-router/src/main/java/.../router/parse/{RateLimitGate, RateLimitExceededException}.java` — 2 new.
+- `backend/gls-classifier-router/src/main/java/.../router/web/{ClassifyController, RouterExceptionHandler}.java` — 2 modified.
+- `backend/gls-classifier-router/src/test/java/.../router/{parse/RateLimitGateTest, web/ClassifyControllerTest}.java` — 1 new + 1 modified.
+- Log = 7 files total.
+
+**Open issues / deferred:**
+
+- **Per-replica only.** Cluster-wide rate limiting (Redis-backed token bucket) deferred until a real load profile exists. Same caveat as the worker-side gate.
+- **Async path doesn't gate.** When `Prefer: respond-async` returns 202, the dispatched work runs without consulting the gate. If async traffic dominates and overwhelms downstream tiers, add a parallel gate inside `AsyncDispatcher.runAsync`.
+
+**Phase 2.3 status:** All 4 plan items now have a code-level answer (1: per-replica semaphore — done in worker, now also done in router; 2: router 429 + Retry-After honoring — DLQ replay endpoint covers a slice, broader honoring is the budget gate from PR3 + circuit breaker from 2.2; 3: quorum queues — done across all modules; 4: DLQ reprocessing UI hook — data path done in PR-D).
+
+**Next:** PR-D DLQ replay endpoint.
