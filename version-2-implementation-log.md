@@ -4232,6 +4232,35 @@ Reactor green via `./mvnw -DskipTests package`.
 - **Per-replica only.** Cluster-wide rate limiting (Redis-backed token bucket) deferred until a real load profile exists. Same caveat as the worker-side gate.
 - **Async path doesn't gate.** When `Prefer: respond-async` returns 202, the dispatched work runs without consulting the gate. If async traffic dominates and overwhelms downstream tiers, add a parallel gate inside `AsyncDispatcher.runAsync`.
 
-**Phase 2.3 status:** All 4 plan items now have a code-level answer (1: per-replica semaphore — done in worker, now also done in router; 2: router 429 + Retry-After honoring — DLQ replay endpoint covers a slice, broader honoring is the budget gate from PR3 + circuit breaker from 2.2; 3: quorum queues — done across all modules; 4: DLQ reprocessing UI hook — data path done in PR-D).
-
 **Next:** PR-D DLQ replay endpoint.
+
+## 2026-04-30 — Phase 2.3 PR4 — DLQ replay data path
+
+**Done:** Closed Phase 2.3 plan item 4 ("DLQ reprocessing UI hook — the data path; UI in Phase 3"). New `DlqReplayService` reads messages from a whitelisted DLQ and re-publishes each to its original exchange + routing key recorded in RabbitMQ's `x-death` header. New `POST /api/admin/dlq/{queueName}/replay?max=N` admin endpoint wraps the service.
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/services/DlqReplayService.java` (new) — `@Service`. Allowed-DLQ whitelist defaults to `gls.documents.dlq` and `gls.pipeline.dlq` so arbitrary queues can't be drained through the endpoint. Per replayed message: reads the first entry from `x-death` (RabbitMQ stamps these on dead-lettered messages), extracts `exchange` + first `routing-keys` element, strips the `x-death` / `x-first-death-*` headers (so the broker's dead-letter machinery resets if the message dies again), re-publishes via `RabbitTemplate.send`. Failures during replay are caught — the batch continues; failed counts surface in the result. Counter `dlq.replay{queue, outcome}` ticks per outcome (replayed / skipped).
+- `gls-app-assembly/.../infrastructure/controllers/admin/DlqReplayController.java` (new) — `POST /api/admin/dlq/{queueName}/replay?max=N`. Default `max=100`, hard-capped at 1000 per call; `IllegalArgumentException` from the service (queue not whitelisted, max ≤ 0) maps to 400.
+- `gls-app-assembly/.../infrastructure/services/DlqReplayServiceTest.java` (new) — 8 tests: disallowed queue throws; zero / negative max throws; empty queue zero counts; single message with `x-death` re-published to origin (verifies the exchange + routing-key extraction + `x-death` stripping); max-messages honoured; message without `x-death` skipped; send-failure during replay doesn't break the batch; absent `MeterRegistry` doesn't break.
+
+**Tests:** 111 / 0 in `gls-app-assembly` (+8 new for `DlqReplayServiceTest`). Reactor green.
+
+**Decisions logged:** None new. The "whitelist allowed DLQs" decision is the load-bearing one — without it, an authenticated admin could drain arbitrary queues and disrupt operations.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/DlqReplayService.java` — 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/DlqReplayController.java` — 1 new.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/DlqReplayServiceTest.java` — 1 new.
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **No idempotency on the replay endpoint.** Two concurrent admin calls would compete on the same DLQ. Acceptable for an admin-only operation.
+- **No "dry run" mode.** Endpoint commits as it goes; future: `?dryRun=true` query param to preview.
+- **No filtering by reason / age / count.** Drains FIFO; future: query params for selective replay.
+
+**Phase 2.3 status:** **all 4 plan items complete** with PR-C (rate-limit) + PR-D (DLQ replay).
+
+**Next:** Phase 2 substantially complete across this session. Remaining gaps: 2.1 `classification_outbox` reconciler (blocked on §6.5), 2.2 Anthropic 429 honoring / Ollama+Anthropic fallback (design calls), 2.4 audit-collector Tier 1 leader election (needs programmatic-poll refactor), 2.5 chaos tests (blocked on infra), 2.6 tier-of-decision + cost-per-document metrics (need cascade-router data points that don't exist yet).
