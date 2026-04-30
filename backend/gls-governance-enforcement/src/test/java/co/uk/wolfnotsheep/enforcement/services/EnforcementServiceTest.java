@@ -42,6 +42,7 @@ class EnforcementServiceTest {
     @Mock private AuditEventRepository auditEventRepository;
     @Mock private PipelineBlockRepository blockRepo;
     @Mock private SystemErrorRepository systemErrorRepo;
+    @Mock private co.uk.wolfnotsheep.enforcement.audit.EnforcementAuditEmitter platformAudit;
 
     @InjectMocks
     private EnforcementService enforcementService;

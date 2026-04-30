@@ -14,9 +14,11 @@ import co.uk.wolfnotsheep.governance.models.PipelineBlock;
 import co.uk.wolfnotsheep.governance.models.RetentionSchedule;
 import co.uk.wolfnotsheep.governance.models.SensitivityLabel;
 import co.uk.wolfnotsheep.governance.models.StorageTier;
+import co.uk.wolfnotsheep.enforcement.audit.EnforcementAuditEmitter;
 import co.uk.wolfnotsheep.governance.repositories.PipelineBlockRepository;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
 import co.uk.wolfnotsheep.document.events.DocumentClassifiedEvent;
+import co.uk.wolfnotsheep.platformaudit.envelope.Outcome;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -37,19 +39,22 @@ public class EnforcementService {
     private final AuditEventRepository auditEventRepository;
     private final PipelineBlockRepository blockRepo;
     private final SystemErrorRepository systemErrorRepo;
+    private final EnforcementAuditEmitter platformAudit;
 
     public EnforcementService(DocumentService documentService,
                               GovernanceService governanceService,
                               ObjectStorageService objectStorage,
                               AuditEventRepository auditEventRepository,
                               PipelineBlockRepository blockRepo,
-                              SystemErrorRepository systemErrorRepo) {
+                              SystemErrorRepository systemErrorRepo,
+                              EnforcementAuditEmitter platformAudit) {
         this.documentService = documentService;
         this.governanceService = governanceService;
         this.objectStorage = objectStorage;
         this.auditEventRepository = auditEventRepository;
         this.blockRepo = blockRepo;
         this.systemErrorRepo = systemErrorRepo;
+        this.platformAudit = platformAudit;
     }
 
     /**
@@ -167,6 +172,10 @@ public class EnforcementService {
                         doc.getId(), "PII_SENSITIVITY_ESCALATED", "SYSTEM", "SYSTEM",
                         Map.of("from", currentSensitivity.name(), "to", "CONFIDENTIAL",
                                 "reason", "High-risk PII types detected")));
+                platformAudit.emitTier1(doc.getId(), "PII_SENSITIVITY_ESCALATED", "ESCALATE",
+                        Outcome.SUCCESS, "7Y",
+                        Map.of("from", currentSensitivity.name(), "to", "CONFIDENTIAL"),
+                        Map.of("reason", "High-risk PII types detected"));
             }
 
             // Escalate to RESTRICTED if PII count exceeds threshold
@@ -179,6 +188,11 @@ public class EnforcementService {
                         doc.getId(), "PII_SENSITIVITY_ESCALATED", "SYSTEM", "SYSTEM",
                         Map.of("from", currentSensitivity.name(), "to", "RESTRICTED",
                                 "reason", "PII count " + activePiiCount + " exceeds threshold " + piiEscalationThreshold)));
+                platformAudit.emitTier1(doc.getId(), "PII_SENSITIVITY_ESCALATED", "ESCALATE",
+                        Outcome.SUCCESS, "7Y",
+                        Map.of("from", currentSensitivity.name(), "to", "RESTRICTED",
+                                "piiCount", activePiiCount, "threshold", piiEscalationThreshold),
+                        Map.of("reason", "PII count exceeds threshold"));
             }
         }
 
@@ -208,6 +222,15 @@ public class EnforcementService {
                         "requiresReview", String.valueOf(event.requiresHumanReview())
                 )
         ));
+        platformAudit.emitTier1(doc.getId(), "GOVERNANCE_APPLIED", "ENFORCE_GOVERNANCE",
+                Outcome.SUCCESS, "7Y",
+                Map.of(
+                        "categoryId", event.categoryId() == null ? "" : event.categoryId(),
+                        "sensitivity", event.sensitivityLabel().name(),
+                        "confidence", event.confidence(),
+                        "requiresReview", event.requiresHumanReview()
+                ),
+                Map.of("category", event.categoryName() == null ? "" : event.categoryName()));
 
         return doc;
     }
@@ -337,6 +360,11 @@ public class EnforcementService {
                     "SYSTEM",
                     Map.of("tier", targetTier.getName(), "bucket", destBucket)
             ));
+            platformAudit.emitTier1(doc.getId(), "STORAGE_TIER_MIGRATED", "MIGRATE_TIER",
+                    Outcome.SUCCESS, "7Y",
+                    Map.of("tierId", targetTier.getId(), "tierName", targetTier.getName(),
+                            "bucket", destBucket),
+                    null);
         } catch (Exception e) {
             log.error("Storage migration failed for document {}: {}", doc.getId(), e.getMessage());
             SystemError error = SystemError.of("ERROR", "STORAGE", "Storage migration failed for document " + doc.getId() + ": " + e.getMessage());
@@ -347,6 +375,11 @@ public class EnforcementService {
                     doc.getId(), "STORAGE_MIGRATION_FAILED", "SYSTEM", "SYSTEM",
                     Map.of("error", e.getMessage() != null ? e.getMessage() : "unknown",
                             "targetTier", targetTier.getName())));
+            platformAudit.emitTier2(doc.getId(), "STORAGE_MIGRATION_FAILED", "MIGRATE_TIER",
+                    Outcome.FAILURE,
+                    Map.of("targetTierId", targetTier.getId(),
+                            "targetTierName", targetTier.getName()),
+                    Map.of("error", e.getMessage() != null ? e.getMessage() : "unknown"));
         }
     }
 
@@ -378,6 +411,11 @@ public class EnforcementService {
                         documentService.save(doc);
                         auditEventRepository.save(new AuditEvent(doc.getId(), "DOCUMENT_DISPOSED",
                                 "SYSTEM", "SYSTEM", Map.of("action", "DELETE", "reason", "Retention expired")));
+                        platformAudit.emitTier1(doc.getId(), "DOCUMENT_DISPOSED", "DELETE",
+                                Outcome.SUCCESS, "7Y",
+                                Map.of("dispositionAction", "DELETE",
+                                        "trigger", "RETENTION_EXPIRED"),
+                                null);
                         log.info("Disposed (deleted) document: {}", doc.getId());
                     }
                     case ARCHIVE -> {
@@ -393,6 +431,12 @@ public class EnforcementService {
                         documentService.save(doc);
                         auditEventRepository.save(new AuditEvent(doc.getId(), "DOCUMENT_ARCHIVED",
                                 "SYSTEM", "SYSTEM", Map.of("reason", "Retention expired")));
+                        platformAudit.emitTier1(doc.getId(), "DOCUMENT_ARCHIVED", "ARCHIVE",
+                                Outcome.SUCCESS, "7Y",
+                                Map.of("dispositionAction", "ARCHIVE",
+                                        "trigger", "RETENTION_EXPIRED",
+                                        "archiveBucket", "gls-archive"),
+                                null);
                         log.info("Archived document: {}", doc.getId());
                     }
                     case REVIEW -> {
@@ -411,6 +455,11 @@ public class EnforcementService {
                         documentService.save(doc);
                         auditEventRepository.save(new AuditEvent(doc.getId(), "DOCUMENT_ANONYMISED",
                                 "SYSTEM", "SYSTEM", Map.of("reason", "Retention expired")));
+                        platformAudit.emitTier1(doc.getId(), "DOCUMENT_ANONYMISED", "ANONYMISE",
+                                Outcome.SUCCESS, "7Y",
+                                Map.of("dispositionAction", "ANONYMISE",
+                                        "trigger", "RETENTION_EXPIRED"),
+                                null);
                         log.info("Anonymised document metadata: {}", doc.getId());
                     }
                 }
@@ -426,6 +475,10 @@ public class EnforcementService {
                 auditEventRepository.save(new AuditEvent(doc.getId(), "DISPOSITION_FAILED",
                         "SYSTEM", "SYSTEM",
                         Map.of("error", e.getMessage() != null ? e.getMessage() : "unknown")));
+                platformAudit.emitTier2(doc.getId(), "DISPOSITION_FAILED", "DELETE",
+                        Outcome.FAILURE,
+                        Map.of("trigger", "RETENTION_EXPIRED"),
+                        Map.of("error", e.getMessage() != null ? e.getMessage() : "unknown"));
             }
         }
 

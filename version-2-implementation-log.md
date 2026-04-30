@@ -3583,3 +3583,52 @@ Reactor: full backend reactor green.
 **Phase 1.12 status:** **4 of 5 plan items ticked** (deployable + chain validation + Tier 2 swap + Tier 1 hardening). Remaining: service migrations from `AuditEventRepository` (PR5+) — touches every service that emits audit events today.
 
 **Next:** Phase 1.12 PR5 — start migrating services from the legacy `AuditEventRepository.save()` calls to `gls-platform-audit`'s `AuditEmitter`. Recommended order: `gls-governance-enforcement` (highest event volume, already touched in Phase 1.10), then `gls-app-assembly` document/classification flows, then connectors. Each migration is a small focused PR; they can land independently because the legacy and new paths don't conflict (publisher-side outbox already deployed in Phase 0.7).
+
+## 2026-04-30 — Phase 1.12 PR5 — Migrate gls-governance-enforcement to AuditEmitter
+
+**Done:** First service migration to the new audit pipeline. `gls-governance-enforcement`'s `EnforcementService` now dual-writes every audit event — the legacy `auditEventRepository.save(...)` call retains alongside a new `platformAudit.emitTier1/2(...)` call. Once admin UIs cut over to the collector's REST surface (a later PR), the legacy emissions can be deleted in one sweep — every call site is paired.
+
+**Why dual-write rather than replace:**
+
+The legacy `audit_events` Mongo collection is read by several admin UI surfaces today (monitoring page, document detail, etc.). Cutting them all over to query the collector's REST surface in a single PR would be high-risk — the collector is brand-new (PR2 / PR3 / PR4 just landed). Dual-write is the safe migration path: the legacy admin UI keeps working unchanged, the new collector accumulates events in parallel, and once we've verified the collector's accuracy against real traffic we can flip read paths and delete the legacy emissions.
+
+**Changes:**
+
+- `audit/EnforcementAuditEmitter.java` (new) — thin helper that constructs `gls-platform-audit` envelopes from the small set of fields each emit site has on hand. Provides `emitTier1(documentId, eventType, action, outcome, retentionClass, metadata, content)` for compliance events (DOMAIN tier, default `7Y` retention) and `emitTier2(...)` for operational telemetry (SYSTEM tier, `30D` retention). `AuditEmitter` bean injected via `ObjectProvider` so absent → no-op (legacy `save` has already fired). Generates ULID-shaped event ids per the envelope schema's `^[0-9A-HJKMNP-TV-Z]{26}$` pattern using SecureRandom — not strictly time-sortable like a real ULID, but conforming to the validator's character set; replace with a real ULID library when one is added to the platform.
+- `services/EnforcementService.java` — added `EnforcementAuditEmitter platformAudit` constructor parameter. Dual-write at all 8 emit sites: PII_SENSITIVITY_ESCALATED (×2, both Tier 1), GOVERNANCE_APPLIED (Tier 1), STORAGE_TIER_MIGRATED (Tier 1), STORAGE_MIGRATION_FAILED (Tier 2), DOCUMENT_DISPOSED / DOCUMENT_ARCHIVED / DOCUMENT_ANONYMISED (all Tier 1), DISPOSITION_FAILED (Tier 2).
+- `pom.xml` — added `gls-platform-audit` dependency.
+- `services/EnforcementServiceTest.java` — added `@Mock private EnforcementAuditEmitter platformAudit` so `@InjectMocks` resolves the new constructor parameter. Existing 5 tests unchanged.
+- `audit/EnforcementAuditEmitterTest.java` (new) — 5 focused tests for the helper: Tier 1 envelope shape (DOMAIN, DOCUMENT resource, SYSTEM actor, retentionClass/metadata/content), Tier 2 envelope shape (SYSTEM, 30D default), exception swallowing (audit failure must not break enforcement), absent-emitter no-op, null retentionClass defaults to 7Y.
+
+**Why a helper rather than calling AuditEmitter directly:**
+
+Three reasons:
+
+1. **Envelope construction is verbose.** Eight emit sites would each need to build the full `AuditEvent` record (15 fields), construct an `Actor`, construct a `Resource`, partition `details` into metadata/content. The helper collapses that to one line per site.
+2. **Service identity stays in one place.** Service name, version, instance id are injected once on the helper, not at every emit site.
+3. **Audit emission must be non-fatal.** The helper wraps every `emitter.emit()` call in try/catch — a Rabbit outage or schema validation failure would otherwise break the enforcement transaction. The legacy `save` has already fired, so the audit data isn't lost.
+
+**Tests:** 35 / 0 in module (was 30; +5 new for `EnforcementAuditEmitterTest`). Existing `EnforcementServiceTest` (5) unchanged — Mockito's `@InjectMocks` absorbs the new constructor parameter via the new `@Mock`.
+
+Reactor: full backend reactor green.
+
+**Decisions logged:** None new. The dual-write pattern is the standard CLAUDE.md "Audit Relay Pattern" guidance — emit via the library, never bypass; the parallel `audit_events` collection write is just the legacy compatibility path during migration.
+
+**Files changed:**
+
+- `backend/gls-governance-enforcement/pom.xml` — modified.
+- `backend/gls-governance-enforcement/src/main/java/.../enforcement/{audit/EnforcementAuditEmitter, services/EnforcementService}.java` — 1 new, 1 modified.
+- `backend/gls-governance-enforcement/src/test/java/.../enforcement/{audit/EnforcementAuditEmitterTest, services/EnforcementServiceTest}.java` — 1 new, 1 modified.
+- Plan + log = 7 files total.
+
+**Open issues / deferred:**
+
+- **ULID generation is approximate.** The helper uses SecureRandom for all 26 chars to satisfy the envelope schema's pattern, but a real ULID encodes a millisecond timestamp in the first 10 chars (Crockford base32) so events sort lexicographically by time. Replace with a real ULID library when added to the platform — or move ULID generation into `gls-platform-audit` so all services benefit.
+- **No `previousEventHash` set on the Tier 1 envelopes.** The publisher's hash-chain head tracker (per CSV #4) is a separate concern from the consumer-side validator we built in PR2; currently every emit goes out with `previousEventHash=null`, which the collector's validator accepts as "first in chain" for that resource. Real chain integrity needs the publisher to look up the latest hash for the resource and chain on top — a follow-up PR adds a `Tier1ChainHeadTracker` to `gls-platform-audit`.
+- **No `pipelineRunId` / `nodeRunId` propagation.** The enforcement service doesn't have these on hand inside `enforce()` — they live on the orchestrator side. Needs a small refactor to thread them through (or read them from a request-scoped bean populated by the controller).
+- **`traceparent` not propagated.** Same — needs request-scoped propagation.
+- **Legacy emissions are still fired.** Once the collector + admin UI cutover is verified, a follow-up PR can delete every legacy `auditEventRepository.save(...)` call alongside the new emit. Not yet — this PR is the safe-by-default migration.
+
+**Phase 1.12 status:** **all 5 plan items at least partially ticked.** PR5 covers the first service migration (gls-governance-enforcement); PR6+ migrates the remaining services (gls-app-assembly document/classification flows, connectors). Phase 1.12 substantially complete with the cutover-completion PR sequence still ahead.
+
+**Next:** Phase 1.12 PR6 — migrate `gls-app-assembly` document + classification flows to `gls-platform-audit`. Largest remaining migration; same dual-write pattern.
