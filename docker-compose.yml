@@ -593,6 +593,25 @@ services:
     logging: *default-logging
     networks: [gls]
 
+  gls-indexing-worker:                                    # Phase 1.11
+    container_name: ${COMPOSE_PROJECT_NAME:-gls}-indexing-worker
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: backend/gls-indexing-worker/Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+    depends_on:
+      mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      elasticsearch: { condition: service_healthy }
+    logging: *default-logging
+    networks: [gls]
+
   # (gls-classifier-router placeholder removed — active block is below.)
 
   # gls-audit-collector:                                  # Phase 1.12 / 0.7 follow-up

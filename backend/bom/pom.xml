@@ -38,6 +38,7 @@
         <gls.bert.inference.version>${gls.version}</gls.bert.inference.version>
         <gls.slm.worker.version>${gls.version}</gls.slm.worker.version>
         <gls.llm.worker.version>${gls.version}</gls.llm.worker.version>
+        <gls.indexing.worker.version>${gls.version}</gls.indexing.worker.version>
     </properties>
 
     <dependencyManagement>
@@ -109,6 +110,12 @@
                 <groupId>co.uk.wolfnotsheep.llmworker</groupId>
                 <artifactId>gls-llm-worker</artifactId>
                 <version>${gls.llm.worker.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>co.uk.wolfnotsheep.indexing</groupId>
+                <artifactId>gls-indexing-worker</artifactId>
+                <version>${gls.indexing.worker.version}</version>
             </dependency>
 
             <!-- ==================== Governance ==================== -->
