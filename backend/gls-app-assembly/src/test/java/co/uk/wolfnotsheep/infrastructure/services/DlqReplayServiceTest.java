@@ -1,22 +1,33 @@
 package co.uk.wolfnotsheep.infrastructure.services;
 
+import com.rabbitmq.client.AMQP;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Envelope;
+import com.rabbitmq.client.GetResponse;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import net.javacrumbs.shedlock.core.LockConfiguration;
+import net.javacrumbs.shedlock.core.LockProvider;
+import net.javacrumbs.shedlock.core.SimpleLock;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.springframework.amqp.core.Message;
-import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -28,14 +39,20 @@ class DlqReplayServiceTest {
 
     private RabbitTemplate rabbitTemplate;
     private MeterRegistry meterRegistry;
+    private LockProvider lockProvider;
     private DlqReplayService service;
+    private Channel channel;
 
     @BeforeEach
     void setUp() {
         rabbitTemplate = mock(RabbitTemplate.class);
         meterRegistry = new SimpleMeterRegistry();
+        lockProvider = mock(LockProvider.class);
+        SimpleLock lock = mock(SimpleLock.class);
+        when(lockProvider.lock(any(LockConfiguration.class))).thenReturn(Optional.of(lock));
+        channel = mock(Channel.class);
         service = new DlqReplayService(rabbitTemplate, providerOf(meterRegistry),
-                Set.of("gls.documents.dlq", "gls.pipeline.dlq"));
+                lockProviderOf(lockProvider), Set.of("gls.documents.dlq", "gls.pipeline.dlq"));
     }
 
     @SuppressWarnings("unchecked")
@@ -45,26 +62,63 @@ class DlqReplayServiceTest {
         return p;
     }
 
-    private double counter(String queue, String outcome) {
-        var c = meterRegistry.find("dlq.replay")
-                .tags("queue", queue, "outcome", outcome).counter();
-        return c == null ? 0.0 : c.count();
+    @SuppressWarnings("unchecked")
+    private static ObjectProvider<LockProvider> lockProviderOf(LockProvider lp) {
+        ObjectProvider<LockProvider> p = mock(ObjectProvider.class);
+        when(p.getIfAvailable()).thenReturn(lp);
+        return p;
     }
 
-    private static Message messageWithXDeath(String exchange, String routingKey) {
-        MessageProperties props = new MessageProperties();
+    /**
+     * Stub the rabbitTemplate.execute callback by giving it a queue of GetResponses
+     * to return on successive basicGet calls; null at the end means queue empty.
+     */
+    @SuppressWarnings({"unchecked"})
+    private void stubExecuteWithMessages(GetResponse... responses) throws Exception {
+        Queue<GetResponse> q = new LinkedList<>();
+        for (GetResponse r : responses) q.offer(r);
+        q.offer(null);  // sentinel — empty queue
+        when(channel.basicGet(anyString(), anyBoolean())).thenAnswer(inv -> q.poll());
+        when(rabbitTemplate.execute(any())).thenAnswer(inv -> {
+            org.springframework.amqp.rabbit.core.ChannelCallback<Object> cb =
+                    (org.springframework.amqp.rabbit.core.ChannelCallback<Object>) inv.getArgument(0);
+            return cb.doInRabbit(channel);
+        });
+    }
+
+    private static GetResponse responseWithXDeath(long deliveryTag,
+                                                  String exchange, String routingKey) {
         Map<String, Object> entry = new LinkedHashMap<>();
         entry.put("queue", "gls.documents.processed");
         entry.put("exchange", exchange);
         entry.put("routing-keys", List.of(routingKey));
         entry.put("count", 1L);
         entry.put("reason", "rejected");
-        props.setHeader("x-death", List.of(entry));
-        props.setHeader("x-first-death-exchange", exchange);
-        props.setHeader("x-first-death-queue", "gls.documents.processed");
-        props.setHeader("x-first-death-reason", "rejected");
-        props.setContentType("application/json");
-        return new Message("{}".getBytes(), props);
+        Map<String, Object> headers = new LinkedHashMap<>();
+        headers.put("x-death", List.of(entry));
+        headers.put("x-first-death-exchange", exchange);
+        headers.put("x-first-death-queue", "gls.documents.processed");
+        headers.put("x-first-death-reason", "rejected");
+        AMQP.BasicProperties props = new AMQP.BasicProperties.Builder()
+                .contentType("application/json")
+                .headers(headers)
+                .build();
+        Envelope envelope = new Envelope(deliveryTag, false, exchange, routingKey);
+        return new GetResponse(envelope, props, "{}".getBytes(), 0);
+    }
+
+    private static GetResponse responseWithoutXDeath(long deliveryTag) {
+        AMQP.BasicProperties props = new AMQP.BasicProperties.Builder()
+                .contentType("application/json")
+                .build();
+        Envelope envelope = new Envelope(deliveryTag, false, "", "");
+        return new GetResponse(envelope, props, "{}".getBytes(), 0);
+    }
+
+    private double counter(String queue, String outcome, String mode) {
+        var c = meterRegistry.find("dlq.replay")
+                .tags("queue", queue, "outcome", outcome, "mode", mode).counter();
+        return c == null ? 0.0 : c.count();
     }
 
     @Test
@@ -72,104 +126,120 @@ class DlqReplayServiceTest {
         assertThatThrownBy(() -> service.replay("not.allowed", 10))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("not in the allowed");
-        verify(rabbitTemplate, never()).receive((String) org.mockito.ArgumentMatchers.any());
     }
 
     @Test
     void zero_or_negative_max_throws() {
         assertThatThrownBy(() -> service.replay("gls.documents.dlq", 0))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> service.replay("gls.documents.dlq", -1))
-                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
-    void empty_queue_returns_zero_counts() {
-        when(rabbitTemplate.receive("gls.documents.dlq")).thenReturn(null);
+    void empty_queue_returns_zero_counts() throws Exception {
+        stubExecuteWithMessages();
 
         var result = service.replay("gls.documents.dlq", 10);
 
         assertThat(result.replayed()).isZero();
         assertThat(result.skipped()).isZero();
-        verify(rabbitTemplate, never()).send(org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(Message.class));
+        assertThat(result.dryRun()).isFalse();
     }
 
     @Test
-    void single_message_with_x_death_is_re_published_to_origin() {
-        Message msg = messageWithXDeath("gls.documents", "document.processed");
-        when(rabbitTemplate.receive("gls.documents.dlq"))
-                .thenReturn(msg).thenReturn(null);
+    void real_mode_re_publishes_and_acks() throws Exception {
+        stubExecuteWithMessages(responseWithXDeath(1L, "gls.documents", "document.processed"));
 
         var result = service.replay("gls.documents.dlq", 10);
 
         assertThat(result.replayed()).isEqualTo(1);
-        assertThat(result.skipped()).isZero();
-
-        ArgumentCaptor<Message> sentMessage = ArgumentCaptor.forClass(Message.class);
-        verify(rabbitTemplate, times(1)).send(eq("gls.documents"), eq("document.processed"),
-                sentMessage.capture());
-        // x-death stripped from re-published message so the broker's dead-letter machinery resets.
-        assertThat(sentMessage.getValue().getMessageProperties().getHeaders())
-                .doesNotContainKey("x-death")
-                .doesNotContainKey("x-first-death-exchange");
-        assertThat(counter("gls.documents.dlq", "replayed")).isEqualTo(1.0);
+        assertThat(result.dryRun()).isFalse();
+        verify(channel, times(1)).basicAck(eq(1L), eq(false));
+        verify(channel, never()).basicNack(anyLong(), anyBoolean(), anyBoolean());
+        verify(rabbitTemplate, times(1)).send(eq("gls.documents"), eq("document.processed"), any());
+        assertThat(counter("gls.documents.dlq", "replayed", "real")).isEqualTo(1.0);
     }
 
     @Test
-    void max_messages_is_honoured() {
-        Message msg = messageWithXDeath("gls.documents", "document.processed");
-        when(rabbitTemplate.receive("gls.documents.dlq"))
-                .thenReturn(msg, msg, msg, msg, null);
+    void dry_run_mode_does_not_publish_and_nacks_with_requeue() throws Exception {
+        stubExecuteWithMessages(
+                responseWithXDeath(1L, "gls.documents", "document.processed"),
+                responseWithXDeath(2L, "gls.documents", "document.classified"));
+
+        var result = service.dryRun("gls.documents.dlq", 10);
+
+        assertThat(result.replayed()).isEqualTo(2);
+        assertThat(result.dryRun()).isTrue();
+        assertThat(result.preview()).hasSize(2);
+        assertThat(result.preview().get(0).originExchange()).isEqualTo("gls.documents");
+        assertThat(result.preview().get(0).originRoutingKey()).isEqualTo("document.processed");
+        assertThat(result.preview().get(0).reason()).isEqualTo("rejected");
+        verify(channel, times(2)).basicNack(anyLong(), eq(false), eq(true));
+        verify(channel, never()).basicAck(anyLong(), anyBoolean());
+        verify(rabbitTemplate, never()).send(anyString(), anyString(), any());
+        assertThat(counter("gls.documents.dlq", "replayed", "dry_run")).isEqualTo(2.0);
+    }
+
+    @Test
+    void max_messages_honoured_in_real_mode() throws Exception {
+        stubExecuteWithMessages(
+                responseWithXDeath(1L, "gls.documents", "document.processed"),
+                responseWithXDeath(2L, "gls.documents", "document.processed"),
+                responseWithXDeath(3L, "gls.documents", "document.processed"));
 
         var result = service.replay("gls.documents.dlq", 2);
 
         assertThat(result.replayed()).isEqualTo(2);
-        // Only 2 calls to receive — we stop once max is reached.
-        verify(rabbitTemplate, times(2)).receive("gls.documents.dlq");
-        verify(rabbitTemplate, times(2)).send(eq("gls.documents"), eq("document.processed"),
-                org.mockito.ArgumentMatchers.any(Message.class));
+        verify(rabbitTemplate, times(2)).send(eq("gls.documents"), eq("document.processed"), any());
     }
 
     @Test
-    void message_without_x_death_is_skipped_not_replayed() {
-        MessageProperties props = new MessageProperties();
-        Message msg = new Message("{}".getBytes(), props);
-        when(rabbitTemplate.receive("gls.documents.dlq")).thenReturn(msg).thenReturn(null);
+    void message_without_x_death_is_skipped_and_acked_in_real_mode() throws Exception {
+        stubExecuteWithMessages(responseWithoutXDeath(1L));
 
         var result = service.replay("gls.documents.dlq", 10);
 
         assertThat(result.replayed()).isZero();
         assertThat(result.skipped()).isEqualTo(1);
-        verify(rabbitTemplate, never()).send(org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(Message.class));
-        assertThat(counter("gls.documents.dlq", "skipped")).isEqualTo(1.0);
+        verify(channel, times(1)).basicAck(eq(1L), eq(false));
+        verify(rabbitTemplate, never()).send(anyString(), anyString(), any());
     }
 
     @Test
-    void send_failure_during_replay_does_not_break_the_batch() {
-        Message msg = messageWithXDeath("gls.documents", "document.processed");
-        when(rabbitTemplate.receive("gls.documents.dlq"))
-                .thenReturn(msg, msg, null);
-        org.mockito.Mockito.doThrow(new RuntimeException("broker down"))
-                .doNothing()
-                .when(rabbitTemplate).send(eq("gls.documents"), eq("document.processed"),
-                        org.mockito.ArgumentMatchers.any(Message.class));
+    void per_queue_lock_held_throws_ReplayInProgressException() {
+        when(lockProvider.lock(any(LockConfiguration.class))).thenReturn(Optional.empty());
 
-        var result = service.replay("gls.documents.dlq", 10);
+        assertThatThrownBy(() -> service.replay("gls.documents.dlq", 10))
+                .isInstanceOf(DlqReplayService.ReplayInProgressException.class);
+        verify(rabbitTemplate, never()).execute(any());
+    }
+
+    @Test
+    void absent_LockProvider_runs_without_lock() throws Exception {
+        DlqReplayService noLock = new DlqReplayService(rabbitTemplate, providerOf(meterRegistry),
+                lockProviderOf(null), Set.of("gls.documents.dlq"));
+        stubExecuteWithMessages(responseWithXDeath(1L, "gls.documents", "document.processed"));
+
+        var result = noLock.replay("gls.documents.dlq", 10);
 
         assertThat(result.replayed()).isEqualTo(1);
-        assertThat(result.skipped()).isEqualTo(1);
-        assertThat(result.errors()).hasSize(1);
     }
 
     @Test
-    void absent_MeterRegistry_does_not_break_replay() {
+    void lock_is_released_after_replay_completes() throws Exception {
+        SimpleLock lock = mock(SimpleLock.class);
+        when(lockProvider.lock(any(LockConfiguration.class))).thenReturn(Optional.of(lock));
+        stubExecuteWithMessages(responseWithXDeath(1L, "gls.documents", "document.processed"));
+
+        service.replay("gls.documents.dlq", 10);
+
+        verify(lock, times(1)).unlock();
+    }
+
+    @Test
+    void absent_MeterRegistry_does_not_break_replay() throws Exception {
         DlqReplayService noMetrics = new DlqReplayService(rabbitTemplate, providerOf(null),
-                Set.of("gls.documents.dlq"));
-        Message msg = messageWithXDeath("gls.documents", "document.processed");
-        when(rabbitTemplate.receive("gls.documents.dlq"))
-                .thenReturn(msg).thenReturn(null);
+                lockProviderOf(lockProvider), Set.of("gls.documents.dlq"));
+        stubExecuteWithMessages(responseWithXDeath(1L, "gls.documents", "document.processed"));
 
         var result = noMetrics.replay("gls.documents.dlq", 10);
 

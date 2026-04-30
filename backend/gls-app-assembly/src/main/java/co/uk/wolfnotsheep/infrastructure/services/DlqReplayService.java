@@ -1,8 +1,12 @@
 package co.uk.wolfnotsheep.infrastructure.services;
 
+import com.rabbitmq.client.GetResponse;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
+import net.javacrumbs.shedlock.core.LockConfiguration;
+import net.javacrumbs.shedlock.core.LockProvider;
+import net.javacrumbs.shedlock.core.SimpleLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
@@ -12,9 +16,12 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -35,8 +42,11 @@ import java.util.Set;
  * endpoint can't be used to drain arbitrary queues. The default list
  * is {@code gls.documents.dlq} and {@code gls.pipeline.dlq}.
  *
- * <p>This is a data-path-only endpoint (Phase 2.3); the Phase 3 admin
- * UI will wrap it.
+ * <p>Phase 2.6 — supports {@code dryRun=true} mode that pops messages
+ * via {@code basicGet} + {@code basicNack(requeue=true)} so operators
+ * can preview what would be replayed without actually re-publishing.
+ * Plus per-queue ShedLock idempotency so two concurrent admin calls
+ * on the same DLQ don't compete.
  */
 @Service
 public class DlqReplayService {
@@ -47,23 +57,37 @@ public class DlqReplayService {
 
     private final RabbitTemplate rabbitTemplate;
     private final ObjectProvider<MeterRegistry> meterRegistryProvider;
+    private final ObjectProvider<LockProvider> lockProviderProvider;
     private final Set<String> allowedDlqs;
 
     public DlqReplayService(RabbitTemplate rabbitTemplate,
-                            ObjectProvider<MeterRegistry> meterRegistryProvider) {
-        this(rabbitTemplate, meterRegistryProvider, DEFAULT_ALLOWED_DLQS);
+                            ObjectProvider<MeterRegistry> meterRegistryProvider,
+                            ObjectProvider<LockProvider> lockProviderProvider) {
+        this(rabbitTemplate, meterRegistryProvider, lockProviderProvider, DEFAULT_ALLOWED_DLQS);
     }
 
     /** Visible for testing — override the allowed-DLQ set. */
     DlqReplayService(RabbitTemplate rabbitTemplate,
                      ObjectProvider<MeterRegistry> meterRegistryProvider,
+                     ObjectProvider<LockProvider> lockProviderProvider,
                      Set<String> allowedDlqs) {
         this.rabbitTemplate = rabbitTemplate;
         this.meterRegistryProvider = meterRegistryProvider;
+        this.lockProviderProvider = lockProviderProvider;
         this.allowedDlqs = allowedDlqs;
     }
 
+    /** Real replay — re-publishes and acks. */
     public ReplayResult replay(String queueName, int maxMessages) {
+        return runReplay(queueName, maxMessages, /* dryRun */ false);
+    }
+
+    /** Dry-run replay — peeks via basicGet + nack-requeue; nothing changes. */
+    public ReplayResult dryRun(String queueName, int maxMessages) {
+        return runReplay(queueName, maxMessages, /* dryRun */ true);
+    }
+
+    private ReplayResult runReplay(String queueName, int maxMessages, boolean dryRun) {
         if (!allowedDlqs.contains(queueName)) {
             throw new IllegalArgumentException(
                     "queue " + queueName + " is not in the allowed DLQ replay list " + allowedDlqs);
@@ -72,80 +96,154 @@ public class DlqReplayService {
             throw new IllegalArgumentException("maxMessages must be > 0");
         }
 
+        // Per-queue idempotency: only one admin can drain a given DLQ at a time.
+        // Skip lock when no LockProvider — single-replica deployments without ShedLock.
+        LockProvider provider = lockProviderProvider == null ? null : lockProviderProvider.getIfAvailable();
+        if (provider != null) {
+            String lockName = "dlq-replay-" + queueName;
+            LockConfiguration cfg = new LockConfiguration(
+                    Instant.now(), lockName, Duration.ofMinutes(5), Duration.ZERO);
+            Optional<SimpleLock> lock = provider.lock(cfg);
+            if (lock.isEmpty()) {
+                log.info("DLQ replay rejected — another caller is draining {} (lock held)", queueName);
+                throw new ReplayInProgressException(queueName);
+            }
+            try {
+                return doReplay(queueName, maxMessages, dryRun);
+            } finally {
+                lock.get().unlock();
+            }
+        }
+        return doReplay(queueName, maxMessages, dryRun);
+    }
+
+    private enum StepOutcome { EMPTY, REPLAYED, SKIPPED }
+
+    private ReplayResult doReplay(String queueName, int maxMessages, boolean dryRun) {
         int replayed = 0;
         int skipped = 0;
         List<String> errors = new ArrayList<>();
+        List<ReplayPreview> preview = dryRun ? new ArrayList<>() : null;
+
         for (int i = 0; i < maxMessages; i++) {
-            Message message = rabbitTemplate.receive(queueName);
-            if (message == null) break;
-            try {
-                if (replayMessage(message)) {
-                    replayed++;
-                } else {
-                    skipped++;
+            StepOutcome step = rabbitTemplate.<StepOutcome>execute(channel -> {
+                GetResponse resp = channel.basicGet(queueName, /* autoAck */ false);
+                if (resp == null) return StepOutcome.EMPTY;
+                long deliveryTag = resp.getEnvelope().getDeliveryTag();
+                StepOutcome outcome;
+                try {
+                    Message message = toMessage(resp);
+                    Optional<MessageOrigin> origin = extractOrigin(message);
+                    boolean acted;
+                    if (dryRun) {
+                        if (origin.isPresent()) {
+                            preview.add(new ReplayPreview(
+                                    origin.get().exchange(), origin.get().routingKey(),
+                                    extractReason(message), bodySize(message)));
+                            acted = true;
+                        } else {
+                            acted = false;
+                        }
+                    } else {
+                        acted = origin.isPresent() && publishToOrigin(message, origin.get());
+                    }
+                    outcome = acted ? StepOutcome.REPLAYED : StepOutcome.SKIPPED;
+                } catch (Exception e) {
+                    log.error("DLQ replay: failed processing message from {}: {}",
+                            queueName, e.getMessage(), e);
+                    errors.add(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+                    outcome = StepOutcome.SKIPPED;
                 }
-            } catch (RuntimeException e) {
-                log.error("DLQ replay: failed to replay message from {}: {}", queueName, e.getMessage(), e);
-                errors.add(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-                skipped++;
-            }
+                // Dry-run: requeue so messages stay in DLQ. Real-run: ack.
+                if (dryRun) {
+                    channel.basicNack(deliveryTag, false, /* requeue */ true);
+                } else {
+                    channel.basicAck(deliveryTag, false);
+                }
+                return outcome;
+            });
+            if (step == null || step == StepOutcome.EMPTY) break;
+            if (step == StepOutcome.REPLAYED) replayed++;
+            else skipped++;
         }
-        recordCounter(queueName, "replayed", replayed);
-        recordCounter(queueName, "skipped", skipped);
-        log.info("DLQ replay complete: queue={} replayed={} skipped={} errors={}",
-                queueName, replayed, skipped, errors.size());
-        return new ReplayResult(queueName, replayed, skipped, errors);
+
+        recordCounter(queueName, dryRun, "replayed", replayed);
+        recordCounter(queueName, dryRun, "skipped", skipped);
+        log.info("DLQ replay complete: queue={} dryRun={} replayed={} skipped={} errors={}",
+                queueName, dryRun, replayed, skipped, errors.size());
+        return new ReplayResult(queueName, dryRun, replayed, skipped, errors,
+                preview == null ? List.of() : preview);
     }
 
-    /** @return {@code true} if the message was re-published; {@code false} if skipped. */
-    private boolean replayMessage(Message message) {
+    /** @return {@code true} if the message was re-published; {@code false} if missing-x-death etc. */
+    private boolean publishToOrigin(Message message, MessageOrigin origin) {
         MessageProperties props = message.getMessageProperties();
-        if (props == null) return false;
-        Map<String, Object> headers = props.getHeaders();
-        if (headers == null) return false;
-
-        Object xDeath = headers.get("x-death");
-        if (!(xDeath instanceof List<?>) || ((List<?>) xDeath).isEmpty()) {
-            log.warn("DLQ replay: message has no x-death header — cannot determine origin; skipping");
-            return false;
-        }
-        Object firstEntry = ((List<?>) xDeath).get(0);
-        if (!(firstEntry instanceof Map<?, ?>)) {
-            return false;
-        }
-        Map<?, ?> origin = (Map<?, ?>) firstEntry;
-        String originExchange = stringOrNull(origin.get("exchange"));
-        Object routingKeysObj = origin.get("routing-keys");
-        String originRoutingKey = null;
-        if (routingKeysObj instanceof List<?> rks && !rks.isEmpty()) {
-            originRoutingKey = stringOrNull(rks.get(0));
-        }
-        if (originExchange == null || originRoutingKey == null) {
-            log.warn("DLQ replay: x-death missing exchange / routing-keys; skipping");
-            return false;
-        }
-
-        // Strip x-death so the broker's dead-letter machinery starts fresh
-        // if the message dies again.
-        MessageProperties replayProps = MessagePropertiesBuilderCopy(props);
+        MessageProperties replayProps = copyProperties(props);
         replayProps.getHeaders().remove("x-death");
         replayProps.getHeaders().remove("x-first-death-exchange");
         replayProps.getHeaders().remove("x-first-death-queue");
         replayProps.getHeaders().remove("x-first-death-reason");
 
         Message replay = MessageBuilder.fromMessage(new Message(message.getBody(), replayProps)).build();
-        rabbitTemplate.send(originExchange, originRoutingKey, replay);
-        log.info("DLQ replay: re-published message to {}/{}", originExchange, originRoutingKey);
+        rabbitTemplate.send(origin.exchange(), origin.routingKey(), replay);
+        log.info("DLQ replay: re-published message to {}/{}", origin.exchange(), origin.routingKey());
         return true;
     }
 
-    /**
-     * Spring AMQP doesn't expose a clean copy method for
-     * {@link MessageProperties}; we duplicate the relevant fields by
-     * hand. Body is kept in the caller — only the metadata is copied.
-     */
-    private static MessageProperties MessagePropertiesBuilderCopy(MessageProperties source) {
+    private static Optional<MessageOrigin> extractOrigin(Message message) {
+        MessageProperties props = message.getMessageProperties();
+        if (props == null || props.getHeaders() == null) return Optional.empty();
+        Object xDeath = props.getHeaders().get("x-death");
+        if (!(xDeath instanceof List<?>) || ((List<?>) xDeath).isEmpty()) {
+            return Optional.empty();
+        }
+        Object firstEntry = ((List<?>) xDeath).get(0);
+        if (!(firstEntry instanceof Map<?, ?>)) return Optional.empty();
+        Map<?, ?> origin = (Map<?, ?>) firstEntry;
+        String exchange = stringOrNull(origin.get("exchange"));
+        Object routingKeysObj = origin.get("routing-keys");
+        String routingKey = null;
+        if (routingKeysObj instanceof List<?> rks && !rks.isEmpty()) {
+            routingKey = stringOrNull(rks.get(0));
+        }
+        if (exchange == null || routingKey == null) return Optional.empty();
+        return Optional.of(new MessageOrigin(exchange, routingKey));
+    }
+
+    private static String extractReason(Message message) {
+        MessageProperties props = message.getMessageProperties();
+        if (props == null || props.getHeaders() == null) return null;
+        Object first = props.getHeaders().get("x-first-death-reason");
+        if (first != null) return first.toString();
+        Object xDeath = props.getHeaders().get("x-death");
+        if (xDeath instanceof List<?> list && !list.isEmpty()
+                && list.get(0) instanceof Map<?, ?> m) {
+            Object reason = m.get("reason");
+            return reason == null ? null : reason.toString();
+        }
+        return null;
+    }
+
+    private static int bodySize(Message message) {
+        return message.getBody() == null ? 0 : message.getBody().length;
+    }
+
+    private static Message toMessage(GetResponse resp) {
+        MessageProperties props = new MessageProperties();
+        if (resp.getProps() != null) {
+            if (resp.getProps().getContentType() != null) {
+                props.setContentType(resp.getProps().getContentType());
+            }
+            if (resp.getProps().getHeaders() != null) {
+                resp.getProps().getHeaders().forEach((k, v) -> props.setHeader(k, v));
+            }
+        }
+        return new Message(resp.getBody(), props);
+    }
+
+    private static MessageProperties copyProperties(MessageProperties source) {
         MessageProperties dest = new MessageProperties();
+        if (source == null) return dest;
         dest.setContentType(source.getContentType());
         dest.setContentEncoding(source.getContentEncoding());
         dest.setMessageId(source.getMessageId());
@@ -170,16 +268,30 @@ public class DlqReplayService {
         return o == null ? null : o.toString();
     }
 
-    private void recordCounter(String queue, String outcome, int delta) {
+    private void recordCounter(String queue, boolean dryRun, String outcome, int delta) {
         if (delta <= 0) return;
         MeterRegistry registry = meterRegistryProvider.getIfAvailable();
         if (registry == null) return;
         Counter.builder("dlq.replay")
                 .description("Count of DLQ messages by replay outcome")
-                .tags(Tags.of("queue", queue, "outcome", outcome))
+                .tags(Tags.of("queue", queue, "outcome", outcome,
+                        "mode", dryRun ? "dry_run" : "real"))
                 .register(registry)
                 .increment(delta);
     }
 
-    public record ReplayResult(String queue, int replayed, int skipped, List<String> errors) {}
+    public record MessageOrigin(String exchange, String routingKey) {}
+
+    public record ReplayPreview(String originExchange, String originRoutingKey,
+                                String reason, int bodyBytes) {}
+
+    public record ReplayResult(String queue, boolean dryRun, int replayed, int skipped,
+                               List<String> errors, List<ReplayPreview> preview) {}
+
+    /** Thrown when another caller already holds the per-queue replay lock. */
+    public static class ReplayInProgressException extends RuntimeException {
+        public ReplayInProgressException(String queue) {
+            super("DLQ replay already in progress for queue " + queue);
+        }
+    }
 }
