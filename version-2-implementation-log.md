@@ -3886,3 +3886,34 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 2.1 status:** Plan items 1 (`StaleDocumentRecoveryTask`) and 3 (audit outbox replay) **complete**. Remaining 2.1 items (`classification_outbox` reconciler per §6.5, ES reconciliation, Hub pack import retry on `gls.config.changed` failure) untouched — each is its own PR.
 
 **Next:** Phase 2.1 PR4 — pick another 2.1 item. Hub pack import retry is small and self-contained; ES reconciliation is bigger but unblocks a Phase 1 acceptance gate (search verification); `classification_outbox` reconciler depends on the outbox actually existing (need to check whether it's been built yet).
+
+## 2026-04-30 — Phase 2.1 PR4 — `ConfigChangePublisher` retry buffer
+
+**Done:** Closed Phase 2.1 plan item 5 ("Hub pack import retry on `gls.config.changed` failure"). The publisher's previous behaviour on AMQP failure was log-and-drop, with a comment claiming the next mutation would self-heal — true for *that* entity, false for the rest of a multi-entity hub pack import where one publish can fail and silently lose 99 sibling cache invalidations. Added a bounded in-memory retry buffer with a scheduled drain so transient broker outages no longer leave peers serving stale cache for hours.
+
+**Changes:**
+
+- `gls-platform-config/publish/ConfigChangePublisher.java` — refactored the `publish` path: it now delegates to a private `trySend` that returns `boolean` (true if sent, false if AMQP raised). On `false`, the event is enqueued in a bounded `ConcurrentLinkedDeque`. Bounded buffer (default 1024 events, configurable via `gls.platform.config.publisher.retry.buffer-size`) drops the oldest event when full, recording the drop on `config.change.retry.dropped`. Serialisation failures continue to drop without buffering (deterministic — retrying won't help). New `@Scheduled` `flushRetryBuffer()` ticks every 30 s by default (`gls.platform.config.publisher.retry.flush-interval`) and drains the buffer head-first, stopping at the first AMQP failure so a stuck broker doesn't burn through the buffer in one tick. Re-entrancy guarded by an `AtomicBoolean`.
+- `gls-platform-config/autoconfigure/PlatformConfigAutoConfiguration.java` — bean factory updated to inject `ObjectProvider<MeterRegistry>` and the `retry.buffer-size` property; existing callers continue to work unchanged because the publisher's public surface (`publishSingle`, `publishBulk`, `publishMany`, `publish`) is unchanged.
+- `gls-platform-config/test/.../publish/ConfigChangePublisherTest.java` (new) — 10 tests: successful publish doesn't buffer; AMQP failure buffers; flush drains on broker recovery; flush stops at first failure (stuck broker doesn't burn buffer); buffer at cap drops oldest; empty flush is silent no-op; serialisation failure drops without buffering; absent `MeterRegistry` doesn't break; `publishBulk` failure buffers correctly; `publish` with `traceparent` preserved through buffer round-trip.
+
+**Tests:** 29 / 0 in `gls-platform-config` (was 19; +10 new for `ConfigChangePublisherTest`). Reactor green via `./mvnw -DskipTests package`.
+
+**Decisions logged:** None new. Bounded-in-memory-buffer trade-off matches the existing comment in `ConfigChangePublisher`'s class doc (cache invalidation is best-effort, not durable). Stronger durability (Mongo-backed outbox like `audit_outbox`) is the obvious next step but tracked as a follow-up — the in-memory buffer covers the common case (transient broker blip lasting seconds-to-minutes) cleanly.
+
+**Files changed:**
+
+- `backend/gls-platform-config/src/main/java/.../publish/ConfigChangePublisher.java` — modified.
+- `backend/gls-platform-config/src/main/java/.../autoconfigure/PlatformConfigAutoConfiguration.java` — modified.
+- `backend/gls-platform-config/src/test/java/.../publish/ConfigChangePublisherTest.java` — 1 new.
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **Buffer is in-memory.** A pod crash loses the buffered events. For cache-invalidation semantics this is acceptable — the next mutation of the same entity self-heals. For *hub pack imports* specifically, where 100+ entities update in a tight loop, a crash after some have been published could leave peers in an inconsistent cache state. The right fix is a durable `config_change_outbox` collection mirroring the audit-outbox shape; tracked as a Phase 2 follow-up but not gated by it.
+- **No back-pressure on the import side.** When the buffer fills, oldest events are silently dropped. A high-volume import with the broker down for tens of minutes could quietly lose cache invalidations for the early entities. Operators should monitor `config.change.retry.dropped` — non-zero values indicate the buffer cap should be raised or the broker outage investigated.
+- **Hub pack import flow doesn't yet observe the buffer.** The plan wording asked for "retry on `gls.config.changed` failure" which this PR delivers; a stricter interpretation would also wait for the buffer to drain before reporting "import complete" to the operator. That UX polish is deferred.
+
+**Phase 2.1 status:** Plan items 1 (`StaleDocumentRecoveryTask`), 3 (audit outbox replay), and 5 (Hub pack import retry) **complete**. Remaining 2.1 items: `classification_outbox` reconciler per §6.5 (depends on whether `classification_outbox` collection is actually wired yet — needs survey), ES reconciliation job (bigger, unblocks Phase 1 acceptance gate for search verification).
+
+**Next:** Phase 2.1 PR5 — ES reconciliation job, or survey `classification_outbox` first to see if there's a collection to drain. ES reconciliation is the natural pick if the search-side acceptance gate is the priority.
