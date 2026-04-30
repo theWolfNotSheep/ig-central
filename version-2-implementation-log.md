@@ -4055,3 +4055,34 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 2.2 status:** Plan items 1, 4, 5 **complete**. Items 2 (Anthropic 429 / `Retry-After` honoring inside the worker — gated by Spring AI not exposing response headers) and 3 (Ollama unreachable + Anthropic fallback inside the worker — needs inter-backend coordination design) remain. Both are deeper engineering bets relative to the high-leverage items already shipped.
 
 **Next:** Phase 2.3 (backpressure + rate limiting) is the natural progression. Items: per-worker semaphore on in-flight calls (already in place from Phase 1.6 PR4 via `RateLimitGate`); router 429 + `Retry-After` honoring orchestrator-side; Rabbit quorum queues + DLQ wiring; DLQ reprocessing UI hook (data path only, UI in Phase 3). The quorum-queue work is the largest piece — it touches every channel.
+
+## 2026-04-30 — Phase 2.3 PR1 — Quorum-queue opt-in for `gls-app-assembly`
+
+**Done:** First slice of Phase 2.3 plan item 3 ("RabbitMQ quorum queues + DLQ wiring for every channel"). DLQ wiring already existed for every queue declared in `gls-app-assembly`; what's added here is the ability to declare them as quorum queues (Raft-replicated, survives node loss in a multi-node cluster with no message loss) instead of classic. Gated by `gls.rabbit.quorum-queues.enabled` (default `false`) so the change is non-destructive for existing deployments — operators flip the flag during a planned maintenance window with a delete-then-redeploy runbook (RabbitMQ refuses a declaration that contradicts an existing queue's type).
+
+**Why one-module-at-a-time:** There are five `RabbitMqConfig` classes in the codebase (`gls-app-assembly`, `gls-llm-orchestration`, `gls-document-processing`, `gls-indexing-worker`, `gls-governance-enforcement`). Doing all five in one PR risks an inconsistency snowball if any module's queues need different topology tweaks. The `gls-app-assembly` module is the most central (8 queues including the document pipeline + the LLM async path) so it's the biggest leverage point; the other four follow the same pattern in subsequent PRs.
+
+**Changes:**
+
+- `gls-app-assembly/.../config/RabbitMqConfig.java` — new constructor takes `gls.rabbit.quorum-queues.enabled` (default `false`). New package-private `durable(String name)` helper conditionally calls `.quorum()` on the underlying `QueueBuilder`. All 8 queue declarations switched from `QueueBuilder.durable(...)` to `durable(...)` — no other behavioural change. DLQ arguments (`x-dead-letter-exchange`, `x-dead-letter-routing-key`) and durability remain unchanged.
+- `gls-app-assembly/.../config/RabbitMqConfigQuorumTest.java` (new) — 4 tests: classic mode declares no `x-queue-type` argument on any queue; quorum mode marks every queue with `x-queue-type=quorum`; DLQ wiring intact in quorum mode (both document and pipeline DLX paths verified); the package-private `durable` helper returns the right shape per flag.
+
+**Tests:** 103 / 0 in `gls-app-assembly` (was 99; +4 new for `RabbitMqConfigQuorumTest`). Reactor green via `./mvnw -DskipTests package`.
+
+**Decisions logged:** None new. The "default off" stance is the load-bearing decision — a flag default of `true` would silently break every existing deployment on next pod restart since RabbitMQ would refuse declarations that contradict the existing queue type, leaving the worker unable to consume.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/config/RabbitMqConfig.java` — modified (new constructor + helper, all queue declarations updated to use the helper).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/config/RabbitMqConfigQuorumTest.java` — 1 new.
+- Log = 3 files total.
+
+**Open issues / deferred:**
+
+- **Other 4 `RabbitMqConfig` classes still use classic queues unconditionally.** Modules: `gls-llm-orchestration`, `gls-document-processing`, `gls-indexing-worker`, `gls-governance-enforcement`. Same pattern applies — copy the constructor + helper and swap the queue declarations. Tracked as Phase 2.3 PR2-5; can be fan-outed in parallel since each module is independent.
+- **No publisher confirms / mandatory routing.** Quorum queues solve the "consumer-side message loss" half of the resilience picture; the publisher side (drop on a missing exchange / disconnected channel) needs `RabbitTemplate` configured with `setMandatory(true)` + `ConfirmCallback` / `ReturnsCallback`. Tracked as a follow-up; not a regression today (publishes go through best-effort same as before this PR).
+- **Operator runbook for the migration is not in the repo.** The flag change requires deleting each affected queue (`rabbitmqctl delete_queue <name>`) before the redeploy can declare them as quorum. Document this in `docs/runbooks/` (currently doesn't exist).
+
+**Phase 2.3 status:** Plan item 1 (per-worker semaphore on in-flight calls) — already in place from Phase 1.6 PR4 (`RateLimitGate`). Plan item 3 (quorum queues) — first module migrated (5 modules total). Items 2 (router 429 + `Retry-After`) and 4 (DLQ reprocessing data path) untouched.
+
+**Next:** Phase 2.3 PR2 — apply the same quorum-queue pattern to `gls-llm-orchestration` (the second-most-central RabbitMqConfig). Or pivot to plan item 2 (router 429) which is a smaller change but lower priority since the router already falls through to lower tiers on dispatch failure.
