@@ -3349,3 +3349,60 @@ Reactor: `./mvnw clean test -pl gls-app-assembly,gls-indexing-worker -am` — fu
 **Phase 1.11 status:** **all four checkboxes ticked** (consumer + ES write + error handling + cutover). Phase 1.11 complete with the deferrals above; the legacy `ElasticsearchIndexService` can be retired in a future PR once the worker has soaked.
 
 **Next:** Phase 1.12 (`gls-audit-collector`) — Tier 1 + Tier 2 binary, hash-chain WORM, S3 Object Lock backend, OpenSearch hot + S3 cold for Tier 2, every service starts emitting via `gls-platform-audit`. Largest sub-phase remaining in Phase 1.
+
+## 2026-04-30 — Phase 1.12 PR1 — Audit-collector REST contract
+
+**Done:** First PR of Phase 1.12. Lays the REST query + admin contract for `gls-audit-collector`. The async consumer side already exists in `contracts/audit/asyncapi.yaml` (channels `audit.tier1.{eventType}` / `audit.tier2.{eventType}`, operations `consumeAuditTier1` / `consumeAuditTier2`); this PR adds the read surface so the admin UI + ops tooling can integrate against the surface while PR2 wires the greenfield module.
+
+**Discovery — what's already in place:**
+
+- `contracts/audit/asyncapi.yaml` v0.3.0 — Tier 1 / Tier 2 / Tier 3 channel families, with the Tier 1 / Tier 2 publish + consume operations declared.
+- `contracts/audit/event-envelope.schema.json` — full JSON Schema 2020-12 envelope with hash-chain fields (`previousEventHash`), supersession (`supersedes` / `supersededBy`), `metadata`/`content` partition for right-to-erasure, ULID `eventId`, etc.
+- `gls-platform-audit` library (Phase 0.7) — `AuditEmitter`, `OutboxAuditEmitter`, `OutboxRelay`, `Tier1HashTransformer` for publisher-side hash chaining, ShedLock leader-election autoconfig, Micrometer metrics. The publisher half is done.
+
+So Phase 1.12 isn't entirely greenfield — the **collector** (consumer) is what's missing, plus the migration of existing services from `AuditEventRepository.save()` to the library. Adjusting PR plan accordingly.
+
+**Contracts touched:**
+
+- `contracts/audit-collector/{VERSION, CHANGELOG.md, README.md, openapi.yaml}` — new (v0.1.0).
+
+**REST surface:**
+
+- `GET /v1/events?documentId=…&eventType=…&actorService=…&from=…&to=…&pageToken=…&pageSize=…` — search Tier 2 events. Cursor pagination (1–500, default 50). Tier 1 deliberately not searchable here — Tier 1 is for compliance attestation, not free-form search; fetch by id only.
+- `GET /v1/events/{eventId}` — fetch a single event by ULID id. Resolves both Tier 1 + Tier 2 via the collector's id index.
+- `GET /v1/chains/{resourceType}/{resourceId}/verify` — Tier 1 per-resource hash-chain verification (CSV #4). Walks oldest → newest, recomputes the chain, returns either `OK` + `eventsTraversed` or `BROKEN` + `brokenAtEventId` + `expectedPreviousHash` / `computedPreviousHash` mismatch detail.
+- `GET /v1/capabilities`, `GET /actuator/health` — standard meta surface.
+
+**Why no `POST /v1/events`:**
+
+The write path is exclusively async. Producers emit via `gls-platform-audit`'s `AuditEmitter` → `audit_outbox` → relay → Rabbit. A REST POST would create a second emit path that bypasses the outbox guarantees and breaks the "single emitter" rule (CLAUDE.md "Audit Relay Pattern" — "Never bypass the outbox. No direct AMQP publishes from service code for audit traffic.").
+
+**Why Tier 1 is fetch-by-id only, not searchable:**
+
+Tier 1 is the compliance audit-of-record. Search-friendly indexing (categoryId, eventType filters across the full corpus) is a Tier 2 concern. Tier 1 access patterns are: (a) fetch a known event by id during attestation, and (b) walk the hash chain for a specific resource. Both are O(log n) with simple indices; full-text search would complicate the WORM-write path.
+
+**Error envelope:**
+
+- `404 AUDIT_EVENT_NOT_FOUND` — event id doesn't resolve in either tier.
+- `404 AUDIT_RESOURCE_NOT_FOUND` — chain verify against a resource with no Tier 1 events.
+- `422 AUDIT_QUERY_INVALID` — list query failed validation (e.g. `from > to`).
+- `503 AUDIT_BACKEND_UNAVAILABLE` — Tier 1 / Tier 2 store unreachable.
+- Standard `4XX` / `5XX` catch-alls via shared envelope.
+
+**Spectral lint:** clean (`No results with a severity of 'error' found!`).
+
+**Decisions logged:** None new. Mirrors established CSV #17 (RFC 7807) / #18 (JWT) / #20 (traceparent) / #21 (capabilities) patterns.
+
+**Files changed:**
+
+- `contracts/audit-collector/{VERSION, CHANGELOG.md, README.md, openapi.yaml}` — 4 new.
+- Plan + log = 6 files total.
+
+**Open issues / deferred:**
+
+- **Tier 2 multi-`eventType` filter.** PR1 takes a single `eventType`. Real ops queries often want to OR multiple — bump to `eventType[]` in a 0.2.0 spec rev once the implementation is exercised.
+- **Async chain verify.** `GET /v1/chains/.../verify` is synchronous; large chains will need a job-store-backed async surface (mirroring the indexing-worker reindex pattern) in a future revision.
+- **Service-account JWT** — contract declares it but no validator wired yet (Phase 0.5 deferral).
+- **AsyncAPI `audit/asyncapi.yaml` info.version drift.** The file's `info.version: 0.2.0` is older than the on-disk `VERSION: 0.3.0`. Cosmetic but should reconcile in a small follow-up.
+
+**Next:** Phase 1.12 PR2 — greenfield `gls-audit-collector` Maven module: Spring Boot entry, two `@RabbitListener`s (Tier 1 + Tier 2), JobStore mirror, hash-chain consumer-side validation, Mongo backends initially (real backends in PR3 / PR4), Dockerfile + compose entry. Tests lifted from the indexing-worker pattern.

@@ -325,11 +325,11 @@ Per CSV #2 (DECIDED hybrid).
 
 ### 1.12 `gls-audit-collector` (Tier 1 + Tier 2)
 
-- [ ] Single binary with two roles (Class D singleton for Tier 1, Class B horizontal for Tier 2).
-- [ ] Hash-chain implementation for Tier 1 with per-resource chains (per CSV #4).
-- [ ] Tier 1 backend: external WORM (per CSV #3) — e.g. S3 Object Lock or Mongo append-only with role-based deny.
-- [ ] Tier 2 backend: OpenSearch hot + S3 cold via ILM.
-- [ ] Existing services begin emitting via `gls-platform-audit` library.
+- [ ] Single binary with two roles (Class D singleton for Tier 1, Class B horizontal for Tier 2). Phase 1.12 PR1: REST contract scaffolded under `contracts/audit-collector/openapi.yaml` v0.1.0 — `GET /v1/events` (Tier 2 search, cursor pagination), `GET /v1/events/{eventId}` (single fetch, both tiers), `GET /v1/chains/{resourceType}/{resourceId}/verify` (Tier 1 hash-chain integrity), `GET /v1/capabilities`, `/actuator/health`. The async consumer side already exists in `contracts/audit/asyncapi.yaml` (operations `consumeAuditTier1` / `consumeAuditTier2`). PR2 wires the greenfield module against this surface.
+- [ ] Hash-chain implementation for Tier 1 with per-resource chains (per CSV #4). Publisher-side (`Tier1HashTransformer` in `gls-platform-audit`) already done in Phase 0.7. PR2 lands the consumer-side validation; PR1 contracted the verification endpoint.
+- [ ] Tier 1 backend: external WORM (per CSV #3) — e.g. S3 Object Lock or Mongo append-only with role-based deny. PR4 ships the Mongo first-cut (append-only via app-layer enforcement + role-based-deny on the collection); S3 Object Lock swap is a follow-up.
+- [ ] Tier 2 backend: OpenSearch hot + S3 cold via ILM. PR3 wires Elasticsearch (already in the stack) as the operational store; OpenSearch + S3 ILM is a follow-up.
+- [ ] Existing services begin emitting via `gls-platform-audit` library. PR5+ migrates services one-by-one from the legacy `AuditEventRepository.save()` calls.
 
 ### 1.13 Connectors family review
 

@@ -1,0 +1,413 @@
+openapi: 3.1.1
+info:
+  title: ig-central — Audit Collector
+  version: 0.1.0
+  contact:
+    name: ig-central engineering
+    url: https://github.com/theWolfNotSheep/ig-central
+  description: |
+    REST query + admin surface for `gls-audit-collector`. The write
+    path is exclusively async (consumes `audit.tier1.*` and
+    `audit.tier2.*` from RabbitMQ — see
+    `contracts/audit/asyncapi.yaml`). This document covers the read
+    surface that the admin UI + ops tooling depend on.
+
+    **Phase 1.12 first cut.** PR1 ships the contract; PR2 builds the
+    greenfield collector module against it; PR3 / PR4 wire the real
+    Tier 2 / Tier 1 backends; PR5+ migrates existing services from
+    the legacy `AuditEventRepository` to emit via `gls-platform-audit`.
+
+    **Conventions referenced from `_shared/`:**
+    - Error envelope (RFC 7807 + extensions) — CSV #17.
+    - Service-account JWT — CSV #18.
+    - `traceparent` header — CSV #20.
+    - `Capabilities` shape — CSV #21.
+
+servers:
+  - url: http://gls-audit-collector:8080
+    description: Internal Docker Compose hostname.
+  - url: http://localhost:8099
+    description: Local dev (override).
+
+tags:
+  - name: events
+    description: Query stored audit events.
+  - name: chains
+    description: Tier 1 per-resource hash-chain verification.
+  - name: meta
+    description: Capabilities + health.
+
+security:
+  - serviceJwt: []
+
+paths:
+  /v1/events:
+    get:
+      operationId: listEvents
+      tags: [events]
+      summary: Search Tier 2 events.
+      description: |
+        Returns a cursor-paginated list of Tier 2 (operational)
+        events matching the supplied filters. All filters are AND-ed.
+        Tier 1 events are not returned by this endpoint — fetch them
+        individually via `GET /v1/events/{eventId}` once the id is
+        known (Tier 1 is meant for compliance attestation, not
+        free-form search).
+
+        **Pagination.** Caller passes `pageToken` (omit on first call)
+        and `pageSize` (1–500, default 50). Response carries
+        `nextPageToken` when more pages exist; absence signals the
+        last page.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - name: documentId
+          in: query
+          schema:
+            type: string
+            maxLength: 64
+        - name: eventType
+          in: query
+          schema:
+            type: string
+            maxLength: 64
+            description: |
+              Single event family identifier (e.g.
+              `MCP_TOOL_CALLED`). Future revs may take a list.
+        - name: actorService
+          in: query
+          schema:
+            type: string
+            maxLength: 64
+            description: Filter by `actor.service` (e.g. `gls-classifier-router`).
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+            description: Inclusive lower bound on `timestamp`.
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+            description: Exclusive upper bound on `timestamp`.
+        - name: pageToken
+          in: query
+          schema:
+            type: string
+            maxLength: 256
+            description: Opaque cursor returned by a prior page.
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+      responses:
+        '200':
+          description: Page of matching events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventListResponse'
+        '422':
+          description: |
+            Invalid query (e.g. `from` after `to`). Returned with
+            `code=AUDIT_QUERY_INVALID`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '503':
+          description: |
+            Tier 2 backend unreachable. Returned with
+            `code=AUDIT_BACKEND_UNAVAILABLE`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/events/{eventId}:
+    get:
+      operationId: getEvent
+      tags: [events]
+      summary: Fetch a single audit event by id.
+      description: |
+        Resolves an event from either the Tier 1 or Tier 2 backend
+        — the collector maintains a small id-to-tier index so the
+        caller doesn't need to know which store holds it.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - name: eventId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+            description: ULID per `event-envelope.schema.json`.
+      responses:
+        '200':
+          description: The event envelope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEvent'
+        '404':
+          description: |
+            No event with this id. Returned with
+            `code=AUDIT_EVENT_NOT_FOUND`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '503':
+          description: |
+            Tier 1 / Tier 2 backend unreachable. Returned with
+            `code=AUDIT_BACKEND_UNAVAILABLE`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '4XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+        '5XX':
+          $ref: '../_shared/error-envelope.yaml#/components/responses/Error'
+
+  /v1/chains/{resourceType}/{resourceId}/verify:
+    get:
+      operationId: verifyChain
+      tags: [chains]
+      summary: Verify a Tier 1 per-resource hash chain.
+      description: |
+        Walks the per-resource hash chain (CSV #4) from oldest to
+        newest, recomputes the hash sequence, and returns either
+        `OK` + the count of events traversed, or `BROKEN` + the
+        offending event id and the hash mismatch detail.
+
+        Long-running: the response is synchronous; backends with
+        many events should expect proportional latency. A future
+        revision may move bulk verification to an async job
+        surface.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - name: resourceType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [DOCUMENT, BLOCK, USER, PIPELINE_RUN, POLICY, CATEGORY, RETENTION_SCHEDULE]
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+      responses:
+        '200':
+          description: Verification result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChainVerifyResponse'
+        '404':
+          description: |
+            No Tier 1 events recorded for this resource. Returned
+            with `code=AUDIT_RESOURCE_NOT_FOUND`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '503':
+          description: |
+            Tier 1 backend unreachable. Returned with
+            `code=AUDIT_BACKEND_UNAVAILABLE`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      tags: [meta]
+      summary: Service capability advertisement.
+      description: |
+        Standard `Capabilities` shape (CSV #21). Reports the
+        configured Tier 1 / Tier 2 backends + the worker's role
+        (Tier 1 leader vs Tier 2 follower) so ops tooling can
+        understand which collector replica is which.
+      responses:
+        '200':
+          description: Capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: '../_shared/capabilities.yaml#/components/schemas/Capabilities'
+
+  /actuator/health:
+    get:
+      operationId: getHealth
+      tags: [meta]
+      summary: Liveness + readiness probe.
+      description: |
+        Liveness reflects process state. Readiness flips UP only
+        when RabbitMQ + the configured Tier 1 / Tier 2 backends are
+        reachable.
+      security: []
+      responses:
+        '200':
+          description: Up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Not ready (Rabbit / Tier 1 / Tier 2 backend unreachable).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    EventListResponse:
+      type: object
+      required: [events]
+      additionalProperties: false
+      properties:
+        events:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        nextPageToken:
+          type: string
+          maxLength: 256
+          description: |
+            Opaque cursor for the next page. Absent when this is the
+            last page.
+
+    AuditEvent:
+      type: object
+      additionalProperties: true
+      description: |
+        Audit event envelope. Schema authoritatively defined in
+        `contracts/audit/event-envelope.schema.json` (JSON Schema
+        2020-12). The OpenAPI representation is intentionally
+        permissive (`additionalProperties: true`) — clients that
+        need the full structural validation should consume the
+        canonical JSON Schema directly. Required fields per the
+        canonical schema are mirrored here so generated clients have
+        the same compile-time shape.
+      required:
+        - eventId
+        - eventType
+        - tier
+        - schemaVersion
+        - timestamp
+        - actor
+        - action
+        - outcome
+      properties:
+        eventId:
+          type: string
+          pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+        eventType:
+          type: string
+          maxLength: 64
+        tier:
+          type: string
+          enum: [DOMAIN, SYSTEM]
+        schemaVersion:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        actor:
+          type: object
+          additionalProperties: true
+        action:
+          type: string
+          maxLength: 64
+        outcome:
+          type: string
+          enum: [SUCCESS, FAILURE, PARTIAL]
+        documentId:
+          type: string
+        pipelineRunId:
+          type: string
+        nodeRunId:
+          type: string
+        traceparent:
+          type: string
+        resource:
+          type: object
+          additionalProperties: true
+        details:
+          type: object
+          additionalProperties: true
+        retentionClass:
+          type: string
+        previousEventHash:
+          type: string
+
+    ChainVerifyResponse:
+      type: object
+      required: [resourceType, resourceId, status, eventsTraversed]
+      additionalProperties: false
+      properties:
+        resourceType:
+          type: string
+          enum: [DOCUMENT, BLOCK, USER, PIPELINE_RUN, POLICY, CATEGORY, RETENTION_SCHEDULE]
+        resourceId:
+          type: string
+          maxLength: 128
+        status:
+          type: string
+          enum: [OK, BROKEN]
+        eventsTraversed:
+          type: integer
+          minimum: 0
+        firstEventId:
+          type: string
+          pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+        lastEventId:
+          type: string
+          pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+        brokenAtEventId:
+          type: string
+          pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+          description: Populated when `status=BROKEN`.
+        expectedPreviousHash:
+          type: string
+          description: |
+            What the broken event recorded as `previousEventHash`.
+        computedPreviousHash:
+          type: string
+          description: |
+            What the collector recomputed from the prior event in the
+            chain. A mismatch here is the integrity violation.
+        durationMs:
+          type: integer
+          minimum: 0
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [UP, DOWN, OUT_OF_SERVICE, UNKNOWN]
+        components:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    serviceJwt:
+      $ref: '../_shared/security-schemes.yaml#/components/securitySchemes/serviceJwt'
