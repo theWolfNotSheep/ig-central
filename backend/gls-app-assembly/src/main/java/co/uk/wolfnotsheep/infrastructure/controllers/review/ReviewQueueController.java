@@ -17,7 +17,9 @@ import co.uk.wolfnotsheep.governance.repositories.BlockFeedbackRepository;
 import co.uk.wolfnotsheep.governance.repositories.ClassificationCategoryRepository;
 import co.uk.wolfnotsheep.governance.repositories.PipelineBlockRepository;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
+import co.uk.wolfnotsheep.infrastructure.audit.PlatformAuditEmitter;
 import co.uk.wolfnotsheep.infrastructure.services.BertTrainingDataCollector;
+import co.uk.wolfnotsheep.platformaudit.envelope.Outcome;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
@@ -44,6 +46,7 @@ public class ReviewQueueController {
     private final PipelineBlockRepository blockRepo;
     private final ClassificationCategoryRepository categoryRepo;
     private final BertTrainingDataCollector bertCollector;
+    private final PlatformAuditEmitter platformAudit;
 
     public ReviewQueueController(DocumentService documentService,
                                  GovernanceService governanceService,
@@ -51,13 +54,15 @@ public class ReviewQueueController {
                                  BlockFeedbackRepository blockFeedbackRepo,
                                  PipelineBlockRepository blockRepo,
                                  ClassificationCategoryRepository categoryRepo,
-                                 BertTrainingDataCollector bertCollector) {
+                                 BertTrainingDataCollector bertCollector,
+                                 PlatformAuditEmitter platformAudit) {
         this.documentService = documentService;
         this.governanceService = governanceService;
         this.auditEventRepository = auditEventRepository;
         this.blockFeedbackRepo = blockFeedbackRepo;
         this.blockRepo = blockRepo;
         this.categoryRepo = categoryRepo;
+        this.platformAudit = platformAudit;
         this.bertCollector = bertCollector;
     }
 
@@ -121,6 +126,9 @@ public class ReviewQueueController {
                 documentId, "CLASSIFICATION_APPROVED", user.getUsername(), "USER",
                 Map.of("action", "approve")
         ));
+        platformAudit.emitUserAction(documentId, "CLASSIFICATION_APPROVED", "APPROVE_CLASSIFICATION",
+                user.getUsername(), Outcome.SUCCESS,
+                Map.of("action", "approve"), null);
 
         return ResponseEntity.ok(doc);
     }
@@ -244,6 +252,11 @@ public class ReviewQueueController {
                         "reason", request.reason()
                 )
         ));
+        platformAudit.emitUserAction(documentId, "CLASSIFICATION_OVERRIDDEN", "OVERRIDE_CATEGORY",
+                user.getUsername(), Outcome.SUCCESS,
+                Map.of("newCategory", request.categoryName(),
+                        "newSensitivity", request.sensitivityLabel().name()),
+                Map.of("reason", request.reason() == null ? "" : request.reason()));
 
         return ResponseEntity.ok(doc);
     }
@@ -267,6 +280,9 @@ public class ReviewQueueController {
                 documentId, "CLASSIFICATION_REJECTED", user.getUsername(), "USER",
                 Map.of("reason", body.getOrDefault("reason", ""))
         ));
+        platformAudit.emitUserAction(documentId, "CLASSIFICATION_REJECTED", "REJECT_CLASSIFICATION",
+                user.getUsername(), Outcome.SUCCESS, Map.of(),
+                Map.of("reason", body.getOrDefault("reason", "")));
 
         return ResponseEntity.ok(doc);
     }
@@ -333,6 +349,9 @@ public class ReviewQueueController {
                 documentId, "PII_REPORTED", user.getUsername(), "USER",
                 Map.of("piiCount", String.valueOf(request.piiItems().size()))
         ));
+        platformAudit.emitUserAction(documentId, "PII_REPORTED", "REPORT_PII",
+                user.getUsername(), Outcome.SUCCESS,
+                Map.of("piiCount", request.piiItems().size()), null);
 
         return ResponseEntity.ok(saved);
     }

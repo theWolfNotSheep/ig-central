@@ -30,6 +30,11 @@
         </dependency>
 
         <dependency>
+            <groupId>co.uk.wolfnotsheep.platformaudit</groupId>
+            <artifactId>gls-platform-audit</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>co.uk.wolfnotsheep.document</groupId>
             <artifactId>gls-document</artifactId>
         </dependency>
