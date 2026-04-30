@@ -3917,3 +3917,36 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 2.1 status:** Plan items 1 (`StaleDocumentRecoveryTask`), 3 (audit outbox replay), and 5 (Hub pack import retry) **complete**. Remaining 2.1 items: `classification_outbox` reconciler per §6.5 (depends on whether `classification_outbox` collection is actually wired yet — needs survey), ES reconciliation job (bigger, unblocks Phase 1 acceptance gate for search verification).
 
 **Next:** Phase 2.1 PR5 — ES reconciliation job, or survey `classification_outbox` first to see if there's a collection to drain. ES reconciliation is the natural pick if the search-side acceptance gate is the priority.
+
+## 2026-04-30 — Phase 2.1 PR5 — ES reconciliation task
+
+**Done:** Closed Phase 2.1 plan item 4 ("ES reconciliation job: rebuild ES from Mongo if index is corrupted or behind"). Surveyed: `classification_outbox` (plan item 2) doesn't exist yet — it's tied to a §6.5 architecture component that hasn't been built, so skipped to ES reconciliation. The new `IndexReconciliationTask` runs daily by default, compares Mongo's non-DISPOSED document count against ES's `_count`, and surfaces drift as both metrics and logs. Auto-fix (calling the existing `IndexingService.reindexAll`) is gated behind `gls.indexing.reconciliation.auto-fix=true` (default off) to avoid heavy unsupervised rebuilds during a real incident.
+
+**Why split observe + auto-fix as separate behaviours:** The plan wording says "rebuild ES from Mongo if index is corrupted or behind" which implies auto-rebuild. But auto-rebuild on every detected delta is dangerous — could cascade during a real incident (e.g. ES briefly unavailable → reconciliation fires → reindexAll fails partway → next reconciliation fires → etc). Default-off auto-fix gives operators an explicit "I trust this" knob. Even off, the metrics + WARN logs make drift visible.
+
+**Changes:**
+
+- `gls-indexing-worker/service/IndexReconciliationTask.java` (new) — `@Scheduled` daily (override via `gls.indexing.reconciliation.interval`, e.g. `PT1H`). Surveys `mongoCount = documentRepo.count() - countByStatus(DISPOSED)` and `esCount = GET /ig_central_documents/_count`. Records gauges `index.reconciliation.mongo.count` and `index.reconciliation.es.count` plus a tagged counter `index.reconciliation.runs{outcome=clean|drift|error}`. When delta > `gls.indexing.reconciliation.drift-threshold` (default 10) and `auto-fix=true` and ES is behind (positive delta), calls `IndexingService.reindexAll(null)` and bumps `index.reconciliation.fixes_triggered`. Negative delta (ES has stragglers) logs loudly but never auto-deletes — pruning is a separate lifecycle concern.
+- `gls-indexing-worker/GlsIndexingWorkerApplication.java` — added `@EnableScheduling` so the new `@Scheduled` method actually ticks. The existing `@EnableAsync` covers the unrelated `AsyncDispatcher` flow.
+- `gls-indexing-worker/test/.../service/IndexReconciliationTaskTest.java` (new) — 10 tests: ES `_count` parser handles well-formed JSON / malformed input / missing field; clean state → `clean` outcome counter; drift above threshold without auto-fix → `drift` counter only; positive drift with auto-fix → `reindexAll` called + `fixes_triggered` ticks; negative drift with auto-fix → no reindex (pruning not implemented); reindex throwing during auto-fix is caught + logged + counter NOT bumped; `surveyOnce` calls `count() - countByStatus(DISPOSED)` for the Mongo total; delta exactly at threshold treated as clean (not drift); absent `MeterRegistry` doesn't break.
+
+**Tests:** 34 / 0 in `gls-indexing-worker` (was 24; +10 new for `IndexReconciliationTaskTest`). Reactor green via `./mvnw -DskipTests package`.
+
+**Decisions logged:** None new. The auto-fix-default-off stance is explained in the class JavaDoc — operators flip the flag once they're comfortable.
+
+**Files changed:**
+
+- `backend/gls-indexing-worker/src/main/java/.../indexing/service/IndexReconciliationTask.java` — 1 new.
+- `backend/gls-indexing-worker/src/main/java/.../indexing/GlsIndexingWorkerApplication.java` — modified (added `@EnableScheduling`).
+- `backend/gls-indexing-worker/src/test/java/.../indexing/service/IndexReconciliationTaskTest.java` — 1 new.
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **Count-based drift detection misses content drift.** Two indexes with the same count can still disagree on document content (e.g. tags / extractedMetadata changes that never reached ES). Detecting that requires either embedding `updatedAt` in the ES document and comparing per-doc, or hashing a subset of fields and comparing. Useful follow-up but not in scope here — count drift is the most common failure mode (ingestion path failed for a batch, ES went down mid-burst).
+- **No per-document delta repair.** When drift is detected, auto-fix runs `reindexAll` (the full nuclear option). A scoped delta — query Mongo for non-DISPOSED IDs, query ES for the same IDs in batches, reindex only the missing — would be much cheaper for large indexes with small drift. Tracked as a Phase 2 follow-up; gated on having a use case where full reindex is too heavy.
+- **No auto-prune for negative drift.** If ES has documents that Mongo doesn't (deletes that didn't propagate), reconciliation logs but doesn't fix. Auto-deleting from ES based on "absence in Mongo" is risky if Mongo is the one that's behind temporarily. Pruning is a separate operator-driven action.
+
+**Phase 2.1 status:** Plan items 1, 3, 4, 5 **complete**. Remaining: `classification_outbox` reconciler — depends on the outbox collection actually existing (it doesn't yet). When the §6.5 component lands, the reconciler is a small follow-up.
+
+**Next:** Either move to Phase 2.2 (vendor / external API resilience — Anthropic circuit breaker, Ollama fallback, MCP unreachable handling, cost budget enforcement), or tackle the `classification_outbox` workstream by first building the outbox itself. Phase 2.2 is the natural progression.
