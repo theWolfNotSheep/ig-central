@@ -8,8 +8,10 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -64,8 +66,12 @@ public class PlatformConfigAutoConfiguration {
     public ConfigChangePublisher configChangePublisher(
             RabbitTemplate rabbitTemplate,
             ObjectMapper platformConfigObjectMapper,
-            @Value("${spring.application.name:unknown}") String actor) {
-        return new ConfigChangePublisher(rabbitTemplate, platformConfigObjectMapper, actor);
+            @Value("${spring.application.name:unknown}") String actor,
+            ObjectProvider<MeterRegistry> meterRegistryProvider,
+            @Value("${gls.platform.config.publisher.retry.buffer-size:1024}") int retryBufferSize) {
+        return new ConfigChangePublisher(
+                rabbitTemplate, platformConfigObjectMapper, actor,
+                meterRegistryProvider, retryBufferSize);
     }
 
     @Bean
