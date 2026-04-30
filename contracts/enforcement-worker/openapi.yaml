@@ -338,10 +338,28 @@ components:
           maxLength: 256
         retentionTrigger:
           type: string
-          enum: [CREATION, CLASSIFICATION, EVENT_BASED, MANUAL_REVIEW]
+          description: |
+            Mirrors `ClassificationCategory.RetentionTrigger` in the
+            canonical Java model.
+          enum:
+            - DATE_CREATED
+            - DATE_LAST_MODIFIED
+            - DATE_CLOSED
+            - EVENT_BASED
+            - END_OF_FINANCIAL_YEAR
+            - SUPERSEDED
         expectedDispositionAction:
           type: string
-          enum: [DESTROY, ARCHIVE, REVIEW, TRANSFER]
+          description: |
+            Mirrors `RetentionSchedule.DispositionAction` in the
+            canonical Java model.
+          enum:
+            - DELETE
+            - ARCHIVE
+            - TRANSFER
+            - REVIEW
+            - ANONYMISE
+            - PERMANENT
         storageTierBefore:
           type: string
           maxLength: 64

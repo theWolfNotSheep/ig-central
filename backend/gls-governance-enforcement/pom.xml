@@ -13,7 +13,7 @@
     <groupId>co.uk.wolfnotsheep.enforcement</groupId>
     <artifactId>gls-governance-enforcement</artifactId>
     <name>GLS Governance Enforcement</name>
-    <description>Governance enforcement worker — applies policies, retention, storage tier migration post-classification</description>
+    <description>Governance enforcement worker — applies policies, retention, storage tier migration post-classification. Phase 1.10 contract surface lives at contracts/enforcement-worker/openapi.yaml.</description>
 
     <dependencies>
 
@@ -47,6 +47,19 @@
             <artifactId>spring-boot-starter-amqp</artifactId>
         </dependency>
 
+        <!-- ==================== Validation ==================== -->
+
+        <dependency>
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-annotations</artifactId>
+            <version>2.2.30</version>
+        </dependency>
+
     </dependencies>
 
     <build>
@@ -68,6 +81,36 @@
                         </goals>
                         <configuration>
                             <classifier>exec</classifier>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.openapitools</groupId>
+                <artifactId>openapi-generator-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>generate-enforcement-worker-stub</id>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${project.basedir}/../../contracts/enforcement-worker/openapi.yaml</inputSpec>
+                            <generatorName>spring</generatorName>
+                            <output>${project.build.directory}/generated-sources/openapi</output>
+                            <apiPackage>co.uk.wolfnotsheep.enforcement.api</apiPackage>
+                            <modelPackage>co.uk.wolfnotsheep.enforcement.model</modelPackage>
+                            <invokerPackage>co.uk.wolfnotsheep.enforcement.invoker</invokerPackage>
+                            <configOptions>
+                                <interfaceOnly>true</interfaceOnly>
+                                <useSpringBoot3>true</useSpringBoot3>
+                                <useJakartaEe>true</useJakartaEe>
+                                <skipDefaultInterface>true</skipDefaultInterface>
+                                <openApiNullable>false</openApiNullable>
+                                <hideGenerationTimestamp>true</hideGenerationTimestamp>
+                                <useTags>true</useTags>
+                            </configOptions>
                         </configuration>
                     </execution>
                 </executions>

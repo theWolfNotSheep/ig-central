@@ -6,6 +6,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 (Entries land alongside the PRs that touch the spec.)
 
+## [0.2.0] — 2026-04-29
+
+### Changed
+
+- `AppliedSummary.retentionTrigger` enum aligned with the canonical
+  Java `ClassificationCategory.RetentionTrigger` values
+  (`DATE_CREATED`, `DATE_LAST_MODIFIED`, `DATE_CLOSED`, `EVENT_BASED`,
+  `END_OF_FINANCIAL_YEAR`, `SUPERSEDED`). PR1 used aspirational
+  values that didn't exist in the codebase.
+- `AppliedSummary.expectedDispositionAction` enum aligned with the
+  canonical Java `RetentionSchedule.DispositionAction` values
+  (`DELETE`, `ARCHIVE`, `TRANSFER`, `REVIEW`, `ANONYMISE`,
+  `PERMANENT`).
+
+Both changes are technically breaking, but the contract has no live
+consumers yet (Phase 1.10 PR2 is the first implementation). Major
+version bump deferred to 1.0.0 when the surface stabilises.
+
 ## [0.1.0] — 2026-04-29
 
 ### Added
