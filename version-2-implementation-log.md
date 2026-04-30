@@ -3755,3 +3755,36 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 1 closeout status:** 1 of 2 actionable closeout items done. Next: PerSourceLock metrics (Phase 1.13 deferral). Other deferrals (admin UI cutover, full pipelineRunId propagation, ULID library, JWT/JWKS validation, Phase 1 acceptance gates) remain blocked on external work / Phase 0.11 loadgen.
 
 **Next:** Phase 1 closeout PR2 — add Micrometer counters to `PerSourceLock` so Drive/Gmail polling skip-rate is observable.
+
+## 2026-04-30 — Phase 1 closeout PR2 — `PerSourceLock` metrics
+
+**Done:** Resolved the "no metrics on lock acquisition" deferral from Phase 1.13 PR1's open-issues list. `PerSourceLock` now emits Micrometer counters on every `withLock` call so Drive/Gmail polling skip-rate is observable in real workloads — the missing telemetry that the deferred lock-duration tuning will need.
+
+**Changes:**
+
+- `infrastructure/services/connectors/PerSourceLock.java` — constructor takes a second `ObjectProvider<MeterRegistry>` parameter (optional via `getIfAvailable`). On every call: derives `source` from the lock-name prefix (`drive-poll-...` → `drive`, `gmail-poll-...` → `gmail`, fallback `unknown`) and increments either `connector.lock.acquired{source=...}` (lock acquired or single-replica fall-through) or `connector.lock.skipped{source=...}` (another replica holds it). Source cardinality is bounded; the high-cardinality lock-name itself is intentionally not tagged. Public `withLock` signature unchanged — the two existing call sites (`GoogleDriveFolderMonitor`, `GmailPollingScheduler`) compile and run as before.
+- `PerSourceLockTest` — switched from no-metrics-aware mocks to a real `SimpleMeterRegistry`. Existing 5 tests extended with counter assertions. Added 2 new tests: `absent_MeterRegistry_does_not_break_lock_acquisition` (proves the optional injection works), `source_extraction_falls_back_to_unknown_for_unconventional_names` (covers null / empty / no-dash / leading-dash inputs to `sourceOf`).
+
+**Tests:** 86 / 0 in `gls-app-assembly` (was 84; +2 new for `PerSourceLockTest`). Reactor green.
+
+**Decisions logged:** None new. The metrics namespace (`connector.lock.*`) and the `source` tag matches the wording in the PR1 deferral.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/connectors/PerSourceLock.java` — modified.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/connectors/PerSourceLockTest.java` — modified (2 new tests; existing 5 extended).
+- Log = 3 files total.
+
+**Open issues / deferred:**
+
+- **Lock-duration tuning still pending.** Same deferral as PR1; the metrics added here are the prerequisite. With `connector.lock.skipped{source}` visible in dashboards, operators can pick lock-at-most-for windows that minimise skip-rate without risking double-processing.
+- **No timer for action runtime under lock.** Useful telemetry once tuning starts: `connector.lock.action.duration{source}` would give a real histogram. Not added here to keep PR small; layer on once the counter shape proves out.
+
+**Phase 1 closeout status:** 2 of 2 actionable items done. Other Phase 1 deferrals remain blocked on external work:
+- Legacy `auditEventRepository.save(...)` cleanup → blocked on admin UI cutover to collector REST surface.
+- `AuditInterceptor` + `AuditLogController` migration → same gating.
+- Real ULID library (vs SecureRandom-only) → blocked on library selection / addition to platform.
+- `pipelineRunId` / `nodeRunId` / `traceparent` propagation → blocked on request-scoped beans being threaded through controllers + services.
+- Phase 1 acceptance gates (end-to-end happy path test, 10%-of-baseline perf check, audit Tier 1 verification, hub pack import propagation, cost-per-document recording) → blocked on Phase 0.11's load driver having representative content.
+
+**Next:** Phase 2 (system-wide resilience) is the natural next step now that Phase 1's actionable closeout is done. ~15-25 PRs estimated covering recovery jobs, vendor circuit breakers, backpressure / rate limits, quorum queues + DLQ wiring.
