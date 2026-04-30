@@ -5,6 +5,7 @@ import co.uk.wolfnotsheep.document.repositories.DocumentRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -101,6 +102,9 @@ public class IndexReconciliationTask {
     @Scheduled(
             fixedDelayString = "${gls.indexing.reconciliation.interval:PT24H}",
             initialDelayString = "${gls.indexing.reconciliation.initial-delay:PT5M}")
+    @SchedulerLock(name = "index-reconciliation",
+            lockAtMostFor = "${gls.indexing.reconciliation.lock-at-most-for:PT30M}",
+            lockAtLeastFor = "${gls.indexing.reconciliation.lock-at-least-for:PT0S}")
     public void reconcileIndex() {
         try {
             ensureGaugesRegistered();
