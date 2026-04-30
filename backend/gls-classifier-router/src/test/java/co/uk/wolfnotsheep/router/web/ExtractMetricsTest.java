@@ -63,4 +63,50 @@ class ExtractMetricsTest {
                 .tag("tier", "unknown").counter().count())
                 .isEqualTo(100.0);
     }
+
+    @Test
+    void recordCascadeSteps_records_distribution() {
+        metrics.recordCascadeSteps(1);
+        metrics.recordCascadeSteps(2);
+        metrics.recordCascadeSteps(3);
+
+        var summary = registry.find("gls_router_classify_cascade_steps").summary();
+        assertThat(summary).isNotNull();
+        assertThat(summary.count()).isEqualTo(3);
+        assertThat(summary.mean()).isEqualTo(2.0);
+    }
+
+    @Test
+    void recordCascadeSteps_skips_negative() {
+        metrics.recordCascadeSteps(-1);
+
+        assertThat(registry.find("gls_router_classify_cascade_steps").summary()).isNull();
+    }
+
+    @Test
+    void recordTierStepDuration_tags_tier_and_accepted() {
+        metrics.recordTierStepDuration("BERT", false, 12);
+        metrics.recordTierStepDuration("BERT", false, 8);
+        metrics.recordTierStepDuration("LLM", true, 250);
+
+        var bertFallthrough = registry.get("gls_router_classify_tier_step_duration_seconds")
+                .tags("tier", "bert", "accepted", "false").timer();
+        assertThat(bertFallthrough.count()).isEqualTo(2);
+        assertThat(bertFallthrough.totalTime(java.util.concurrent.TimeUnit.MILLISECONDS))
+                .isEqualTo(20.0);
+
+        var llmAccepted = registry.get("gls_router_classify_tier_step_duration_seconds")
+                .tags("tier", "llm", "accepted", "true").timer();
+        assertThat(llmAccepted.count()).isEqualTo(1);
+        assertThat(llmAccepted.totalTime(java.util.concurrent.TimeUnit.MILLISECONDS))
+                .isEqualTo(250.0);
+    }
+
+    @Test
+    void recordTierStepDuration_skips_negative_duration() {
+        metrics.recordTierStepDuration("BERT", true, -1);
+
+        assertThat(registry.find("gls_router_classify_tier_step_duration_seconds").timer())
+                .isNull();
+    }
 }
