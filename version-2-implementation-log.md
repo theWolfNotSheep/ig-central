@@ -4264,3 +4264,39 @@ Reactor green via `./mvnw -DskipTests package`.
 **Phase 2.3 status:** **all 4 plan items complete** with PR-C (rate-limit) + PR-D (DLQ replay).
 
 **Next:** Phase 2 substantially complete across this session. Remaining gaps: 2.1 `classification_outbox` reconciler (blocked on §6.5), 2.2 Anthropic 429 honoring / Ollama+Anthropic fallback (design calls), 2.4 audit-collector Tier 1 leader election (needs programmatic-poll refactor), 2.5 chaos tests (blocked on infra), 2.6 tier-of-decision + cost-per-document metrics (need cascade-router data points that don't exist yet).
+
+## 2026-04-30 — Phase 2.4 PR2 — Audit-collector Tier 1 leader election
+
+**Done:** Closed Phase 2.4 plan item 1 ("`gls-audit-collector` Tier 1 leader election via ShedLock"). The previous `@RabbitListener`-based `Tier1Consumer` would have allowed every replica to consume Tier 1 messages concurrently — a real correctness gap because Tier 1 events form per-resource hash chains (CSV #4) and concurrent validate-then-append from multiple replicas could fork the chain. Refactored to programmatic polling under `@SchedulerLock` so only one replica drains the queue at any moment; on leader death the lock auto-releases and the next tick promotes a replacement.
+
+**Why programmatic poll over `@RabbitListener` + start/stop:** ShedLock's `lock()` doesn't notify the holder when the lock is lost (e.g. after a long GC pause exceeds `lockAtMostFor`). With `@RabbitListener` start/stop driven by a heartbeat, a replica that loses the lock while still believing it's the leader continues consuming until the heartbeat sees the loss — a race window. Programmatic poll inside the `@SchedulerLock` method body is naturally race-free: only one method invocation runs across replicas at any time, and the next tick re-acquires (or doesn't).
+
+**Changes:**
+
+- `gls-audit-collector/.../consumer/Tier1Consumer.java` — removed `@RabbitListener(QUEUE_TIER1)`. New `@Scheduled @SchedulerLock("audit-tier1-leader") pollTier1()` method drains the queue via `RabbitTemplate.execute(channel -> channel.basicGet(QUEUE_TIER1, false))` in a loop until empty. Each message is converted via the wired `MessageConverter` (the existing `JacksonJsonMessageConverter`) and dispatched to the existing `onTier1(Map)` handler. Manual ack on success and on every error path (poison messages must not wedge the leader). Existing single-arg constructor preserved so `Tier1ConsumerTest` keeps working without standing up Rabbit.
+- `gls-audit-collector/.../consumer/Tier1Consumer.java` — added `audit.tier1.consumer{outcome}` counter (outcomes: `processed`, `unconvertible`, `error`).
+- `gls-audit-collector/GlsAuditCollectorApplication.java` — added `@EnableScheduling` so the new `@Scheduled` ticks. Class-level `@EnableSchedulerLock` comes transitively from `gls-platform-audit`'s `AuditRelayLockConfig`.
+- `gls-audit-collector/pom.xml` — added `shedlock-spring` + `shedlock-provider-mongo` (the platform-audit module marks them `optional=true` so consumers must opt in explicitly). Same pattern as `gls-app-assembly` and `gls-indexing-worker`.
+- `gls-audit-collector/.../consumer/Tier1ConsumerTest.java` — extended with 2 new tests for the new wiring: no-rabbit-template (test-only single-arg constructor) is a silent no-op; absent rabbit / converter `ObjectProvider`s skip the cycle. Existing 6 tests still green — they exercise `onTier1(Map)` directly which is unchanged.
+
+**Tests:** 44 / 0 in `gls-audit-collector` (was 42; +2 new in `Tier1ConsumerTest`). Reactor green via `./mvnw -DskipTests package`.
+
+**Decisions logged:** None new. The "ack on every error path" stance is documented in the class JavaDoc — a poison message must not be infinite-requeued; broken-chain and append-only-violation are the expected unhappy paths handled internally; anything else is unexpected, logged, and acked anyway.
+
+**Files changed:**
+
+- `backend/gls-audit-collector/src/main/java/.../consumer/Tier1Consumer.java` — modified (significant refactor).
+- `backend/gls-audit-collector/src/main/java/.../GlsAuditCollectorApplication.java` — modified (`@EnableScheduling`).
+- `backend/gls-audit-collector/pom.xml` — modified (2 new ShedLock deps).
+- `backend/gls-audit-collector/src/test/java/.../consumer/Tier1ConsumerTest.java` — modified (+2 new tests).
+- Log = 5 files total.
+
+**Open issues / deferred:**
+
+- **No leader-status admin endpoint.** Operators have no in-app way to see "which replica is currently leader" or "is anyone leader right now." A small `/api/admin/audit/tier1/leader` endpoint reading the ShedLock collection's `audit-tier1-leader` row would expose this. Tracked.
+- **Tier 2 still uses `@RabbitListener`.** Intentional — Tier 2 has no chain-ordering requirement (per `AuditRabbitConfig` docstring), and horizontal consumer scaling is the right shape there. No action needed.
+- **`pollTier1` integration test deferred.** Mocking `RabbitTemplate.execute(channel -> ...)` to drive the new loop is brittle. The unit-level coverage is the test-only constructor + ObjectProvider absent paths; the real broker-driven flow is exercised in the deployed environment. Worth wrapping in a Testcontainers RabbitMQ + ShedLock Mongo integration test once the test infra exists.
+
+**Phase 2.4 status:** **all 3 plan items complete.** (1: audit-collector Tier 1 leader election — done here; 2: `gls-scheduler` leader election — done in Phase 2.4 PR1 + earlier `OutboxRelay`; 3: connector per-source watches — done in Phase 1.13.)
+
+**Next:** Phase 2 status is now: 2.1 4/5 (blocked), 2.2 3/5 (design calls), 2.3 4/4 ✓, 2.4 3/3 ✓, 2.5 0/N (blocked on infra), 2.6 5/6 (cascade-router data points needed). Remaining session work, in order: 2.2 Ollama+Anthropic fallback, then 2.6 tier-of-decision histogram + cost-per-document metrics, then Phase 3 admin UI (different shape — React, not Java).
