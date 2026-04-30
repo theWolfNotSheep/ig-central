@@ -3986,3 +3986,38 @@ Reactor: full backend reactor green (`./mvnw -DskipTests package`).
 **Phase 2.2 status:** Plan item 1 (Anthropic circuit breaker) **complete** — the implementation is generic and applies to any backend. Item 2 (Anthropic 429 / `Retry-After`) untouched. Item 3 (Ollama unreachable + Anthropic fallback) untouched. Item 4 (MCP unreachable → confidence cap) untouched. Item 5 (cost budget enforcement) is mostly done from Phase 1.6 PR4 — needs the auto-degrade-to-SLM piece.
 
 **Next:** Phase 2.2 PR2 — wire the cascade router to fall through on `LLM_UPSTREAM_UNAVAILABLE` 503 (it likely already does via the existing 5xx handler, but confirm + test). Then MCP unreachable handling, then 429 / `Retry-After`.
+
+## 2026-04-30 — Phase 2.2 PR2 — MCP unreachable → cap confidence
+
+**Done:** Closed Phase 2.2 plan item 4 ("MCP unreachable → workers proceed with cap on confidence per §6.6"). New `McpAvailabilityProbe` polls `<mcp-base-url>/actuator/health` periodically; new `McpCappingLlmService` decorator caps the confidence on the underlying LLM result whenever the most recent probe returned unreachable. Workers continue to function (Spring AI's MCP client already logs and proceeds without tools when SSE fails) — the cap is the downstream-visible signal that the result was made without correction-history / org-PII context.
+
+**Changes:**
+
+- `gls-llm-worker/backend/McpAvailabilityProbe.java` (new) — `@Component` that polls `<mcp-base-url><probe-path>` (default `/actuator/health`) every `gls.llm.worker.mcp.probe.interval` (default `PT30S`) with a 3 s connect+read timeout. Stores reachability in an `AtomicBoolean`, initial state optimistic-available. State transitions log at INFO (recovered) / WARN (lost). Empty MCP URL means "unconfigured" — probes are no-ops and `isConfigured()` returns false so the cap never fires for workers that explicitly run without MCP. 200/300/400 status counts as reachable; 500+/transport failure counts as unreachable.
+- `gls-llm-worker/backend/McpCappingLlmService.java` (new) — `LlmService` decorator. After delegating to the underlying service: if probe `isConfigured()` and `!isAvailable()`, and the result's confidence exceeds `maxConfidence`, returns a new `LlmResult` with confidence replaced and a rationale suffix `[confidence capped: MCP unreachable]`. All other fields pass through. Throws are not intercepted.
+- `gls-llm-worker/backend/LlmBackendConfig.java` — added two new `@Value` knobs (`gls.llm.worker.mcp.confidence-cap.enabled` default `true`, `gls.llm.worker.mcp.confidence-cap.max-confidence` default `0.7`) and an `ObjectProvider<McpAvailabilityProbe>` injection. The configured backend is now wrapped twice: `McpCappingLlmService(CircuitBreakerLlmService(base, breaker), probe, cap)`. Order matters — cap inspects post-success; breaker open throws past the cap which is fine (we don't cap on failure).
+- `gls-llm-worker/GlsLlmWorkerApplication.java` — added `@EnableScheduling` so the probe's `@Scheduled` method ticks. The existing `@EnableAsync` covers the unrelated async-classify dispatcher.
+- `gls-llm-worker/test/.../backend/McpAvailabilityProbeTest.java` (new) — 7 tests: initial state optimistic-available; empty / blank URL means unconfigured; `doProbe` returns false for unreachable host (real HTTP failing fast); probe is no-op when unconfigured; `setAvailable` test hook; blank probe path falls back to default.
+- `gls-llm-worker/test/.../backend/McpCappingLlmServiceTest.java` (new) — 9 tests: MCP available passes through; unavailable caps high confidence; unavailable doesn't increase low confidence; cap-at-cap is no change; unconfigured probe never caps; null rationale handled; exceptions propagate; metadata preserved; invalid `maxConfidence` rejected.
+
+**Tests:** 84 / 0 in `gls-llm-worker` (was 68; +16 new across the two test classes). Reactor green.
+
+**Decisions logged:** None new. The "scheduled probe + atomic flag" pattern is the same shape as `CircuitBreaker.beforeCall` (decision computed elsewhere, read synchronously per call) — explicitly chosen over per-call HTTP probes to avoid amplifying load on the MCP server during partial outages.
+
+**Files changed:**
+
+- `backend/gls-llm-worker/src/main/java/.../backend/{McpAvailabilityProbe, McpCappingLlmService}.java` — 2 new.
+- `backend/gls-llm-worker/src/main/java/.../backend/LlmBackendConfig.java` — modified.
+- `backend/gls-llm-worker/src/main/java/.../GlsLlmWorkerApplication.java` — modified (added `@EnableScheduling`).
+- `backend/gls-llm-worker/src/test/java/.../backend/{McpAvailabilityProbeTest, McpCappingLlmServiceTest}.java` — 2 new.
+- Log = 6 files total.
+
+**Open issues / deferred:**
+
+- **Same pattern not yet applied to `gls-slm-worker`.** The SLM worker also uses MCP tools. The decorator chain is identical in shape but lives in a different module; copy-pasting now would cement the duplication. Instead: when SLM gets the same treatment, lift `McpAvailabilityProbe` + `McpCappingLlmService` into a shared module (likely a new `gls-llm-resilience` library, or fold into an existing shared module).
+- **Cap is global, not per-tool.** If MCP is partially degraded (e.g. only the correction-history tool is failing while taxonomy fetch works), the cap fires for every call regardless of whether the broken tool was actually invoked. A finer-grained "did this call use MCP successfully?" signal would require Spring AI surfacing tool-invocation outcomes per request — not exposed today.
+- **No metric on cap rate.** Useful for SLO dashboards: `llm.mcp.confidence_capped` counter ticking per capped call. Tracked alongside the broader Phase 2.6 observability uplift.
+
+**Phase 2.2 status:** Plan items 1 (Anthropic circuit breaker) and 4 (MCP confidence cap) **complete**. Items 2 (Anthropic 429 / `Retry-After`), 3 (Ollama unreachable + Anthropic fallback), 5 (cost budget auto-degrade-to-SLM) untouched.
+
+**Next:** Phase 2.2 PR3 — pick item 5 (cost budget auto-degrade) which builds on the existing `CostBudgetTracker` + extends to auto-degrade behaviour. Item 2 (429 honoring) is harder because Spring AI doesn't surface response headers cleanly. Item 3 needs an inter-backend fallback design first.
