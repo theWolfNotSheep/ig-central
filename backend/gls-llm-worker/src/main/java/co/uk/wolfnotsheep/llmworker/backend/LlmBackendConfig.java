@@ -56,6 +56,7 @@ public class LlmBackendConfig {
             @Value("${gls.llm.worker.circuit-breaker.open-cooldown:PT30S}") java.time.Duration circuitBreakerOpenCooldown,
             @Value("${gls.llm.worker.mcp.confidence-cap.enabled:true}") boolean mcpCapEnabled,
             @Value("${gls.llm.worker.mcp.confidence-cap.max-confidence:0.7}") float mcpCapMaxConfidence,
+            @Value("${gls.llm.worker.fallback.enabled:false}") boolean fallbackEnabled,
             ObjectProvider<McpAvailabilityProbe> mcpAvailabilityProbeProvider,
             ObjectProvider<MeterRegistry> meterRegistryProvider,
             ObjectProvider<ObjectMapper> mapperProvider) {
@@ -71,52 +72,89 @@ public class LlmBackendConfig {
             log.info("llm: no ToolCallbackProvider beans found — MCP tools will not be available to the LLM call. Set spring.ai.mcp.client.sse.connections.<name>.url to enable.");
         }
 
+        if (resolver == null) {
+            log.warn("llm: PromptBlockResolver bean is missing — Mongo not wired? Falling back to not-configured.");
+            return new NotConfiguredLlmService();
+        }
+
+        // Build per-backend services lazily — only the ones whose ChatModel
+        // beans are actually wired up. With fallback enabled and both
+        // backends configured, the result is a Fallback(primary, secondary).
+        LlmService anthropicService = buildAnthropicIfAvailable(
+                anthropicProvider, resolver, anthropicModel, anthropicTemperature, anthropicMaxTokens,
+                mapper, toolCallbacks, circuitBreakerEnabled, circuitBreakerFailureThreshold,
+                circuitBreakerOpenCooldown, meterRegistryProvider);
+        LlmService ollamaService = buildOllamaIfAvailable(
+                ollamaProvider, resolver, ollamaModel, ollamaTemperature, ollamaNumCtx,
+                mapper, toolCallbacks, circuitBreakerEnabled, circuitBreakerFailureThreshold,
+                circuitBreakerOpenCooldown, meterRegistryProvider);
+
+        LlmService primary;
+        LlmService secondary;
         if ("anthropic".equalsIgnoreCase(backend)) {
-            AnthropicChatModel model = anthropicProvider.getIfAvailable();
-            if (model == null) {
-                log.warn("llm: gls.llm.worker.backend=anthropic but AnthropicChatModel bean is missing — set ANTHROPIC_API_KEY. Falling back to not-configured.");
-                return new NotConfiguredLlmService();
-            }
-            if (resolver == null) {
-                log.warn("llm: PromptBlockResolver bean is missing — Mongo not wired? Falling back to not-configured.");
-                return new NotConfiguredLlmService();
-            }
-            log.info("llm: backend=anthropic model={} temperature={} maxTokens={}",
-                    anthropicModel, anthropicTemperature, anthropicMaxTokens);
-            LlmService base = new AnthropicLlmService(
-                    model, resolver, anthropicModel, anthropicTemperature, anthropicMaxTokens,
-                    mapper, toolCallbacks);
-            LlmService withBreaker = wrapWithCircuitBreaker(base, "anthropic",
-                    circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown,
-                    meterRegistryProvider);
-            return wrapWithMcpCap(withBreaker, mcpAvailabilityProbeProvider,
-                    mcpCapEnabled, mcpCapMaxConfidence, meterRegistryProvider);
+            primary = anthropicService;
+            secondary = ollamaService;
+        } else if ("ollama".equalsIgnoreCase(backend)) {
+            primary = ollamaService;
+            secondary = anthropicService;
+        } else {
+            log.info("llm: backend=none — every /v1/classify call will return LLM_NOT_CONFIGURED until a backend is wired");
+            return new NotConfiguredLlmService();
         }
 
-        if ("ollama".equalsIgnoreCase(backend)) {
-            OllamaChatModel model = ollamaProvider.getIfAvailable();
-            if (model == null) {
-                log.warn("llm: gls.llm.worker.backend=ollama but OllamaChatModel bean is missing — set spring.ai.ollama.base-url. Falling back to not-configured.");
-                return new NotConfiguredLlmService();
-            }
-            if (resolver == null) {
-                log.warn("llm: PromptBlockResolver bean is missing — Mongo not wired? Falling back to not-configured.");
-                return new NotConfiguredLlmService();
-            }
-            log.info("llm: backend=ollama model={} temperature={} numCtx={}",
-                    ollamaModel, ollamaTemperature, ollamaNumCtx);
-            LlmService base = new OllamaLlmService(
-                    model, resolver, ollamaModel, ollamaTemperature, ollamaNumCtx, mapper,
-                    toolCallbacks);
-            LlmService withBreaker = wrapWithCircuitBreaker(base, "ollama",
-                    circuitBreakerEnabled, circuitBreakerFailureThreshold, circuitBreakerOpenCooldown,
-                    meterRegistryProvider);
-            return wrapWithMcpCap(withBreaker, mcpAvailabilityProbeProvider,
-                    mcpCapEnabled, mcpCapMaxConfidence, meterRegistryProvider);
+        if (primary == null) {
+            log.warn("llm: backend={} but its ChatModel bean is missing — falling back to not-configured. (Set ANTHROPIC_API_KEY or spring.ai.ollama.base-url depending on the backend.)",
+                    backend);
+            return new NotConfiguredLlmService();
         }
 
-        log.info("llm: backend=none — every /v1/classify call will return LLM_NOT_CONFIGURED until a backend is wired");
-        return new NotConfiguredLlmService();
+        LlmService selected;
+        if (fallbackEnabled && secondary != null) {
+            log.info("llm: fallback enabled — primary={}, secondary={}",
+                    primary.activeBackend(), secondary.activeBackend());
+            MeterRegistry registry = meterRegistryProvider == null ? null : meterRegistryProvider.getIfAvailable();
+            selected = new FallbackLlmService(primary, secondary, registry);
+        } else {
+            if (fallbackEnabled) {
+                log.warn("llm: fallback enabled but secondary backend not configured — running primary only");
+            }
+            selected = primary;
+        }
+
+        return wrapWithMcpCap(selected, mcpAvailabilityProbeProvider,
+                mcpCapEnabled, mcpCapMaxConfidence, meterRegistryProvider);
+    }
+
+    private static LlmService buildAnthropicIfAvailable(
+            ObjectProvider<AnthropicChatModel> provider, PromptBlockResolver resolver,
+            String model, double temperature, int maxTokens,
+            ObjectMapper mapper, ToolCallbackProvider[] toolCallbacks,
+            boolean circuitBreakerEnabled, int failureThreshold, java.time.Duration openCooldown,
+            ObjectProvider<MeterRegistry> meterRegistryProvider) {
+        AnthropicChatModel chatModel = provider.getIfAvailable();
+        if (chatModel == null) return null;
+        log.info("llm: backend=anthropic available model={} temperature={} maxTokens={}",
+                model, temperature, maxTokens);
+        LlmService base = new AnthropicLlmService(chatModel, resolver, model, temperature, maxTokens,
+                mapper, toolCallbacks);
+        return wrapWithCircuitBreaker(base, "anthropic",
+                circuitBreakerEnabled, failureThreshold, openCooldown, meterRegistryProvider);
+    }
+
+    private static LlmService buildOllamaIfAvailable(
+            ObjectProvider<OllamaChatModel> provider, PromptBlockResolver resolver,
+            String model, double temperature, int numCtx,
+            ObjectMapper mapper, ToolCallbackProvider[] toolCallbacks,
+            boolean circuitBreakerEnabled, int failureThreshold, java.time.Duration openCooldown,
+            ObjectProvider<MeterRegistry> meterRegistryProvider) {
+        OllamaChatModel chatModel = provider.getIfAvailable();
+        if (chatModel == null) return null;
+        log.info("llm: backend=ollama available model={} temperature={} numCtx={}",
+                model, temperature, numCtx);
+        LlmService base = new OllamaLlmService(chatModel, resolver, model, temperature, numCtx,
+                mapper, toolCallbacks);
+        return wrapWithCircuitBreaker(base, "ollama",
+                circuitBreakerEnabled, failureThreshold, openCooldown, meterRegistryProvider);
     }
 
     private static LlmService wrapWithCircuitBreaker(
