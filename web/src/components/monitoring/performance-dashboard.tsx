@@ -82,10 +82,19 @@ const COLOURS = {
     dryRun: "#0ea5e9",
 };
 
+/** Polling intervals offered in the toolbar. 0 means "off — manual refresh only". */
+const REFRESH_INTERVALS_MS = [
+    { label: "Off", value: 0 },
+    { label: "30s", value: 30_000 },
+    { label: "1m", value: 60_000 },
+    { label: "5m", value: 300_000 },
+] as const;
+
 export default function PerformanceDashboard() {
     const [data, setData] = useState<DashboardResponse | null>(null);
     const [crossService, setCrossService] = useState<CrossServiceResponse | null>(null);
     const [loading, setLoading] = useState(false);
+    const [refreshIntervalMs, setRefreshIntervalMs] = useState<number>(0);
 
     const fetchData = useCallback(async () => {
         setLoading(true);
@@ -105,9 +114,29 @@ export default function PerformanceDashboard() {
 
     useEffect(() => { fetchData(); }, [fetchData]);
 
+    // Auto-refresh poll. 0 = off (default). The interval is paused while a
+    // request is in-flight to avoid stacking calls on a slow probe.
+    useEffect(() => {
+        if (refreshIntervalMs === 0) return;
+        const handle = setInterval(() => {
+            if (!loading) fetchData();
+        }, refreshIntervalMs);
+        return () => clearInterval(handle);
+    }, [refreshIntervalMs, loading, fetchData]);
+
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-end">
+            <div className="flex items-center justify-end gap-2">
+                <label className="inline-flex items-center gap-1.5 text-xs text-gray-600">
+                    Auto-refresh
+                    <select value={refreshIntervalMs}
+                        onChange={e => setRefreshIntervalMs(Number(e.target.value))}
+                        className="text-xs border border-gray-200 rounded-md px-2 py-1 bg-white">
+                        {REFRESH_INTERVALS_MS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                    </select>
+                </label>
                 <button
                     onClick={fetchData}
                     disabled={loading}
