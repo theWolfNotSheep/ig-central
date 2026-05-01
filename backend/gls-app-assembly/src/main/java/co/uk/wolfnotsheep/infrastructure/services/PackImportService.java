@@ -42,6 +42,7 @@ public class PackImportService {
     private final PackUpdateAvailableRepository packUpdateRepo;
     private final ImportItemSnapshotRepository snapshotRepo;
     private final PipelineBlockRepository pipelineBlockRepo;
+    private final PackImportHistoryRepository importHistoryRepo;
 
     public PackImportService(
             LegislationRepository legislationRepo,
@@ -56,7 +57,8 @@ public class PackImportService {
             InstalledPackRepository installedPackRepo,
             PackUpdateAvailableRepository packUpdateRepo,
             ImportItemSnapshotRepository snapshotRepo,
-            PipelineBlockRepository pipelineBlockRepo) {
+            PipelineBlockRepository pipelineBlockRepo,
+            PackImportHistoryRepository importHistoryRepo) {
         this.legislationRepo = legislationRepo;
         this.sensitivityRepo = sensitivityRepo;
         this.retentionRepo = retentionRepo;
@@ -70,6 +72,7 @@ public class PackImportService {
         this.packUpdateRepo = packUpdateRepo;
         this.snapshotRepo = snapshotRepo;
         this.pipelineBlockRepo = pipelineBlockRepo;
+        this.importHistoryRepo = importHistoryRepo;
     }
 
     // ── Import modes ─────────────────────────────────
@@ -107,6 +110,18 @@ public class PackImportService {
     // ── Main import ──────────────────────────────────
 
     public ImportResult importPack(PackVersionDto version, String packSlug, ImportMode mode) {
+        return importPack(version, packSlug, mode, null, null);
+    }
+
+    /**
+     * Import overload with import-history fields. {@code importedBy} is the
+     * principal name (controller passes {@code Authentication.getName()});
+     * {@code selectedItemKeys} is non-null only for selective imports —
+     * helpful for audit ("they only re-imported these 3 categories").
+     * Either may be null.
+     */
+    public ImportResult importPack(PackVersionDto version, String packSlug, ImportMode mode,
+                                   String importedBy, List<String> selectedItemKeys) {
         log.info("Importing pack {} v{} in {} mode", packSlug, version.versionNumber(), mode);
 
         List<ComponentResult> results = new ArrayList<>();
@@ -209,8 +224,41 @@ public class PackImportService {
             recordInstallation(packSlug, version, importedAt, results);
         }
 
+        // Append a chronological history row so operators can audit / re-import.
+        if (mode != ImportMode.PREVIEW) {
+            recordImportHistory(packSlug, version, mode, importedAt, importedBy, selectedItemKeys,
+                    results, totalCreated, totalUpdated, totalSkipped, totalFailed);
+        }
+
         return new ImportResult(packSlug, version.versionNumber(), mode,
                 results, totalCreated, totalUpdated, totalSkipped, totalFailed, errors);
+    }
+
+    private void recordImportHistory(String packSlug, PackVersionDto version, ImportMode mode,
+                                     Instant importedAt, String importedBy, List<String> selectedItemKeys,
+                                     List<ComponentResult> results, int created, int updated, int skipped, int failed) {
+        try {
+            PackImportHistory entry = new PackImportHistory();
+            entry.setPackSlug(packSlug);
+            entry.setVersion(version.versionNumber());
+            entry.setImportedAt(importedAt);
+            entry.setImportedBy(importedBy != null ? importedBy : "ADMIN");
+            // SELECTIVE imports route through this method via importSelectedItems → importPack(OVERWRITE);
+            // expose them as SELECTIVE in the history when selectedItemKeys is non-empty.
+            String recordedMode = (selectedItemKeys != null && !selectedItemKeys.isEmpty())
+                    ? "SELECTIVE" : mode.name();
+            entry.setMode(recordedMode);
+            entry.setSelectedItemKeys(selectedItemKeys);
+            entry.setComponentTypes(results.stream().map(ComponentResult::componentType).toList());
+            entry.setTotalCreated(created);
+            entry.setTotalUpdated(updated);
+            entry.setTotalSkipped(skipped);
+            entry.setTotalFailed(failed);
+            importHistoryRepo.save(entry);
+        } catch (Exception e) {
+            // Non-fatal — the import already landed.
+            log.warn("Failed to record pack import history (non-fatal): {}", e.getMessage());
+        }
     }
 
     private void recordInstallation(String packSlug, PackVersionDto version,
@@ -240,6 +288,11 @@ public class PackImportService {
     public record SelectedItem(String componentType, String itemKey) {}
 
     public ImportResult importSelectedItems(PackVersionDto version, String packSlug, List<SelectedItem> selections) {
+        return importSelectedItems(version, packSlug, selections, null);
+    }
+
+    public ImportResult importSelectedItems(PackVersionDto version, String packSlug,
+                                            List<SelectedItem> selections, String importedBy) {
         log.info("Selective import for pack {} v{}: {} items selected", packSlug, version.versionNumber(), selections.size());
 
         Set<String> selectionKeys = selections.stream()
@@ -267,7 +320,10 @@ public class PackImportService {
                 version.changelog(), version.publishedBy(), version.publishedAt(),
                 filteredComponents, version.compatibilityVersion());
 
-        return importPack(filteredVersion, packSlug, ImportMode.OVERWRITE);
+        List<String> selectedKeys = selections.stream()
+                .map(s -> s.componentType() + "::" + s.itemKey())
+                .toList();
+        return importPack(filteredVersion, packSlug, ImportMode.OVERWRITE, importedBy, selectedKeys);
     }
 
     private static String extractItemKey(String componentType, Map<String, Object> item) {
