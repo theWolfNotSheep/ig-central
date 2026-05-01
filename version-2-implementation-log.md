@@ -5021,3 +5021,24 @@ The existing `onLoadTimeline` was tightly coupled to `verifyResourceType` / `ver
 **Phase 3 status:** Unchanged from PR13 — all sections complete or in deferred-follow-ups. PR14 is genuinely a polish item, not a gap closure.
 
 **Next:** Continue if the loop fires; otherwise pause. The remaining deferred items are bigger architectural bets (cross-service metrics probe, redaction options, async export jobs, Tier 3 trace integration) — none of them are PR-sized one-shots.
+
+## 2026-05-01 — Phase 3 PR15 — Highlight deep-linked event in timeline
+
+**Done:** Tiny polish on PR14. When the single-event lookup deep-links into the Tier 1 timeline, the originating event now scrolls into view and gets a 3-second amber outline. Operators land directly on the event they were looking at, with the rest of the chain (oldest → newest) above and below for context.
+
+**Changes:**
+
+- `web/src/app/(protected)/admin/audit-events/page.tsx`:
+  - New `highlightedEventId` state + `highlightedRowRef` (HTMLDivElement ref).
+  - `onLoadTimelineFor` accepts an optional `highlightId`; the deep-link button now passes `singleEvent.eventId`.
+  - `useEffect` on `[highlightedEventId, timelineEvents]` scrolls the highlighted row into view (`behavior: smooth, block: center`) and clears the highlight after 3000ms.
+  - Timeline row gets `bg-amber-50 ring-2 ring-amber-300` when highlighted; transition keeps the fade smooth.
+
+**Tests:** No new tests (frontend-only state change). `tsc --noEmit` clean. ESLint clean.
+
+**Files changed:**
+
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — modified.
+- Log = 2 files total.
+
+**Phase 3 status:** Unchanged. PR15 is pure polish.
