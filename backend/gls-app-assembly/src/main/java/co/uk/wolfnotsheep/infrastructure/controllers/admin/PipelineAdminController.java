@@ -17,6 +17,7 @@ import co.uk.wolfnotsheep.infrastructure.services.pipeline.PipelineNodeHandlerRe
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
@@ -75,9 +76,15 @@ public class PipelineAdminController {
 
     @PutMapping("/{id}")
     public ResponseEntity<PipelineDefinition> update(
-            @PathVariable String id, @RequestBody PipelineDefinition updates) {
+            @PathVariable String id,
+            @RequestBody PipelineDefinition updates,
+            @RequestParam(required = false) String changelog,
+            Authentication auth) {
         return pipelineRepo.findById(id)
                 .map(existing -> {
+                    archivePreviousVersion(existing,
+                            changelog != null && !changelog.isBlank() ? changelog : "save",
+                            auth);
                     existing.setName(updates.getName());
                     existing.setDescription(updates.getDescription());
                     existing.setActive(updates.isActive());
@@ -90,6 +97,76 @@ public class PipelineAdminController {
                     existing.setDefault(updates.isDefault());
                     existing.setUpdatedAt(Instant.now());
                     return ResponseEntity.ok(pipelineRepo.save(existing));
+                })
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Capture the {@code existing} workflow state into the version
+     * history before applying updates, then bump {@code currentVersion}.
+     * The snapshot only captures {@code steps + visualNodes + visualEdges}
+     * — the pipeline's name, category bindings, and other metadata are
+     * intentionally not part of the rollback target.
+     */
+    private void archivePreviousVersion(PipelineDefinition existing, String changelog, Authentication auth) {
+        List<PipelineDefinition.PipelineSnapshot> versions = existing.getVersions() != null
+                ? new ArrayList<>(existing.getVersions()) : new ArrayList<>();
+        int previousVersion = existing.getCurrentVersion() == 0 ? 1 : existing.getCurrentVersion();
+        versions.add(new PipelineDefinition.PipelineSnapshot(
+                previousVersion,
+                Instant.now(),
+                auth != null ? auth.getName() : "ADMIN",
+                changelog,
+                existing.getSteps(),
+                existing.getVisualNodes(),
+                existing.getVisualEdges()));
+        existing.setVersions(versions);
+        existing.setCurrentVersion(previousVersion + 1);
+    }
+
+    /**
+     * List the version history for a pipeline. Returns snapshots oldest-first,
+     * matching the order they were saved; {@code currentVersion} is reported
+     * separately so callers can show "you're on v7, here are v1–v6".
+     */
+    @GetMapping("/{id}/versions")
+    public ResponseEntity<Map<String, Object>> listVersions(@PathVariable String id) {
+        return pipelineRepo.findById(id)
+                .map(p -> ResponseEntity.ok(Map.of(
+                        "currentVersion", p.getCurrentVersion(),
+                        "versions", p.getVersions() != null ? p.getVersions() : List.<PipelineDefinition.PipelineSnapshot>of()
+                )))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * Roll back the workflow ({@code steps + visualNodes + visualEdges}) to
+     * a past version. The current state is archived first as a regular
+     * snapshot — rollback is itself reversible. Other fields (name,
+     * categories, mimes, default flag) are unchanged.
+     */
+    @PostMapping("/{id}/rollback/{version}")
+    public ResponseEntity<?> rollback(@PathVariable String id,
+                                      @PathVariable int version,
+                                      Authentication auth) {
+        return pipelineRepo.findById(id)
+                .map(existing -> {
+                    PipelineDefinition.PipelineSnapshot target = existing.getVersions() == null
+                            ? null
+                            : existing.getVersions().stream()
+                                    .filter(s -> s.version() == version)
+                                    .findFirst().orElse(null);
+                    if (target == null) {
+                        return ResponseEntity.badRequest().body((Object) Map.of(
+                                "error", "versionNotFound",
+                                "version", version));
+                    }
+                    archivePreviousVersion(existing, "Rolled back to v" + version, auth);
+                    existing.setSteps(target.steps());
+                    existing.setVisualNodes(target.visualNodes());
+                    existing.setVisualEdges(target.visualEdges());
+                    existing.setUpdatedAt(Instant.now());
+                    return ResponseEntity.ok((Object) pipelineRepo.save(existing));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }

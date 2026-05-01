@@ -6,7 +6,7 @@ import {
     Workflow, Plus, Pencil, Trash2, Save, X, Loader2,
     ChevronDown, ChevronRight, GripVertical, Play, Pause,
     Shield, Brain, Scan, Cog, GitBranch, AlertTriangle, HelpCircle, Info,
-    LayoutGrid, List,
+    LayoutGrid, List, History,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
@@ -15,6 +15,9 @@ import FormModal, { FormField } from "@/components/form-modal";
 
 // Dynamic import for React Flow (SSR incompatible)
 const PipelineEditor = dynamic(() => import("@/components/pipeline-editor/PipelineEditor"), { ssr: false });
+const PipelineVersionHistoryPanel = dynamic(
+    () => import("@/components/pipeline-editor/PipelineVersionHistoryPanel"),
+    { ssr: false });
 
 type StepType = "BUILT_IN" | "PATTERN" | "LLM_PROMPT" | "CONDITIONAL" | "ACCELERATOR" | "SYNC_LLM";
 
@@ -54,6 +57,7 @@ type Pipeline = {
     includeSubCategories?: boolean;
     applicableMimeTypes?: string[];
     steps: PipelineStep[];
+    currentVersion?: number;
     createdAt?: string;
     updatedAt?: string;
 };
@@ -87,6 +91,7 @@ export default function PipelinesPage() {
     const [editing, setEditing] = useState<Pipeline | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [visualEditorPipeline, setVisualEditorPipeline] = useState<Pipeline | null>(null);
+    const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
     const [saving, setSaving] = useState(false);
     const [scanning, setScanning] = useState(false);
     const [showTemplates, setShowTemplates] = useState(false);
@@ -243,11 +248,41 @@ export default function PipelinesPage() {
                 <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shrink-0">
                     <button onClick={() => setVisualEditorPipeline(null)}
                         className="text-sm text-blue-600 hover:text-blue-800">&larr; Back to pipelines</button>
-                    <span className="text-sm text-gray-500">Visual Editor: <strong>{visualEditorPipeline.name}</strong></span>
+                    <div className="flex items-center gap-3">
+                        <span className="text-sm text-gray-500">
+                            Visual Editor: <strong>{visualEditorPipeline.name}</strong>
+                            {visualEditorPipeline.currentVersion != null && (
+                                <span className="ml-2 text-xs font-mono text-gray-400">v{visualEditorPipeline.currentVersion}</span>
+                            )}
+                        </span>
+                        <button onClick={() => setVersionHistoryOpen(true)}
+                            title="Version history & rollback"
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-700 text-xs font-medium rounded-md hover:bg-gray-50">
+                            <History className="size-3.5" /> History
+                        </button>
+                    </div>
                 </div>
                 <div className="flex-1">
-                    <PipelineEditor pipeline={{ ...visualEditorPipeline, id: visualEditorPipeline.id! }} onSaved={() => { load(); }} />
+                    <PipelineEditor pipeline={{ ...visualEditorPipeline, id: visualEditorPipeline.id! }}
+                        onSaved={async () => {
+                            await load();
+                            // Also refresh the in-flight pipeline so its currentVersion display updates.
+                            try {
+                                const { data } = await api.get(`/admin/pipelines/${visualEditorPipeline.id}`);
+                                setVisualEditorPipeline(data);
+                            } catch {}
+                        }} />
                 </div>
+                <PipelineVersionHistoryPanel
+                    pipelineId={visualEditorPipeline.id!}
+                    open={versionHistoryOpen}
+                    onClose={() => setVersionHistoryOpen(false)}
+                    onRolledBack={async () => {
+                        try {
+                            const { data } = await api.get(`/admin/pipelines/${visualEditorPipeline.id}`);
+                            setVisualEditorPipeline(data);
+                        } catch {}
+                    }} />
             </div>
         );
     }
