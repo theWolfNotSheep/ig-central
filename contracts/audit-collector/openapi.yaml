@@ -232,6 +232,64 @@ paths:
               schema:
                 $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
 
+  /v1/resources/{resourceType}/{resourceId}/events:
+    get:
+      operationId: listTier1ForResource
+      tags: [chains]
+      summary: List the Tier 1 hash-chain events for a resource.
+      description: |
+        Returns the per-resource Tier 1 chain in chronological order
+        (oldest → newest). Tier 2 events are *not* included — Tier 2
+        is queryable via `/v1/events`. The chain is the same one
+        that `/v1/chains/{resourceType}/{resourceId}/verify` walks;
+        this endpoint exposes the events themselves so the admin UI
+        can render a compliance timeline per document / block / etc.
+
+        The response is *not* cursor-paginated — Tier 1 chains are
+        bounded by per-resource lifecycle events (typically tens,
+        rarely hundreds). Backends with anomalously long chains
+        return 200 with the full list and a server-side soft cap;
+        future revisions may add cursor pagination if real-world
+        data exceeds the cap.
+      parameters:
+        - $ref: '../_shared/common-headers.yaml#/components/parameters/Traceparent'
+        - name: resourceType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [DOCUMENT, BLOCK, USER, PIPELINE_RUN, POLICY, CATEGORY, RETENTION_SCHEDULE]
+        - name: resourceId
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+      responses:
+        '200':
+          description: Per-resource Tier 1 chain.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tier1ChainResponse'
+        '404':
+          description: |
+            No Tier 1 events recorded for this resource. Returned
+            with `code=AUDIT_RESOURCE_NOT_FOUND`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+        '503':
+          description: |
+            Tier 1 backend unreachable. Returned with
+            `code=AUDIT_BACKEND_UNAVAILABLE`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '../_shared/error-envelope.yaml#/components/schemas/ProblemDetails'
+
   /v1/capabilities:
     get:
       operationId: getCapabilities
@@ -356,6 +414,28 @@ components:
           type: string
         previousEventHash:
           type: string
+
+    Tier1ChainResponse:
+      type: object
+      required: [resourceType, resourceId, events]
+      additionalProperties: false
+      description: |
+        Per-resource Tier 1 chain returned by
+        `GET /v1/resources/{type}/{id}/events`. Events are ordered
+        chronologically (oldest first) — `previousEventHash` on
+        each entry should match the predecessor's computed hash.
+      properties:
+        resourceType:
+          type: string
+          enum: [DOCUMENT, BLOCK, USER, PIPELINE_RUN, POLICY, CATEGORY, RETENTION_SCHEDULE]
+        resourceId:
+          type: string
+          maxLength: 128
+        events:
+          type: array
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/AuditEvent'
 
     ChainVerifyResponse:
       type: object

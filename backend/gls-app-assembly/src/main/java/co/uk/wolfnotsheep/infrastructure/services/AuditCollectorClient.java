@@ -86,6 +86,32 @@ public class AuditCollectorClient {
     }
 
     /**
+     * List the Tier 1 hash-chain events for a resource — the audit
+     * collector's per-resource compliance timeline. Returns
+     * {@link Optional#empty()} on 404 (no Tier 1 events for this
+     * resource).
+     */
+    public Optional<String> listTier1ForResource(String resourceType, String resourceId) {
+        URI uri = URI.create(baseUrl + "/v1/resources/"
+                + URLEncoder.encode(resourceType, StandardCharsets.UTF_8) + "/"
+                + URLEncoder.encode(resourceId, StandardCharsets.UTF_8) + "/events");
+        HttpRequest req = HttpRequest.newBuilder(uri)
+                .header("traceparent", randomTraceparent())
+                .header("Accept", "application/json")
+                .timeout(timeout)
+                .GET()
+                .build();
+        HttpResponse<String> resp = send(req, "listTier1ForResource " + resourceType + ":" + resourceId);
+        if (resp.statusCode() == 404) return Optional.empty();
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+            throw new AuditCollectorException(
+                    "audit-collector HTTP " + resp.statusCode() + " on listTier1ForResource: "
+                            + truncate(resp.body(), 512));
+        }
+        return Optional.of(resp.body());
+    }
+
+    /**
      * Verify a Tier 1 hash chain for a resource. Returns the upstream
      * JSON ({@code status}, {@code eventsTraversed}, etc.) verbatim or
      * {@link Optional#empty()} on a 404 (no Tier 1 events for this

@@ -141,6 +141,31 @@ public class AuditExplorerController {
     }
 
     /**
+     * List Tier 1 events for a resource — the per-resource compliance
+     * timeline. Forwards to the collector's
+     * {@code GET /v1/resources/{type}/{id}/events}.
+     */
+    @GetMapping(value = "/v2/resources/{resourceType}/{resourceId}/events",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> listTier1ForResource(
+            @PathVariable String resourceType,
+            @PathVariable String resourceId) {
+        try {
+            Optional<String> body = client.listTier1ForResource(resourceType, resourceId);
+            return body.map(ResponseEntity::ok)
+                    .orElseGet(() -> ResponseEntity.status(404).body(
+                            "{\"error\":\"no Tier 1 events for resource\",\"resourceType\":\""
+                                    + escapeJson(resourceType) + "\",\"resourceId\":\""
+                                    + escapeJson(resourceId) + "\"}"));
+        } catch (AuditCollectorClient.AuditCollectorException e) {
+            log.warn("audit-collector tier1-list proxy failed: {}", e.getMessage());
+            return ResponseEntity.status(502).body(
+                    "{\"error\":\"audit-collector unavailable\",\"detail\":\""
+                            + escapeJson(e.getMessage()) + "\"}");
+        }
+    }
+
+    /**
      * Tier 1 hash-chain verification for a resource. Forwards to the
      * collector's {@code GET /v1/chains/{resourceType}/{resourceId}/verify}.
      * Returns 200 + upstream JSON on success, 404 when no Tier 1 events

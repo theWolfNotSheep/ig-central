@@ -156,4 +156,36 @@ class AuditExplorerControllerTest {
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
         assertThat(resp.getBody()).contains("BROKEN").contains("brokenAtEventId");
     }
+
+    @Test
+    void listTier1ForResource_passesThroughOnHit() {
+        String upstream = "{\"resourceType\":\"DOCUMENT\",\"resourceId\":\"doc-1\",\"events\":[]}";
+        when(client.listTier1ForResource("DOCUMENT", "doc-1")).thenReturn(Optional.of(upstream));
+
+        ResponseEntity<String> resp = controller.listTier1ForResource("DOCUMENT", "doc-1");
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).isEqualTo(upstream);
+    }
+
+    @Test
+    void listTier1ForResource_returns404OnNoEvents() {
+        when(client.listTier1ForResource("DOCUMENT", "missing")).thenReturn(Optional.empty());
+
+        ResponseEntity<String> resp = controller.listTier1ForResource("DOCUMENT", "missing");
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(404);
+        assertThat(resp.getBody()).contains("no Tier 1 events").contains("DOCUMENT").contains("missing");
+    }
+
+    @Test
+    void listTier1ForResource_returns502OnCollectorFailure() {
+        when(client.listTier1ForResource(any(), any())).thenThrow(
+                new AuditCollectorClient.AuditCollectorException("connection refused"));
+
+        ResponseEntity<String> resp = controller.listTier1ForResource("DOCUMENT", "doc-9");
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(502);
+        assertThat(resp.getBody()).contains("audit-collector unavailable");
+    }
 }
