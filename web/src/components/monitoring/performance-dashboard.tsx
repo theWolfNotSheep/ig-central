@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Activity, Gauge, Loader2, RefreshCw, Inbox, Lock } from "lucide-react";
+import {
+    Activity, Gauge, Loader2, RefreshCw, Inbox, Lock, Network,
+    CheckCircle2, XCircle,
+} from "lucide-react";
 import {
     Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip,
     XAxis, YAxis,
@@ -49,6 +52,26 @@ type DashboardResponse = {
     dlqReplay: DlqReplayActivity[];
 };
 
+type PromSample = {
+    metricName: string;
+    labels: Record<string, string>;
+    value: number;
+};
+
+type ServiceProbeResult = {
+    service: string;
+    url: string;
+    reachable: boolean;
+    error?: string | null;
+    elapsedMs: number;
+    samples: PromSample[];
+};
+
+type CrossServiceResponse = {
+    timestamp: string;
+    services: ServiceProbeResult[];
+};
+
 const COLOURS = {
     acquired: "#22c55e",
     skipped: "#f59e0b",
@@ -61,13 +84,18 @@ const COLOURS = {
 
 export default function PerformanceDashboard() {
     const [data, setData] = useState<DashboardResponse | null>(null);
+    const [crossService, setCrossService] = useState<CrossServiceResponse | null>(null);
     const [loading, setLoading] = useState(false);
 
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
-            const { data } = await api.get<DashboardResponse>("/admin/metrics/dashboard");
-            setData(data);
+            const [local, cross] = await Promise.allSettled([
+                api.get<DashboardResponse>("/admin/metrics/dashboard"),
+                api.get<CrossServiceResponse>("/admin/metrics/dashboard/cross-service"),
+            ]);
+            if (local.status === "fulfilled") setData(local.value.data);
+            if (cross.status === "fulfilled") setCrossService(cross.value.data);
         } catch {
             console.error("Failed to fetch metrics dashboard");
         } finally {
@@ -105,6 +133,10 @@ export default function PerformanceDashboard() {
 
             <PanelHeader icon={Activity} title="DLQ replay activity" subtitle="Replayed vs skipped messages per queue and mode (preview vs real)." />
             <DlqReplayPanel rows={data?.dlqReplay ?? []} loading={loading && !data} />
+
+            <PanelHeader icon={Network} title="Cross-service metrics"
+                subtitle="Live scrape of /actuator/prometheus on the router and llm-worker — surfaces metrics that don't live on this app's registry." />
+            <CrossServicePanel data={crossService} loading={loading && !crossService} />
         </div>
     );
 }
@@ -308,4 +340,248 @@ function formatMs(ms: number): string {
     if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
     if (ms < 3_600_000) return `${(ms / 60_000).toFixed(1)} m`;
     return `${(ms / 3_600_000).toFixed(1)} h`;
+}
+
+/* ── Cross-service panel ───────────────────────────────────────── */
+
+const CIRCUIT_STATE_LABEL: Record<number, string> = {
+    0: "CLOSED",
+    1: "HALF_OPEN",
+    2: "OPEN",
+};
+const CIRCUIT_STATE_BADGE: Record<number, string> = {
+    0: "bg-green-100 text-green-700",
+    1: "bg-amber-100 text-amber-700",
+    2: "bg-red-100 text-red-700",
+};
+
+function CrossServicePanel({ data, loading }: { data: CrossServiceResponse | null; loading: boolean }) {
+    if (loading) return <SkeletonPanel />;
+    if (!data || data.services.length === 0) {
+        return (
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                <p className="text-sm text-gray-500 py-4 text-center">No cross-service metrics configured.</p>
+            </div>
+        );
+    }
+    // Use the probe timestamp (deterministic per fetch) rather than Date.now()
+    // so render is pure. The probe's "now" is what matters for budget-exhaustion
+    // checks anyway — it's the wall-clock when the scrape ran.
+    const probeTimeMs = new Date(data.timestamp).getTime();
+    return (
+        <div className="space-y-3">
+            {data.services.map(svc => (
+                <ServiceCard key={svc.service} svc={svc} probeTimeMs={probeTimeMs} />
+            ))}
+        </div>
+    );
+}
+
+function ServiceCard({ svc, probeTimeMs }: { svc: ServiceProbeResult; probeTimeMs: number }) {
+    return (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100 bg-gray-50">
+                {svc.reachable
+                    ? <CheckCircle2 className="size-3.5 text-green-600" />
+                    : <XCircle className="size-3.5 text-red-600" />}
+                <span className="text-sm font-mono font-medium text-gray-900">{svc.service}</span>
+                <span className="text-[10px] text-gray-500">{svc.url}</span>
+                <span className="ml-auto text-[10px] text-gray-400">{svc.elapsedMs} ms</span>
+            </div>
+            {!svc.reachable ? (
+                <div className="px-4 py-3 text-xs text-red-600">
+                    Unreachable: {svc.error ?? "unknown error"}
+                </div>
+            ) : svc.samples.length === 0 ? (
+                <div className="px-4 py-3 text-xs text-gray-400">
+                    No matching metrics emitted yet.
+                </div>
+            ) : svc.service === "router" ? (
+                <RouterMetrics samples={svc.samples} probeTimeMs={probeTimeMs} />
+            ) : svc.service === "llm-worker" ? (
+                <LlmWorkerMetrics samples={svc.samples} />
+            ) : (
+                <GenericSamplesTable samples={svc.samples} />
+            )}
+        </div>
+    );
+}
+
+function RouterMetrics({ samples, probeTimeMs }: { samples: PromSample[]; probeTimeMs: number }) {
+    const byMetric = groupByMetric(samples);
+    const tierCounts = byMetric["gls_router_classify_result_total"] ?? [];
+    const tierByCategory = byMetric["gls_router_classify_tier_by_category_total"] ?? [];
+    const cost = byMetric["gls_router_classify_cost_units_total"] ?? [];
+    const budgetExhausted = byMetric["router_llm_budget_exhausted_until_epoch_s"] ?? [];
+    const permitsAvailable = byMetric["router_rate_limit_permits_available"] ?? [];
+    const permitsTotal = byMetric["router_rate_limit_permits_total"] ?? [];
+
+    const tierTotals = tierCounts.reduce<Record<string, number>>((acc, s) => {
+        const tier = s.labels.tier ?? "?";
+        acc[tier] = (acc[tier] ?? 0) + s.value;
+        return acc;
+    }, {});
+    const costPerTier = cost.reduce<Record<string, number>>((acc, s) => {
+        const tier = s.labels.tier ?? "?";
+        acc[tier] = (acc[tier] ?? 0) + s.value;
+        return acc;
+    }, {});
+    const budgetExhaustedAt = budgetExhausted[0]?.value ?? 0;
+    const budgetActive = budgetExhaustedAt * 1000 > probeTimeMs;
+    const available = permitsAvailable[0]?.value;
+    const total = permitsTotal[0]?.value;
+
+    return (
+        <div className="p-4 space-y-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {Object.entries(tierTotals).sort().map(([tier, count]) => (
+                    <Stat key={tier} label={`Tier ${tier}`} value={Math.round(count).toLocaleString()} />
+                ))}
+            </div>
+            {Object.keys(costPerTier).length > 0 && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2 border-t border-gray-100">
+                    {Object.entries(costPerTier).sort().map(([tier, units]) => (
+                        <Stat key={tier} label={`${tier} cost units`} value={units.toFixed(1)} />
+                    ))}
+                </div>
+            )}
+            <div className="flex items-center gap-3 flex-wrap pt-2 border-t border-gray-100 text-xs">
+                <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                    budgetActive ? "bg-red-100 text-red-700" : "bg-green-100 text-green-700"}`}>
+                    LLM budget {budgetActive ? "EXHAUSTED" : "OK"}
+                </span>
+                {budgetActive && (
+                    <span className="text-gray-500">
+                        until {new Date(budgetExhaustedAt * 1000).toLocaleTimeString()}
+                    </span>
+                )}
+                {available != null && total != null && (
+                    <>
+                        <span className="text-gray-300">·</span>
+                        <span className="text-gray-700">
+                            Rate-limit permits: <span className="font-mono">{available}/{total}</span>
+                        </span>
+                    </>
+                )}
+            </div>
+            {tierByCategory.length > 0 && (
+                <details className="text-xs">
+                    <summary className="cursor-pointer text-gray-500 hover:text-gray-700">
+                        Per-category tier breakdown ({tierByCategory.length} entries)
+                    </summary>
+                    <div className="mt-2 max-h-48 overflow-auto">
+                        <table className="w-full text-xs">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="text-left px-2 py-1 font-medium text-gray-600">Category</th>
+                                    <th className="text-left px-2 py-1 font-medium text-gray-600">Tier</th>
+                                    <th className="text-right px-2 py-1 font-medium text-gray-600">Count</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {tierByCategory.map((s, i) => (
+                                    <tr key={i} className="border-b border-gray-50 last:border-0">
+                                        <td className="px-2 py-1 font-mono text-gray-700">{s.labels.category ?? "?"}</td>
+                                        <td className="px-2 py-1 font-mono text-gray-700">{s.labels.tier ?? "?"}</td>
+                                        <td className="px-2 py-1 text-right tabular-nums text-gray-500">
+                                            {Math.round(s.value).toLocaleString()}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+            )}
+        </div>
+    );
+}
+
+function LlmWorkerMetrics({ samples }: { samples: PromSample[] }) {
+    const byMetric = groupByMetric(samples);
+    const states = byMetric["llm_circuit_breaker_state"] ?? [];
+    const failures = byMetric["llm_circuit_breaker_consecutive_failures"] ?? [];
+    const fallbacks = byMetric["llm_fallback_invocations_total"] ?? [];
+
+    return (
+        <div className="p-4 space-y-3">
+            <div className="text-xs font-medium text-gray-700 mb-1">Circuit breakers</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {states.map((s, i) => {
+                    const backend = s.labels.backend ?? "?";
+                    const state = Math.round(s.value);
+                    const failureSample = failures.find(f => f.labels.backend === backend);
+                    return (
+                        <div key={i} className="flex items-center justify-between bg-gray-50 rounded p-2 text-sm">
+                            <span className="font-mono text-gray-700">{backend}</span>
+                            <div className="flex items-center gap-2">
+                                {failureSample && failureSample.value > 0 && (
+                                    <span className="text-[10px] text-amber-600">
+                                        {failureSample.value} fail{failureSample.value === 1 ? "" : "s"}
+                                    </span>
+                                )}
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${CIRCUIT_STATE_BADGE[state] ?? "bg-gray-100 text-gray-600"}`}>
+                                    {CIRCUIT_STATE_LABEL[state] ?? `STATE ${state}`}
+                                </span>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+            {fallbacks.length > 0 && (
+                <div className="pt-2 border-t border-gray-100">
+                    <div className="text-xs font-medium text-gray-700 mb-1">Fallback invocations</div>
+                    <table className="w-full text-xs">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                <th className="text-left px-2 py-1 font-medium text-gray-600">Primary</th>
+                                <th className="text-left px-2 py-1 font-medium text-gray-600">Reason</th>
+                                <th className="text-right px-2 py-1 font-medium text-gray-600">Count</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {fallbacks.map((s, i) => (
+                                <tr key={i} className="border-b border-gray-50 last:border-0">
+                                    <td className="px-2 py-1 font-mono text-gray-700">{s.labels.primary ?? "?"}</td>
+                                    <td className="px-2 py-1 font-mono text-gray-700">{s.labels.reason ?? "?"}</td>
+                                    <td className="px-2 py-1 text-right tabular-nums text-gray-500">
+                                        {Math.round(s.value).toLocaleString()}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function GenericSamplesTable({ samples }: { samples: PromSample[] }) {
+    return (
+        <div className="p-4 max-h-64 overflow-auto">
+            <table className="w-full text-xs">
+                <tbody>
+                    {samples.map((s, i) => (
+                        <tr key={i} className="border-b border-gray-50 last:border-0">
+                            <td className="px-2 py-1 font-mono text-gray-700">{s.metricName}</td>
+                            <td className="px-2 py-1 font-mono text-gray-500">
+                                {Object.entries(s.labels).map(([k, v]) => `${k}=${v}`).join(", ")}
+                            </td>
+                            <td className="px-2 py-1 text-right tabular-nums text-gray-700">
+                                {s.value.toLocaleString()}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
+function groupByMetric(samples: PromSample[]): Record<string, PromSample[]> {
+    return samples.reduce<Record<string, PromSample[]>>((acc, s) => {
+        (acc[s.metricName] ??= []).push(s);
+        return acc;
+    }, {});
 }
