@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     ScrollText, Search, RefreshCw, Loader2, ChevronDown, ChevronRight,
     CheckCircle, XCircle, AlertTriangle, Filter, Link2, ShieldCheck, ShieldAlert,
@@ -93,6 +93,8 @@ export default function AuditExplorerPage() {
 
     const [timelineEvents, setTimelineEvents] = useState<AuditEvent[] | null>(null);
     const [timelineLoading, setTimelineLoading] = useState(false);
+    const [highlightedEventId, setHighlightedEventId] = useState<string | null>(null);
+    const highlightedRowRef = useRef<HTMLDivElement | null>(null);
 
     const fetchPage = useCallback(async (token: string | null) => {
         setLoading(true);
@@ -171,7 +173,7 @@ export default function AuditExplorerPage() {
         }
     };
 
-    const onLoadTimelineFor = async (rt: ResourceType, id: string) => {
+    const onLoadTimelineFor = async (rt: ResourceType, id: string, highlightId?: string) => {
         const trimmed = id.trim();
         if (!trimmed) return;
         setTimelineLoading(true);
@@ -179,6 +181,7 @@ export default function AuditExplorerPage() {
             const { data } = await api.get<{ events: AuditEvent[] }>(
                 `/admin/audit-events/v2/resources/${encodeURIComponent(rt)}/${encodeURIComponent(trimmed)}/events`);
             setTimelineEvents(data.events ?? []);
+            setHighlightedEventId(highlightId ?? null);
             toast.success(`${data.events?.length ?? 0} Tier 1 event(s) loaded`);
         } catch (err: unknown) {
             const e = err as { response?: { status?: number } };
@@ -194,6 +197,15 @@ export default function AuditExplorerPage() {
     };
 
     const onLoadTimeline = () => onLoadTimelineFor(verifyResourceType, verifyResourceId);
+
+    // After the highlighted row mounts, scroll it into view and clear the
+    // highlight after a short window so the outline fades to the resting style.
+    useEffect(() => {
+        if (!highlightedEventId || !highlightedRowRef.current) return;
+        highlightedRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+        const t = setTimeout(() => setHighlightedEventId(null), 3000);
+        return () => clearTimeout(t);
+    }, [highlightedEventId, timelineEvents]);
 
     const onVerifyChain = async () => {
         const id = verifyResourceId.trim();
@@ -268,9 +280,13 @@ export default function AuditExplorerPage() {
                                     onClick={() => {
                                         setVerifyResourceType(resourceType as ResourceType);
                                         setVerifyResourceId(resourceId);
-                                        // Scroll the chain section into view + load timeline.
+                                        // Scroll the chain section into view + load timeline,
+                                        // then highlight the originating event in the result list.
                                         setTimeout(() => {
-                                            void onLoadTimelineFor(resourceType as ResourceType, resourceId);
+                                            void onLoadTimelineFor(
+                                                resourceType as ResourceType,
+                                                resourceId,
+                                                singleEvent.eventId);
                                         }, 0);
                                     }}
                                     className="mt-2 inline-flex items-center gap-1.5 px-2 py-1 text-xs border border-gray-300 rounded text-gray-700 hover:bg-gray-100">
@@ -338,12 +354,19 @@ export default function AuditExplorerPage() {
                             <div className="p-4 text-center text-xs text-gray-400">No Tier 1 events recorded.</div>
                         ) : (
                             <div className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
-                                {timelineEvents.map(event => (
-                                    <div key={event.eventId} className="px-3 py-2 flex items-center gap-3">
-                                        <OutcomeIcon outcome={event.outcome} />
-                                        <EventSummary event={event} compact />
-                                    </div>
-                                ))}
+                                {timelineEvents.map(event => {
+                                    const highlighted = event.eventId === highlightedEventId;
+                                    return (
+                                        <div key={event.eventId}
+                                            ref={highlighted ? highlightedRowRef : undefined}
+                                            className={`px-3 py-2 flex items-center gap-3 transition-colors ${
+                                                highlighted ? "bg-amber-50 ring-2 ring-amber-300" : ""
+                                            }`}>
+                                            <OutcomeIcon outcome={event.outcome} />
+                                            <EventSummary event={event} compact />
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
