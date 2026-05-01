@@ -276,14 +276,25 @@ public class GovernanceAdminController {
     }
 
     /**
-     * Reparent a category. Body: {@code {"newParentId": "..."}} where
-     * {@code null}/empty means promote to root. Validates against cycles
-     * (the new parent cannot be the moved node itself nor any of its
-     * descendants), then rebuilds the materialised path tree.
+     * Reparent / reorder a category. Body fields (all optional):
+     * <ul>
+     *   <li>{@code newParentId} — target parent. {@code null}/empty/missing
+     *       leaves the parent unchanged unless a sibling-position is also
+     *       supplied. To explicitly promote to root, pass {@code "newParentId": null}
+     *       *and* either omit sibling-position fields or pass them
+     *       referencing a top-level sibling.</li>
+     *   <li>{@code beforeSiblingId} — insert source immediately before this
+     *       sibling (which must share the new parent).</li>
+     *   <li>{@code afterSiblingId} — insert source immediately after this
+     *       sibling.</li>
+     * </ul>
+     * If neither sibling-position is given, source is appended to the end.
      *
-     * <p>This is a focused endpoint for drag-drop tree editors — the
-     * existing {@link #updateCategory} PUT also accepts {@code parentId}
-     * but requires the full body and skips cycle detection.
+     * <p>Validates against cycles (the new parent cannot be the moved node
+     * itself nor any of its descendants), then renumbers the new parent's
+     * children with {@code sortOrder} 10, 20, 30, ... so the order survives
+     * round-trips. {@code rebuildPaths()} runs at the end so the materialised
+     * path tree stays consistent.
      */
     @PostMapping("/taxonomy/{id}/move")
     public ResponseEntity<?> moveCategory(@PathVariable String id,
@@ -291,8 +302,20 @@ public class GovernanceAdminController {
         ClassificationCategory source = categoryRepository.findById(id).orElse(null);
         if (source == null) return ResponseEntity.notFound().build();
 
-        String rawNewParent = body == null ? null : body.get("newParentId");
-        String newParentId = (rawNewParent == null || rawNewParent.isBlank()) ? null : rawNewParent;
+        Map<String, String> safeBody = body == null ? Map.of() : body;
+        String rawNewParent = safeBody.get("newParentId");
+        // null in the body (JSON null) means "promote to root"; absent means
+        // "leave parent unchanged". Map<String,String> can't distinguish
+        // those two via key-presence reliably, so treat both null AND blank as
+        // explicit-root if the key is present, otherwise inherit current.
+        String newParentId;
+        if (safeBody.containsKey("newParentId")) {
+            newParentId = (rawNewParent == null || rawNewParent.isBlank()) ? null : rawNewParent;
+        } else {
+            newParentId = source.getParentId();
+        }
+        String beforeSiblingId = blankToNull(safeBody.get("beforeSiblingId"));
+        String afterSiblingId = blankToNull(safeBody.get("afterSiblingId"));
 
         if (newParentId != null && newParentId.equals(id)) {
             return ResponseEntity.badRequest().body(Map.of(
@@ -318,10 +341,70 @@ public class GovernanceAdminController {
         // Recompute level based on new depth — FUNCTION at root, ACTIVITY one level down, TRANSACTION below.
         source.setLevel(resolveLevel(newParentId));
         source.setVersion(source.getVersion() + 1);
-        ClassificationCategory saved = categoryRepository.save(source);
+        // Save the parentId/level change first so the upcoming sibling query reflects the new state.
+        categoryRepository.save(source);
+
+        renumberSiblings(newParentId, source.getId(), beforeSiblingId, afterSiblingId);
+        ClassificationCategory saved = categoryRepository.findById(id).orElse(source);
+
         governanceService.rebuildPaths();
-        log.info("Moved category {} → newParentId={}", id, newParentId);
+        log.info("Moved category {} → newParentId={} (before={}, after={})",
+                id, newParentId, beforeSiblingId, afterSiblingId);
         return ResponseEntity.ok(saved);
+    }
+
+    /**
+     * Renumber the {@code sortOrder} values of all active siblings under
+     * {@code parentId} so the source lands at the desired position. Step
+     * size is 10 to leave room for unassisted insertions if a future
+     * codepath needs them.
+     */
+    private void renumberSiblings(String parentId, String sourceId,
+                                  String beforeSiblingId, String afterSiblingId) {
+        List<ClassificationCategory> siblings = parentId == null
+                ? categoryRepository.findByParentIdIsNullAndStatus(ClassificationCategory.NodeStatus.ACTIVE)
+                : categoryRepository.findByParentIdAndStatus(parentId, ClassificationCategory.NodeStatus.ACTIVE);
+        // Existing order: by current sortOrder asc, ties by id for stability.
+        siblings.sort((a, b) -> {
+            int s = Integer.compare(a.getSortOrder(), b.getSortOrder());
+            return s != 0 ? s : a.getId().compareTo(b.getId());
+        });
+        // Strip source out so we can re-insert at the target index.
+        siblings.removeIf(c -> sourceId.equals(c.getId()));
+
+        int targetIndex;
+        if (beforeSiblingId != null) {
+            int idx = indexOfId(siblings, beforeSiblingId);
+            targetIndex = idx >= 0 ? idx : siblings.size();
+        } else if (afterSiblingId != null) {
+            int idx = indexOfId(siblings, afterSiblingId);
+            targetIndex = idx >= 0 ? idx + 1 : siblings.size();
+        } else {
+            targetIndex = siblings.size();
+        }
+
+        ClassificationCategory source = categoryRepository.findById(sourceId).orElse(null);
+        if (source != null) siblings.add(targetIndex, source);
+
+        int order = 10;
+        for (ClassificationCategory sibling : siblings) {
+            if (sibling.getSortOrder() != order) {
+                sibling.setSortOrder(order);
+                categoryRepository.save(sibling);
+            }
+            order += 10;
+        }
+    }
+
+    private static int indexOfId(List<ClassificationCategory> siblings, String id) {
+        for (int i = 0; i < siblings.size(); i++) {
+            if (id.equals(siblings.get(i).getId())) return i;
+        }
+        return -1;
+    }
+
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
     }
 
     private boolean isDescendantOf(ClassificationCategory candidate, String ancestorId) {

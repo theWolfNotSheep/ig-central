@@ -1,6 +1,7 @@
 package co.uk.wolfnotsheep.infrastructure.controllers.admin;
 
 import co.uk.wolfnotsheep.governance.models.ClassificationCategory;
+import co.uk.wolfnotsheep.governance.models.ClassificationCategory.NodeStatus;
 import co.uk.wolfnotsheep.governance.models.ClassificationCategory.TaxonomyLevel;
 import co.uk.wolfnotsheep.governance.repositories.ClassificationCategoryRepository;
 import co.uk.wolfnotsheep.governance.services.GovernanceService;
@@ -8,15 +9,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +43,13 @@ class GovernanceAdminControllerMoveTest {
         controller = new GovernanceAdminController(
                 governanceService, null, categoryRepository, null, null, null,
                 null, null, null, null, null, null);
+        // Default: no siblings under any parent. Individual tests override
+        // when they care about sibling renumbering.
+        when(categoryRepository.findByParentIdIsNullAndStatus(NodeStatus.ACTIVE))
+                .thenReturn(new ArrayList<>());
+        when(categoryRepository.findByParentIdAndStatus(any(), eq(NodeStatus.ACTIVE)))
+                .thenReturn(new ArrayList<>());
+        when(categoryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
     }
 
     @Test
@@ -140,16 +150,104 @@ class GovernanceAdminControllerMoveTest {
     }
 
     @Test
-    void successfulMove_incrementsVersionAndCallsSaveOnce() {
+    void successfulMove_incrementsVersion() {
         ClassificationCategory cat = makeCategory("cat-1", "p1", TaxonomyLevel.ACTIVITY);
         cat.setVersion(3);
         when(categoryRepository.findById("cat-1")).thenReturn(Optional.of(cat));
-        when(categoryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         controller.moveCategory("cat-1", body(null));
 
         assertThat(cat.getVersion()).isEqualTo(4);
-        verify(categoryRepository, times(1)).save(any());
+    }
+
+    @Test
+    void moveBeforeSibling_renumbersSiblingsWithSourceFirst() {
+        // Existing siblings under "parent-1": A (sortOrder 10), B (sortOrder 20).
+        // Move source "cat-1" before B → expected order: A, cat-1, B.
+        ClassificationCategory parent = makeCategory("parent-1", null, TaxonomyLevel.FUNCTION);
+        ClassificationCategory a = makeCategorySorted("a", "parent-1", TaxonomyLevel.ACTIVITY, 10);
+        ClassificationCategory b = makeCategorySorted("b", "parent-1", TaxonomyLevel.ACTIVITY, 20);
+        ClassificationCategory source = makeCategory("cat-1", null, TaxonomyLevel.FUNCTION);
+
+        when(categoryRepository.findById("cat-1")).thenReturn(Optional.of(source));
+        when(categoryRepository.findById("parent-1")).thenReturn(Optional.of(parent));
+        when(categoryRepository.findByParentIdAndStatus("parent-1", NodeStatus.ACTIVE))
+                .thenReturn(new ArrayList<>(List.of(a, b)));
+
+        Map<String, String> req = new HashMap<>();
+        req.put("newParentId", "parent-1");
+        req.put("beforeSiblingId", "b");
+        ResponseEntity<?> resp = controller.moveCategory("cat-1", req);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        // Resulting order: a (10), cat-1 (20), b (30)
+        assertThat(a.getSortOrder()).isEqualTo(10);
+        assertThat(source.getSortOrder()).isEqualTo(20);
+        assertThat(b.getSortOrder()).isEqualTo(30);
+    }
+
+    @Test
+    void moveAfterSibling_renumbersSiblingsWithSourceAfter() {
+        ClassificationCategory parent = makeCategory("parent-1", null, TaxonomyLevel.FUNCTION);
+        ClassificationCategory a = makeCategorySorted("a", "parent-1", TaxonomyLevel.ACTIVITY, 10);
+        ClassificationCategory b = makeCategorySorted("b", "parent-1", TaxonomyLevel.ACTIVITY, 20);
+        ClassificationCategory source = makeCategory("cat-1", null, TaxonomyLevel.FUNCTION);
+
+        when(categoryRepository.findById("cat-1")).thenReturn(Optional.of(source));
+        when(categoryRepository.findById("parent-1")).thenReturn(Optional.of(parent));
+        when(categoryRepository.findByParentIdAndStatus("parent-1", NodeStatus.ACTIVE))
+                .thenReturn(new ArrayList<>(List.of(a, b)));
+
+        Map<String, String> req = new HashMap<>();
+        req.put("newParentId", "parent-1");
+        req.put("afterSiblingId", "a");
+        controller.moveCategory("cat-1", req);
+
+        // Resulting order: a (10), cat-1 (20), b (30)
+        assertThat(a.getSortOrder()).isEqualTo(10);
+        assertThat(source.getSortOrder()).isEqualTo(20);
+        assertThat(b.getSortOrder()).isEqualTo(30);
+    }
+
+    @Test
+    void moveWithoutPosition_appendsToEnd() {
+        ClassificationCategory parent = makeCategory("parent-1", null, TaxonomyLevel.FUNCTION);
+        ClassificationCategory a = makeCategorySorted("a", "parent-1", TaxonomyLevel.ACTIVITY, 10);
+        ClassificationCategory b = makeCategorySorted("b", "parent-1", TaxonomyLevel.ACTIVITY, 20);
+        ClassificationCategory source = makeCategory("cat-1", null, TaxonomyLevel.FUNCTION);
+
+        when(categoryRepository.findById("cat-1")).thenReturn(Optional.of(source));
+        when(categoryRepository.findById("parent-1")).thenReturn(Optional.of(parent));
+        when(categoryRepository.findByParentIdAndStatus("parent-1", NodeStatus.ACTIVE))
+                .thenReturn(new ArrayList<>(List.of(a, b)));
+
+        controller.moveCategory("cat-1", body("parent-1"));
+
+        // Source appended last: a (10), b (20), cat-1 (30).
+        assertThat(a.getSortOrder()).isEqualTo(10);
+        assertThat(b.getSortOrder()).isEqualTo(20);
+        assertThat(source.getSortOrder()).isEqualTo(30);
+    }
+
+    @Test
+    void reorderAtSameParent_movesSourceWithoutChangingParent() {
+        // Existing under root: A (10), B (20), C (30). Move B before A.
+        ClassificationCategory a = makeCategorySorted("a", null, TaxonomyLevel.FUNCTION, 10);
+        ClassificationCategory b = makeCategorySorted("b", null, TaxonomyLevel.FUNCTION, 20);
+        ClassificationCategory c = makeCategorySorted("c", null, TaxonomyLevel.FUNCTION, 30);
+        when(categoryRepository.findById("b")).thenReturn(Optional.of(b));
+        when(categoryRepository.findByParentIdIsNullAndStatus(NodeStatus.ACTIVE))
+                .thenReturn(new ArrayList<>(List.of(a, b, c)));
+
+        Map<String, String> req = new HashMap<>();
+        // No newParentId in body — leave parent unchanged (already null).
+        req.put("beforeSiblingId", "a");
+        controller.moveCategory("b", req);
+
+        // Resulting: b (10), a (20), c (30)
+        assertThat(b.getSortOrder()).isEqualTo(10);
+        assertThat(a.getSortOrder()).isEqualTo(20);
+        assertThat(c.getSortOrder()).isEqualTo(30);
     }
 
     private static ClassificationCategory makeCategory(String id, String parentId, TaxonomyLevel level) {
@@ -159,6 +257,12 @@ class GovernanceAdminControllerMoveTest {
         c.setLevel(level);
         c.setName(id);
         c.setVersion(1);
+        return c;
+    }
+
+    private static ClassificationCategory makeCategorySorted(String id, String parentId, TaxonomyLevel level, int sortOrder) {
+        ClassificationCategory c = makeCategory(id, parentId, level);
+        c.setSortOrder(sortOrder);
         return c;
     }
 
