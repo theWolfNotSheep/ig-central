@@ -76,7 +76,13 @@ public class GovernanceService {
     // ── Classification Taxonomy ──────────────────────────────
 
     public List<ClassificationCategory> getFullTaxonomy() {
-        return categoryRepository.findByActiveTrue();
+        // Sort by sortOrder ascending so siblings ship in the order operators
+        // arranged via drag-drop. Categories from before the reorder feature
+        // landed have sortOrder 0 — they keep their existing repository order
+        // (effectively insertion order) until manually reordered.
+        return categoryRepository.findByActiveTrue().stream()
+                .sorted((a, b) -> Integer.compare(a.getSortOrder(), b.getSortOrder()))
+                .collect(java.util.stream.Collectors.toList());
     }
 
     public List<ClassificationCategory> getRootCategories() {

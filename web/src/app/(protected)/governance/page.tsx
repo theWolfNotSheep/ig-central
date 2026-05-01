@@ -485,6 +485,8 @@ function SensitivityPanel() {
 
 /* ── Taxonomy ──────────────────────────────────────────── */
 
+type DropZone = "before" | "into" | "after";
+
 function TaxonomyPanel() {
     const [categories, setCategories] = useState<Category[]>([]);
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -492,6 +494,7 @@ function TaxonomyPanel() {
     const [saving, setSaving] = useState(false);
     const [draggingId, setDraggingId] = useState<string | null>(null);
     const [dragOverId, setDragOverId] = useState<string | null>(null);
+    const [dragOverZone, setDragOverZone] = useState<DropZone>("into");
     const [moving, setMoving] = useState(false);
 
     const load = useCallback(async () => {
@@ -505,14 +508,25 @@ function TaxonomyPanel() {
 
     const toggle = (id: string) => setExpanded((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-    const moveCategory = async (sourceId: string, newParentId: string | null) => {
-        if (sourceId === newParentId) return;
+    /** Move with optional sibling positioning. Zone selects the API body shape. */
+    const moveCategory = async (sourceId: string, target: { id: string; parentId?: string } | null, zone: DropZone = "into") => {
+        if (target && sourceId === target.id) return;
         setMoving(true);
         try {
-            await api.post(`/admin/governance/taxonomy/${sourceId}/move`, { newParentId });
-            toast.success(newParentId
-                ? `Moved under ${categories.find(c => c.id === newParentId)?.name ?? "parent"}`
-                : "Moved to root");
+            const body: Record<string, string | null> = {};
+            if (target == null) {
+                body.newParentId = null;
+            } else if (zone === "into") {
+                body.newParentId = target.id;
+            } else {
+                body.newParentId = target.parentId ?? null;
+                if (zone === "before") body.beforeSiblingId = target.id;
+                else body.afterSiblingId = target.id;
+            }
+            await api.post(`/admin/governance/taxonomy/${sourceId}/move`, body);
+            const targetCat = target ? categories.find(c => c.id === target.id) : null;
+            const verb = zone === "into" ? "Moved under" : zone === "before" ? "Moved before" : "Moved after";
+            toast.success(target == null ? "Promoted to root" : `${verb} ${targetCat?.name ?? "sibling"}`);
             await load();
         } catch (err: unknown) {
             const e = err as { response?: { status?: number; data?: { error?: string; detail?: string } } };
@@ -522,6 +536,7 @@ function TaxonomyPanel() {
             setMoving(false);
             setDraggingId(null);
             setDragOverId(null);
+            setDragOverZone("into");
         }
     };
 
@@ -571,7 +586,7 @@ function TaxonomyPanel() {
     };
     const onRootDrop = (e: React.DragEvent) => {
         e.preventDefault();
-        if (draggingId) moveCategory(draggingId, null);
+        if (draggingId) moveCategory(draggingId, null, "into");
     };
 
     return (
@@ -611,12 +626,12 @@ function TaxonomyPanel() {
                         onAdd={(parentId) => setEditing(newCategory(parentId))}
                         onEdit={(c) => setEditing({ ...c })}
                         onDelete={handleDelete}
-                        draggingId={draggingId} dragOverId={dragOverId}
+                        draggingId={draggingId} dragOverId={dragOverId} dragOverZone={dragOverZone}
                         onDragStart={setDraggingId}
-                        onDragEnd={() => { setDraggingId(null); setDragOverId(null); }}
-                        onDragOverNode={setDragOverId}
-                        onDropOnNode={(targetId) => {
-                            if (draggingId) moveCategory(draggingId, targetId);
+                        onDragEnd={() => { setDraggingId(null); setDragOverId(null); setDragOverZone("into"); }}
+                        onDragOverNode={(id, zone) => { setDragOverId(id); setDragOverZone(zone); }}
+                        onDropOnNode={(target, zone) => {
+                            if (draggingId) moveCategory(draggingId, target, zone);
                         }} />
                 ))}
             </div>
@@ -625,7 +640,7 @@ function TaxonomyPanel() {
 }
 
 function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit, onDelete,
-                       draggingId, dragOverId, onDragStart, onDragEnd, onDragOverNode, onDropOnNode }: {
+                       draggingId, dragOverId, dragOverZone, onDragStart, onDragEnd, onDragOverNode, onDropOnNode }: {
     cat: Category; depth: number;
     childrenOf: (pid: string) => Category[];
     expanded: Set<string>; toggle: (id: string) => void;
@@ -634,10 +649,11 @@ function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit,
     onDelete: (id: string) => void;
     draggingId: string | null;
     dragOverId: string | null;
+    dragOverZone: DropZone;
     onDragStart: (id: string) => void;
     onDragEnd: () => void;
-    onDragOverNode: (id: string | null) => void;
-    onDropOnNode: (id: string) => void;
+    onDragOverNode: (id: string | null, zone: DropZone) => void;
+    onDropOnNode: (target: { id: string; parentId?: string }, zone: DropZone) => void;
 }) {
     const children = childrenOf(cat.id!);
     const hasChildren = children.length > 0;
@@ -645,7 +661,10 @@ function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit,
     const indent = depth === 0 ? "pl-6" : depth === 1 ? "pl-14" : "pl-22";
     const isDragging = draggingId === cat.id;
     const isDragOver = dragOverId === cat.id && draggingId !== cat.id;
-    const bg = isDragOver
+    const intoHighlight = isDragOver && dragOverZone === "into";
+    const beforeHighlight = isDragOver && dragOverZone === "before";
+    const afterHighlight = isDragOver && dragOverZone === "after";
+    const bg = intoHighlight
         ? "bg-blue-50"
         : isDragging
             ? "opacity-40"
@@ -658,23 +677,40 @@ function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit,
         e.dataTransfer.setData("text/plain", cat.id);
         onDragStart(cat.id);
     };
-    const handleDragOver = (e: React.DragEvent) => {
+    /** Pick zone from cursor Y position relative to the row: top 25% = before, middle 50% = into, bottom 25% = after. */
+    const zoneFromEvent = (e: React.DragEvent<HTMLDivElement>): DropZone => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        const h = rect.height;
+        if (y < h * 0.25) return "before";
+        if (y > h * 0.75) return "after";
+        return "into";
+    };
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
         if (!cat.id || !draggingId || draggingId === cat.id) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
-        if (dragOverId !== cat.id) onDragOverNode(cat.id);
+        const zone = zoneFromEvent(e);
+        if (dragOverId !== cat.id || dragOverZone !== zone) onDragOverNode(cat.id, zone);
     };
     const handleDragLeave = () => {
-        if (dragOverId === cat.id) onDragOverNode(null);
+        if (dragOverId === cat.id) onDragOverNode(null, "into");
     };
-    const handleDrop = (e: React.DragEvent) => {
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
         e.preventDefault();
         e.stopPropagation();
-        if (cat.id && draggingId && draggingId !== cat.id) onDropOnNode(cat.id);
+        if (!cat.id || !draggingId || draggingId === cat.id) return;
+        onDropOnNode({ id: cat.id, parentId: cat.parentId }, zoneFromEvent(e));
     };
 
     return (
-        <div>
+        <div className="relative">
+            {beforeHighlight && (
+                <div className="absolute top-0 left-0 right-0 h-0.5 bg-blue-500 z-10 pointer-events-none" />
+            )}
+            {afterHighlight && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500 z-10 pointer-events-none" />
+            )}
             <div
                 draggable={!!cat.id}
                 onDragStart={handleDragStart}
@@ -682,7 +718,7 @@ function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit,
                 onDragLeave={handleDragLeave}
                 onDragEnd={onDragEnd}
                 onDrop={handleDrop}
-                className={`flex items-center gap-3 px-6 py-3 ${indent} ${bg} ${depth > 0 ? "border-t border-gray-100" : ""} cursor-move ${isDragOver ? "ring-1 ring-blue-300" : ""}`}>
+                className={`flex items-center gap-3 px-6 py-3 ${indent} ${bg} ${depth > 0 ? "border-t border-gray-100" : ""} cursor-move ${intoHighlight ? "ring-1 ring-blue-300" : ""}`}>
                 <button onClick={() => toggle(cat.id!)} className="shrink-0">
                     {hasChildren ? (isExpanded ? <ChevronDown className="size-4 text-gray-400" /> : <ChevronRight className="size-4 text-gray-400" />) : <div className="w-4" />}
                 </button>
@@ -714,7 +750,7 @@ function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit,
                 <TaxonomyNode key={child.id} cat={child} depth={depth + 1}
                     childrenOf={childrenOf} expanded={expanded} toggle={toggle}
                     onAdd={onAdd} onEdit={onEdit} onDelete={onDelete}
-                    draggingId={draggingId} dragOverId={dragOverId}
+                    draggingId={draggingId} dragOverId={dragOverId} dragOverZone={dragOverZone}
                     onDragStart={onDragStart} onDragEnd={onDragEnd}
                     onDragOverNode={onDragOverNode} onDropOnNode={onDropOnNode} />
             ))}

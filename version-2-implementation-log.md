@@ -4697,3 +4697,43 @@ Frontend uses the native HTML5 drag-and-drop API — no extra dependency. Each t
 **Phase 3 status:** §3.3 partial (drag-drop reparenting + per-node field editor shipped; sibling reorder + audit-trail-per-category + hub pack browser/import wizard still open). §3.5 complete. §3.6 partial. §3.8 mostly complete. §3.1 / §3.4 / §3.9 untouched.
 
 **Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest piece, multi-PR), §3.4 component management UI (PII / sensitivity / storage tier / trait CRUD — much of it likely exists already), §3.6 follow-ups (Tier 1 timeline / CSV export). DAG editor is the headline missing item from the original v2 vision.
+
+## 2026-05-01 — Phase 3 PR7 — Taxonomy sibling reordering
+
+**Done:** Phase 3 §3.3 follow-up — sibling reordering on top of yesterday's drag-drop reparenting (PR6). The model already has a `sortOrder` field; nothing wrote to it before this PR. Operators could reparent but couldn't change sibling order.
+
+The move endpoint now accepts optional `beforeSiblingId` / `afterSiblingId` in the request body. When present, after updating parentId/level on the source, all active siblings under the new parent are renumbered in steps of 10 (10, 20, 30, ...) with the source inserted at the requested position. The body now also distinguishes "key absent" (leave parent unchanged — used for same-parent reorders) from "key present, value null" (promote to root).
+
+`getFullTaxonomy()` now sorts by `sortOrder` ascending so the order operators set survives the round-trip. Categories with `sortOrder=0` (everything before this PR landed) keep insertion order until manually reordered — no migration needed.
+
+Frontend extends each tree row with three drop zones detected from the cursor's Y position relative to the row's bounding rect: top 25% = drop before sibling, middle 50% = drop into (existing reparent behaviour), bottom 25% = drop after sibling. Visual affordances: top/bottom-edge highlights for before/after (a 2px blue bar), full-row blue background for into. Toast distinguishes the three outcomes.
+
+**Changes:**
+
+- `gls-governance/.../services/GovernanceService.java` — `getFullTaxonomy()` now sorts results by `sortOrder` asc using a stream + comparator. Backwards-compatible — existing clients see no semantic change beyond consistent ordering.
+- `gls-app-assembly/.../infrastructure/controllers/admin/GovernanceAdminController.java` — `moveCategory` extended with the `beforeSiblingId` / `afterSiblingId` body fields, plus a `renumberSiblings` private helper that fetches active siblings under the new parent, removes the source from the list, inserts at the target index, and writes `sortOrder` 10/20/30/... back. The "newParentId key absent vs null" semantic is documented inline. Unchanged behaviour when no sibling-position is given (source appended to end).
+- `gls-app-assembly/.../controllers/admin/GovernanceAdminControllerMoveTest.java` — extended from 8 to 12 tests (+4 new): before-sibling renumbers source first, after-sibling renumbers source last, no-position appends to end, same-parent reorder leaves parent unchanged. The existing tests' `BeforeEach` was tightened to default-stub the new repo methods (`findByParentIdAndStatus` / `findByParentIdIsNullAndStatus`) so older tests don't NPE.
+- `web/src/app/(protected)/governance/page.tsx` — `TaxonomyPanel` adds `dragOverZone` state alongside `dragOverId`. `moveCategory` now takes a `target` object + zone and shapes the API body accordingly (`{newParentId: target.id}` for into vs `{newParentId: target.parentId, beforeSiblingId|afterSiblingId: target.id}` for before/after). `TaxonomyNode` adds `zoneFromEvent(e)` that does the Y-position math, plus before/after highlight bars positioned absolutely on the row.
+
+**Tests:** `GovernanceAdminControllerMoveTest` 12 / 0 (was 8; +4 new). Full app-assembly suite green. `tsc --noEmit` clean. ESLint warnings unchanged from PR6 (3 pre-existing, none introduced).
+
+**Decisions logged:** None new. The "step-of-10 renumber" approach is worth a callout: it's O(n) per move where n is the sibling count under one parent (always small — typically 5–15 children per node in a real taxonomy). A float-midpoint approach would avoid the O(n) writes but introduce floating-point drift over many reorders. With siblings bounded by tree shape, full renumber is simpler and correct.
+
+**Files changed:**
+
+- `backend/gls-governance/src/main/java/.../services/GovernanceService.java` — modified (sort in `getFullTaxonomy`).
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/GovernanceAdminController.java` — modified (move endpoint extended + 3 helper methods).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/GovernanceAdminControllerMoveTest.java` — modified (default mocks + 4 new tests + helper).
+- `web/src/app/(protected)/governance/page.tsx` — modified (zone state + zone-aware moveCategory + zone-aware drop handlers + before/after highlight bars).
+- Log = 5 files total.
+
+**Open issues / deferred:**
+
+- **No migration to seed `sortOrder` for existing categories.** They all keep `sortOrder=0` until an operator drags them. Stable sort handles ties (frontend filter preserves order) so no visible regression — but if multiple categories have sortOrder=0 and an operator reorders one of them, the reorder applies to all siblings (which is correct behaviour, just initially surprising).
+- **No keyboard reorder.** Drag-drop only; arrow-key reorder would help accessibility.
+- **No bulk reorder UI.** Each move is one drag at a time.
+- **Cross-parent drag-and-drop with sibling position** — works (the body shape supports it) but the UI flow is "drop on top edge of an existing sibling under target parent". Sometimes operators want "drop as first child of empty parent" which currently maps to "into" only.
+
+**Phase 3 status:** §3.3 effectively complete (drag-drop reparent + sibling reorder + per-node fields all shipped; audit-trail-per-category + hub pack browser/import wizard still open). §3.5 complete. §3.6 partial. §3.8 mostly complete. §3.1 / §3.4 / §3.9 untouched.
+
+**Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest), §3.4 component management UI, §3.9 hub pack management. The first is multi-PR; the latter two are smaller and could ship as solo PRs.
