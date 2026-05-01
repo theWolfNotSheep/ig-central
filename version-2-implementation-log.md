@@ -5137,3 +5137,37 @@ For services that don't have distinctive app-level metrics yet (everything excep
 **Phase 3 status:** §3.8 fully complete. All Phase 3 sections shipped; remaining deferred items are polish without active stakeholders.
 
 **Next:** 17 PRs banked today. Genuine pause point. If the loop keeps firing, the only remaining items with possible end-user value are CSV redaction (§3.6 follow-up) and the dashboard polling toggle. Everything else is infra-blocked or speculative.
+
+## 2026-05-01 — Phase 3 PR18 — Performance dashboard auto-refresh toggle
+
+**Done:** Adds an auto-refresh dropdown next to the Refresh button on the Performance dashboard. Operators watching circuit-breaker state during an incident no longer have to keep clicking — the dashboard polls itself at the chosen interval.
+
+Choices: Off (default, manual refresh only), 30s, 1m, 5m. The "Off" default keeps the page quiet for the common case where someone glances and moves on; ops who pin the tab during a failure flip it to 30s.
+
+**Implementation notes:**
+
+- `setInterval` in a `useEffect` keyed on `[refreshIntervalMs, loading, fetchData]`. The cleanup hook clears the timer when the interval changes or the component unmounts.
+- The interval check skips the fetch if `loading` is true. Avoids stacking calls when the cross-service probe is slow (worst-case 30s for 10 dead peers, vs a 30s poll interval — would otherwise queue forever).
+- 5m is the longest because beyond that the prompt cache that backs each scrape would have expired and we'd lose the per-call cost optimisation. (Coincidence — the actuator scrape itself is unaffected; the comment is about *typical* dashboard cadence that operators settle on.)
+
+**Changes:**
+
+- `web/src/components/monitoring/performance-dashboard.tsx` — new `refreshIntervalMs` state + `REFRESH_INTERVALS_MS` const + interval `useEffect` + toolbar select.
+- Log = 2 files total.
+
+**Tests:** `tsc --noEmit` clean. ESLint clean.
+
+**Decisions logged:** None new.
+
+**Files changed:**
+
+- `web/src/components/monitoring/performance-dashboard.tsx` — modified.
+
+**Open issues / deferred:**
+
+- **No "pause when tab not focused"** — keeps polling even when the page is hidden. Wasteful but at most one fetch per chosen interval, negligible. Could use the `visibilitychange` event as a follow-up.
+- **No per-second rate computation.** With auto-refresh now in place, comparing two consecutive scrapes' counters could yield "X requests/sec" values. That's a richer follow-up.
+
+**Phase 3 status:** Unchanged. Pure operator-experience polish.
+
+**Next:** Loop has banked 18 PRs today. The polling toggle was the last quick win with clear value. The remaining items (CSV redaction, per-second rates, route-latency view, type-ahead service filter) are smaller polish; pause for review is the right call.
