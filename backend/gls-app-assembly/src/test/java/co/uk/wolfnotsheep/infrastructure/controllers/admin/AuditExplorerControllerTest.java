@@ -107,4 +107,51 @@ class AuditExplorerControllerTest {
         assertThat(resp.getStatusCode().value()).isEqualTo(404);
         assertThat(resp.getBody()).contains("ev\\\"id");
     }
+
+    @Test
+    void verifyChain_passesThroughOnHit() {
+        String upstream = "{\"resourceType\":\"DOCUMENT\",\"resourceId\":\"doc-1\","
+                + "\"status\":\"OK\",\"eventsTraversed\":42}";
+        when(client.verifyChain("DOCUMENT", "doc-1")).thenReturn(Optional.of(upstream));
+
+        ResponseEntity<String> resp = controller.verifyChain("DOCUMENT", "doc-1");
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).isEqualTo(upstream);
+    }
+
+    @Test
+    void verifyChain_returns404OnNoTier1Events() {
+        when(client.verifyChain("DOCUMENT", "missing")).thenReturn(Optional.empty());
+
+        ResponseEntity<String> resp = controller.verifyChain("DOCUMENT", "missing");
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(404);
+        assertThat(resp.getBody()).contains("no Tier 1 events");
+        assertThat(resp.getBody()).contains("DOCUMENT").contains("missing");
+    }
+
+    @Test
+    void verifyChain_returns502OnCollectorFailure() {
+        when(client.verifyChain(any(), any())).thenThrow(
+                new AuditCollectorClient.AuditCollectorException("upstream timeout"));
+
+        ResponseEntity<String> resp = controller.verifyChain("DOCUMENT", "doc-9");
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(502);
+        assertThat(resp.getBody()).contains("audit-collector unavailable");
+    }
+
+    @Test
+    void verifyChain_brokenStatusForwardedAsIs() {
+        String upstream = "{\"resourceType\":\"DOCUMENT\",\"resourceId\":\"doc-2\","
+                + "\"status\":\"BROKEN\",\"eventsTraversed\":5,"
+                + "\"brokenAtEventId\":\"01HK..\"}";
+        when(client.verifyChain("DOCUMENT", "doc-2")).thenReturn(Optional.of(upstream));
+
+        ResponseEntity<String> resp = controller.verifyChain("DOCUMENT", "doc-2");
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(200);
+        assertThat(resp.getBody()).contains("BROKEN").contains("brokenAtEventId");
+    }
 }

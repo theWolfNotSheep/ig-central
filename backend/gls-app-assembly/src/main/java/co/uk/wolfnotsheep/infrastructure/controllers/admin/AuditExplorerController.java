@@ -89,6 +89,32 @@ public class AuditExplorerController {
         }
     }
 
+    /**
+     * Tier 1 hash-chain verification for a resource. Forwards to the
+     * collector's {@code GET /v1/chains/{resourceType}/{resourceId}/verify}.
+     * Returns 200 + upstream JSON on success, 404 when no Tier 1 events
+     * exist for that resource, 502 on transport failure.
+     */
+    @GetMapping(value = "/v2/chains/{resourceType}/{resourceId}/verify",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> verifyChain(
+            @PathVariable String resourceType,
+            @PathVariable String resourceId) {
+        try {
+            Optional<String> body = client.verifyChain(resourceType, resourceId);
+            return body.map(ResponseEntity::ok)
+                    .orElseGet(() -> ResponseEntity.status(404).body(
+                            "{\"error\":\"no Tier 1 events for resource\",\"resourceType\":\""
+                                    + escapeJson(resourceType) + "\",\"resourceId\":\""
+                                    + escapeJson(resourceId) + "\"}"));
+        } catch (AuditCollectorClient.AuditCollectorException e) {
+            log.warn("audit-collector chain-verify proxy failed: {}", e.getMessage());
+            return ResponseEntity.status(502).body(
+                    "{\"error\":\"audit-collector unavailable\",\"detail\":\""
+                            + escapeJson(e.getMessage()) + "\"}");
+        }
+    }
+
     private static String escapeJson(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"")

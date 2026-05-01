@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
     ScrollText, Search, RefreshCw, Loader2, ChevronDown, ChevronRight,
-    CheckCircle, XCircle, AlertTriangle, Filter,
+    CheckCircle, XCircle, AlertTriangle, Filter, Link2, ShieldCheck, ShieldAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
@@ -46,6 +46,26 @@ type EventListResponse = {
     nextPageToken?: string | null;
 };
 
+type ResourceType =
+    | "DOCUMENT" | "BLOCK" | "USER" | "PIPELINE_RUN"
+    | "POLICY" | "CATEGORY" | "RETENTION_SCHEDULE";
+
+type ChainVerifyResponse = {
+    resourceType: ResourceType;
+    resourceId: string;
+    status: "OK" | "BROKEN";
+    eventsTraversed: number;
+    firstEventId?: string;
+    lastEventId?: string;
+    brokenAtEventId?: string;
+    expectedPreviousHash?: string;
+    computedPreviousHash?: string;
+};
+
+const RESOURCE_TYPES: ResourceType[] = [
+    "DOCUMENT", "BLOCK", "USER", "PIPELINE_RUN", "POLICY", "CATEGORY", "RETENTION_SCHEDULE",
+];
+
 const DEFAULT_PAGE_SIZE = 50;
 
 export default function AuditExplorerPage() {
@@ -64,6 +84,11 @@ export default function AuditExplorerPage() {
     const [singleEventId, setSingleEventId] = useState("");
     const [singleEvent, setSingleEvent] = useState<AuditEvent | null>(null);
     const [singleLoading, setSingleLoading] = useState(false);
+
+    const [verifyResourceType, setVerifyResourceType] = useState<ResourceType>("DOCUMENT");
+    const [verifyResourceId, setVerifyResourceId] = useState("");
+    const [verifyResult, setVerifyResult] = useState<ChainVerifyResponse | null>(null);
+    const [verifyLoading, setVerifyLoading] = useState(false);
 
     const fetchPage = useCallback(async (token: string | null) => {
         setLoading(true);
@@ -124,6 +149,32 @@ export default function AuditExplorerPage() {
         }
     };
 
+    const onVerifyChain = async () => {
+        const id = verifyResourceId.trim();
+        if (!id) return;
+        setVerifyLoading(true);
+        try {
+            const { data } = await api.get<ChainVerifyResponse>(
+                `/admin/audit-events/v2/chains/${encodeURIComponent(verifyResourceType)}/${encodeURIComponent(id)}/verify`);
+            setVerifyResult(data);
+            if (data.status === "OK") {
+                toast.success(`Chain OK — ${data.eventsTraversed} event(s) verified`);
+            } else {
+                toast.error(`Chain BROKEN at ${data.brokenAtEventId ?? "?"}`);
+            }
+        } catch (err: unknown) {
+            const e = err as { response?: { status?: number } };
+            if (e?.response?.status === 404) {
+                toast.error(`No Tier 1 events for ${verifyResourceType}:${id}`);
+            } else {
+                toast.error("Chain verification failed");
+            }
+            setVerifyResult(null);
+        } finally {
+            setVerifyLoading(false);
+        }
+    };
+
     return (
         <>
             <div className="flex items-center justify-between mb-6">
@@ -162,6 +213,75 @@ export default function AuditExplorerPage() {
                         <pre className="mt-2 text-[10px] text-gray-700 bg-white border border-gray-200 rounded p-2 overflow-x-auto max-h-64">
                             {JSON.stringify(singleEvent, null, 2)}
                         </pre>
+                    </div>
+                )}
+            </div>
+
+            {/* Tier 1 hash-chain verification */}
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
+                <div className="flex items-center gap-2 mb-2">
+                    <Link2 className="size-3 text-gray-500" />
+                    <span className="text-xs font-medium text-gray-700">Tier 1 hash-chain verification</span>
+                    <span className="text-[10px] text-gray-400">
+                        Walks the per-resource chain, recomputes hashes, reports OK or BROKEN.
+                    </span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                    <select value={verifyResourceType}
+                        onChange={e => setVerifyResourceType(e.target.value as ResourceType)}
+                        className="px-3 py-2 text-sm border border-gray-300 rounded-md font-mono">
+                        {RESOURCE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                    <input type="text" value={verifyResourceId}
+                        onChange={e => setVerifyResourceId(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") onVerifyChain(); }}
+                        placeholder="Resource ID (e.g. document slug or _id)"
+                        className="flex-1 min-w-48 px-3 py-2 text-sm border border-gray-300 rounded-md font-mono" />
+                    <button onClick={onVerifyChain} disabled={verifyLoading || !verifyResourceId.trim()}
+                        className="inline-flex items-center gap-2 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50">
+                        {verifyLoading ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+                        Verify
+                    </button>
+                </div>
+                {verifyResult && (
+                    <div className={`mt-3 rounded-md p-3 border ${
+                        verifyResult.status === "OK"
+                            ? "bg-green-50 border-green-200"
+                            : "bg-red-50 border-red-200"
+                    }`}>
+                        <div className="flex items-center gap-2 mb-2">
+                            {verifyResult.status === "OK" ? (
+                                <ShieldCheck className="size-4 text-green-600" />
+                            ) : (
+                                <ShieldAlert className="size-4 text-red-600" />
+                            )}
+                            <span className={`text-sm font-semibold ${
+                                verifyResult.status === "OK" ? "text-green-800" : "text-red-800"
+                            }`}>
+                                Chain {verifyResult.status}
+                            </span>
+                            <span className="text-xs text-gray-600">
+                                — {verifyResult.eventsTraversed} event(s) traversed
+                            </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                            <Detail label="Resource" value={`${verifyResult.resourceType} / ${verifyResult.resourceId}`} />
+                            {verifyResult.firstEventId && (
+                                <Detail label="First event" value={verifyResult.firstEventId} />
+                            )}
+                            {verifyResult.lastEventId && (
+                                <Detail label="Last event" value={verifyResult.lastEventId} />
+                            )}
+                            {verifyResult.brokenAtEventId && (
+                                <Detail label="Broken at" value={verifyResult.brokenAtEventId} highlight />
+                            )}
+                            {verifyResult.expectedPreviousHash && (
+                                <Detail label="Expected prev hash" value={verifyResult.expectedPreviousHash} />
+                            )}
+                            {verifyResult.computedPreviousHash && (
+                                <Detail label="Computed prev hash" value={verifyResult.computedPreviousHash} />
+                            )}
+                        </div>
                     </div>
                 )}
             </div>
@@ -269,6 +389,17 @@ export default function AuditExplorerPage() {
                 )}
             </div>
         </>
+    );
+}
+
+function Detail({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+    return (
+        <div className="min-w-0">
+            <span className="text-gray-500">{label}: </span>
+            <span className={`font-mono break-all ${highlight ? "text-red-700 font-semibold" : "text-gray-900"}`}>
+                {value}
+            </span>
+        </div>
     );
 }
 

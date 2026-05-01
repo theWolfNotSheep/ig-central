@@ -4627,3 +4627,37 @@ Frontend ships a collapsible `BulkReclassifyPanel` on the Ops tab. Default flow:
 **Phase 3 status:** §3.5 effectively complete (DLQ + locks + bulk reclassify all shipped; document monitoring exists; per-doc retry exists). §3.6 partial (Tier 2 search shipped; Tier 1 timeline + chain verify + export still open). §3.8 mostly shipped (cross-service metrics deferred). §3.1 visual DAG editor and §3.3 taxonomy tree editor are the remaining big-ticket Phase 3 items.
 
 **Next:** Continue Phase 3 — pick from §3.1 (visual DAG editor for pipelines, biggest piece), §3.3 (taxonomy tree editor), §3.6 follow-ups (Tier 1 timeline / chain verify / CSV export). DAG editor unblocks per-category pipeline assignment.
+
+## 2026-05-01 — Phase 3 PR5 — Audit Explorer chain verification
+
+**Done:** Phase 3 §3.6 follow-up — wires the audit collector's existing `GET /v1/chains/{type}/{id}/verify` endpoint into the Audit Explorer UI. The collector ships per-resource Tier 1 hash-chain verification (CSV #4) — walks the chain from oldest to newest, recomputes the hash sequence, returns `OK + eventsTraversed` or `BROKEN + brokenAtEventId + expected/computed previous-hash`. Until this PR there was no UI to trigger it; operators had to `curl` the internal collector hostname.
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/services/AuditCollectorClient.java` — new `verifyChain(resourceType, resourceId)` method, mirrors `findEventById`'s shape (returns `Optional<String>` so 404 — no Tier 1 events for this resource — is a regular outcome, not a transport failure). Forwards raw upstream JSON.
+- `gls-app-assembly/.../infrastructure/controllers/admin/AuditExplorerController.java` — new `GET /api/admin/audit-events/v2/chains/{resourceType}/{resourceId}/verify` proxy. 200 + upstream body on success, 404 on no-events, 502 on collector failure. JSON-shaped error bodies as elsewhere on this controller.
+- `gls-app-assembly/.../controllers/admin/AuditExplorerControllerTest.java` — 4 new tests on top of the existing 7. Pass-through, 404-on-no-events, 502 on transport failure, BROKEN status forwarded as-is. Total 11 / 0.
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — adds a Tier 1 chain-verification section between the single-event lookup and the Tier 2 search filters. Resource-type dropdown (DOCUMENT / BLOCK / USER / PIPELINE_RUN / POLICY / CATEGORY / RETENTION_SCHEDULE matching the contract enum), resource-id input, Verify button. Result panel: green for OK, red for BROKEN. Shows first/last event IDs on OK; broken-event-id + expected/computed previous-hash on BROKEN. Toast on outcome.
+
+**Tests:** `AuditExplorerControllerTest` 11 / 0 (was 7; +4 new). Reactor green. `tsc --noEmit` clean. ESLint clean for the edited file.
+
+**Decisions logged:** None new. Continues the "string pass-through proxy" decision from PR3 — the collector's `ChainVerifyResponse` schema is forwarded unchanged.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/AuditCollectorClient.java` — modified (one new public method).
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/AuditExplorerController.java` — modified (one new endpoint).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/AuditExplorerControllerTest.java` — modified (4 new tests).
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — modified (state + handler + UI section + new `Detail` helper).
+- Log = 5 files total.
+
+**Open issues / deferred:**
+
+- **No deep-link from a single Tier 1 event to its chain-verify result.** The single-event lookup shows the event but there's no "verify this event's chain" button on the result. Easy follow-up — would need to know the event's `resourceType` + `resourceId` (both already on the envelope under `resource`).
+- **No async / progress for long chains.** `verifyChain` is synchronous; the collector contract notes long-running for backends with many events. UI shows a spinner but no progress indicator. Fine for typical document chains (handful of events).
+- **No Tier 1 timeline-per-document view.** Still deferred — `/v1/events` is Tier 2-only. The collector would need a new endpoint to list Tier 1 events for a resource (the verify endpoint walks them but doesn't list them).
+- **No CSV export.** Still deferred.
+
+**Phase 3 status:** §3.6 partial (Tier 2 search + chain verify shipped; Tier 1 timeline + Tier 3 trace deep-link + CSV export still open). §3.5 complete. §3.8 mostly complete. §3.1 / §3.3 / §3.4 / §3.9 untouched.
+
+**Next:** Continue Phase 3 — §3.3 taxonomy tree editor (medium) or §3.1 visual DAG editor (biggest). Smaller alternative: §3.6 follow-up — Tier 1 timeline-per-document, but that needs a new collector contract endpoint first.
