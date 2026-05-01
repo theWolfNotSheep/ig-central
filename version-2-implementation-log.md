@@ -4547,3 +4547,41 @@ Cross-service metrics (`gls_router_classify_*`, `llm.circuit_breaker.*`, `llm.fa
 **Phase 3 status:** §3.5 (partial — DLQ + locks shipped, document monitoring + retry buttons + bulk reclassify still open) and §3.8 (now shipped, cross-service metrics deferred). §3.1 (visual DAG editor), §3.2 (block library), §3.3 (taxonomy tree editor), §3.6 (audit explorer) untouched.
 
 **Next:** Continue Phase 3 — pick from §3.1 (visual DAG editor for pipelines), §3.2 (block library UI), §3.3 (taxonomy tree editor), §3.6 (audit explorer). Pipeline DAG editor is the biggest single piece; the rest are smaller CRUD-shaped UIs.
+
+## 2026-05-01 — Phase 3 PR3 — Audit explorer (Tier 2 search)
+
+**Done:** Phase 3 plan item §3.6 — first cut of the v2 audit-event explorer. The legacy `/admin/audit` page already lists per-service request audit events from the `audit_events` collection (auth, controller calls). The new `/admin/audit-events` page lists v2 envelope events from `gls-audit-collector` — pipeline domain events, classifier decisions, governance actions — that have no UI yet.
+
+The collector itself runs as an internal Docker service (`http://gls-audit-collector:8080`) with no Spring Security on its public surface, so the browser can't reach it directly and we don't want to expose it directly even if it could. Solution: a thin admin proxy on `gls-app-assembly` at `/api/admin/audit-events/v2` that forwards to the collector's `/v1/events`. The proxy is gated by the existing `/api/admin/**` admin filter chain.
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/services/AuditCollectorClient.java` (new) — JDK `HttpClient`, mirrors the shape of `IndexingWorkerClient`. Two methods: `listTier2Events(SearchParams)` forwards `/v1/events` with all query params; `findEventById(eventId)` returns `Optional<String>` (empty on upstream 404). Returns raw JSON-string bodies — no DTO mapping — so the collector contract can evolve without touching this module.
+- `gls-app-assembly/.../infrastructure/controllers/admin/AuditExplorerController.java` (new) — `GET /api/admin/audit-events/v2` (Tier 2 search) + `GET /api/admin/audit-events/v2/{eventId}` (single-event lookup, hits Tier 1 + Tier 2). Forwards upstream JSON unmodified. 502 on transport failure with JSON-shaped error body.
+- `gls-app-assembly/.../controllers/admin/AuditExplorerControllerTest.java` (new) — 7 tests. Param forwarding (all six query fields captured into `SearchParams`), upstream pass-through, 502 on `AuditCollectorException`, single-event happy path, 404 on miss, 502 on get failure, JSON-escaping of the eventId in the 404 error body.
+- `web/src/app/(protected)/admin/audit-events/page.tsx` (new) — single page, two halves. Single-event lookup at the top (paste a ULID, get full envelope), Tier 2 filter form below (documentId / eventType / actorService / from / to / pageSize), paginated result list with click-to-expand rows. `pageStack` state tracks the cursor history so Prev works even though the API is forward-cursor only. Empty/loading/error states all branch.
+- `web/src/components/sidebar.tsx` — adds a new "Audit Explorer" admin link next to the existing "Audit Log".
+
+**Tests:** `gls-app-assembly` `AuditExplorerControllerTest` 7 / 0 (new). Reactor green. `tsc --noEmit` clean. ESLint clean for the new + edited files (existing sidebar warnings — Upload/Workflow/History unused, `<img>` element — pre-existing, not introduced).
+
+**Decisions logged:** None new. The "thin string-pass-through proxy" call deserves a note: forwarding raw JSON bodies couples the frontend to the collector contract directly, but spares us from regenerating + maintaining DTOs in `gls-app-assembly` every time the collector contract changes — and the contract is intentionally stable (`additionalProperties: true` on `AuditEvent`). If the proxy ever needs to enrich responses (e.g. join with `documents` collection), this can be revisited.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/AuditCollectorClient.java` — 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/AuditExplorerController.java` — 1 new.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/AuditExplorerControllerTest.java` — 1 new.
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — 1 new.
+- `web/src/components/sidebar.tsx` — modified (1 NavLink added).
+- Log = 6 files total.
+
+**Open issues / deferred:**
+
+- **No Tier 1 timeline-per-document view.** §3.6 calls for "Tier 1 timeline per document (compliance view)". The single-event lookup resolves Tier 1 events, but there's no per-document compliance timeline yet. The collector `/v1/events` endpoint is Tier 2-only by design (Tier 1 isn't free-form searchable — it's hash-chained for attestation). To list Tier 1 per document we'd need a new collector endpoint or to walk the chain from the most recent verifiable Tier 1 event. Tracked.
+- **No chain-verify integration.** `/v1/chains/{type}/{id}/verify` is shipped on the collector but there's no UI button yet — would slot into the same page once the per-document Tier 1 timeline lands.
+- **No Tier 3 trace deep-link.** §3.6 calls for jumping from any audit event into Tier 3 trace storage — depends on Tempo / Jaeger integration that isn't wired yet.
+- **No CSV export.** §3.6 calls for "Export for legal hold, with redaction options" — separate piece of work, the search UI is the prerequisite.
+
+**Phase 3 status:** §3.6 partial (Tier 2 search shipped; Tier 1 timeline + chain verify + trace deep-link + export still open). All remaining picks: §3.1 (visual DAG editor), §3.3 (taxonomy tree editor), §3.5 finishing (bulk reclassify with cost estimate), §3.4 (component management — partial coverage exists in /governance).
+
+**Next:** Continue Phase 3 — taxonomy tree editor (§3.3) or bulk reclassify (§3.5 finishing) are smallest. Pipeline DAG editor (§3.1) is biggest piece but high value.
