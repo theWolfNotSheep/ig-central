@@ -490,6 +490,9 @@ function TaxonomyPanel() {
     const [expanded, setExpanded] = useState<Set<string>>(new Set());
     const [editing, setEditing] = useState<Category | null>(null);
     const [saving, setSaving] = useState(false);
+    const [draggingId, setDraggingId] = useState<string | null>(null);
+    const [dragOverId, setDragOverId] = useState<string | null>(null);
+    const [moving, setMoving] = useState(false);
 
     const load = useCallback(async () => {
         try { const { data } = await api.get("/admin/governance/taxonomy"); setCategories(data); }
@@ -501,6 +504,26 @@ function TaxonomyPanel() {
     const childrenOf = (pid: string) => categories.filter((c) => c.parentId === pid);
 
     const toggle = (id: string) => setExpanded((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+    const moveCategory = async (sourceId: string, newParentId: string | null) => {
+        if (sourceId === newParentId) return;
+        setMoving(true);
+        try {
+            await api.post(`/admin/governance/taxonomy/${sourceId}/move`, { newParentId });
+            toast.success(newParentId
+                ? `Moved under ${categories.find(c => c.id === newParentId)?.name ?? "parent"}`
+                : "Moved to root");
+            await load();
+        } catch (err: unknown) {
+            const e = err as { response?: { status?: number; data?: { error?: string; detail?: string } } };
+            const msg = e?.response?.data?.detail ?? e?.response?.data?.error;
+            toast.error(`Move failed${msg ? ": " + msg : ""}`);
+        } finally {
+            setMoving(false);
+            setDraggingId(null);
+            setDragOverId(null);
+        }
+    };
 
     const newCategory = (parentId?: string): Category => {
         // Infer level from depth: no parent = FUNCTION, parent is root = ACTIVITY, else TRANSACTION
@@ -540,47 +563,126 @@ function TaxonomyPanel() {
         catch { toast.error("Delete failed"); }
     };
 
+    // Drop on the root drop-zone promotes a node to top-level (parentId = null).
+    const onRootDragOver = (e: React.DragEvent) => {
+        if (!draggingId) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+    };
+    const onRootDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        if (draggingId) moveCategory(draggingId, null);
+    };
+
     return (
         <div className="space-y-4">
             <div className="flex justify-between items-center">
-                <p className="text-sm text-gray-500">Categories the LLM uses to classify documents</p>
+                <p className="text-sm text-gray-500">
+                    Categories the LLM uses to classify documents.
+                    {" "}<span className="text-gray-400">Drag a row onto another to reparent, or onto the root strip to promote.</span>
+                </p>
                 <button onClick={() => setEditing(newCategory())} className={btnPrimary}><Plus className="size-3.5" />Add Category</button>
             </div>
 
             <CategoryForm category={editing} categories={categories} onChange={setEditing}
                 onSave={handleSave} onCancel={() => setEditing(null)} saving={saving} />
 
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 divide-y divide-gray-100">
+            {/* Root drop-zone — drop a node here to promote it to top-level */}
+            <div
+                onDragOver={onRootDragOver}
+                onDrop={onRootDrop}
+                className={`text-xs border-2 border-dashed rounded-md px-3 py-1.5 transition-colors ${
+                    draggingId
+                        ? "border-blue-400 bg-blue-50 text-blue-700"
+                        : "border-transparent text-transparent select-none"
+                }`}>
+                {draggingId ? "↑ Drop here to promote to top-level" : "drop-zone"}
+            </div>
+
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 divide-y divide-gray-100 relative">
+                {moving && (
+                    <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center">
+                        <Loader2 className="size-5 animate-spin text-gray-400" />
+                    </div>
+                )}
                 {roots.map((cat) => (
                     <TaxonomyNode key={cat.id} cat={cat} depth={0}
                         childrenOf={childrenOf} expanded={expanded} toggle={toggle}
                         onAdd={(parentId) => setEditing(newCategory(parentId))}
                         onEdit={(c) => setEditing({ ...c })}
-                        onDelete={handleDelete} />
+                        onDelete={handleDelete}
+                        draggingId={draggingId} dragOverId={dragOverId}
+                        onDragStart={setDraggingId}
+                        onDragEnd={() => { setDraggingId(null); setDragOverId(null); }}
+                        onDragOverNode={setDragOverId}
+                        onDropOnNode={(targetId) => {
+                            if (draggingId) moveCategory(draggingId, targetId);
+                        }} />
                 ))}
             </div>
         </div>
     );
 }
 
-function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit, onDelete }: {
+function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit, onDelete,
+                       draggingId, dragOverId, onDragStart, onDragEnd, onDragOverNode, onDropOnNode }: {
     cat: Category; depth: number;
     childrenOf: (pid: string) => Category[];
     expanded: Set<string>; toggle: (id: string) => void;
     onAdd: (parentId: string) => void;
     onEdit: (c: Category) => void;
     onDelete: (id: string) => void;
+    draggingId: string | null;
+    dragOverId: string | null;
+    onDragStart: (id: string) => void;
+    onDragEnd: () => void;
+    onDragOverNode: (id: string | null) => void;
+    onDropOnNode: (id: string) => void;
 }) {
     const children = childrenOf(cat.id!);
     const hasChildren = children.length > 0;
     const isExpanded = expanded.has(cat.id!);
     const indent = depth === 0 ? "pl-6" : depth === 1 ? "pl-14" : "pl-22";
-    const bg = depth === 0 ? "hover:bg-gray-50" : depth === 1 ? "bg-gray-50/50" : "bg-gray-100/40";
+    const isDragging = draggingId === cat.id;
+    const isDragOver = dragOverId === cat.id && draggingId !== cat.id;
+    const bg = isDragOver
+        ? "bg-blue-50"
+        : isDragging
+            ? "opacity-40"
+            : depth === 0 ? "hover:bg-gray-50" : depth === 1 ? "bg-gray-50/50" : "bg-gray-100/40";
     const textSize = depth === 0 ? "font-medium text-gray-900" : depth === 1 ? "font-medium text-gray-800 text-sm" : "text-gray-700 text-sm";
+
+    const handleDragStart = (e: React.DragEvent) => {
+        if (!cat.id) return;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", cat.id);
+        onDragStart(cat.id);
+    };
+    const handleDragOver = (e: React.DragEvent) => {
+        if (!cat.id || !draggingId || draggingId === cat.id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        if (dragOverId !== cat.id) onDragOverNode(cat.id);
+    };
+    const handleDragLeave = () => {
+        if (dragOverId === cat.id) onDragOverNode(null);
+    };
+    const handleDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (cat.id && draggingId && draggingId !== cat.id) onDropOnNode(cat.id);
+    };
 
     return (
         <div>
-            <div className={`flex items-center gap-3 px-6 py-3 ${indent} ${bg} ${depth > 0 ? "border-t border-gray-100" : ""}`}>
+            <div
+                draggable={!!cat.id}
+                onDragStart={handleDragStart}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDragEnd={onDragEnd}
+                onDrop={handleDrop}
+                className={`flex items-center gap-3 px-6 py-3 ${indent} ${bg} ${depth > 0 ? "border-t border-gray-100" : ""} cursor-move ${isDragOver ? "ring-1 ring-blue-300" : ""}`}>
                 <button onClick={() => toggle(cat.id!)} className="shrink-0">
                     {hasChildren ? (isExpanded ? <ChevronDown className="size-4 text-gray-400" /> : <ChevronRight className="size-4 text-gray-400" />) : <div className="w-4" />}
                 </button>
@@ -611,7 +713,10 @@ function TaxonomyNode({ cat, depth, childrenOf, expanded, toggle, onAdd, onEdit,
             {isExpanded && children.map((child) => (
                 <TaxonomyNode key={child.id} cat={child} depth={depth + 1}
                     childrenOf={childrenOf} expanded={expanded} toggle={toggle}
-                    onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} />
+                    onAdd={onAdd} onEdit={onEdit} onDelete={onDelete}
+                    draggingId={draggingId} dragOverId={dragOverId}
+                    onDragStart={onDragStart} onDragEnd={onDragEnd}
+                    onDragOverNode={onDragOverNode} onDropOnNode={onDropOnNode} />
             ))}
         </div>
     );
