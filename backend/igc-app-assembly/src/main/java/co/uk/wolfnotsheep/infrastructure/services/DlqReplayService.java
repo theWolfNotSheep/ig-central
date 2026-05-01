@@ -14,6 +14,7 @@ import org.springframework.amqp.core.MessageBuilder;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -60,6 +61,7 @@ public class DlqReplayService {
     private final ObjectProvider<LockProvider> lockProviderProvider;
     private final Set<String> allowedDlqs;
 
+    @Autowired
     public DlqReplayService(RabbitTemplate rabbitTemplate,
                             ObjectProvider<MeterRegistry> meterRegistryProvider,
                             ObjectProvider<LockProvider> lockProviderProvider) {
