@@ -95,6 +95,7 @@ export default function Sidebar() {
                     <NavLink item={{ href: "/reports", label: "Reports", icon: BarChart3 }} pathname={pathname} collapsed={collapsed} />
                     <NavLink item={{ href: "/monitoring", label: "Monitoring", icon: Activity }} pathname={pathname} collapsed={collapsed} />
                     <NavLink item={{ href: "/admin/audit", label: "Audit Log", icon: ScrollText }} pathname={pathname} collapsed={collapsed} />
+                    <NavLink item={{ href: "/admin/audit-events", label: "Audit Explorer", icon: ScrollText }} pathname={pathname} collapsed={collapsed} />
                     <NavLink item={{ href: "/admin/directory", label: "Directory", icon: Users }} pathname={pathname} collapsed={collapsed} />
                     <NavLink item={{ href: "/admin/access", label: "Access Audit", icon: ShieldCheck }} pathname={pathname} collapsed={collapsed} />
                     <NavLink item={{ href: "/settings", label: "Settings", icon: Settings }} pathname={pathname} collapsed={collapsed} />
