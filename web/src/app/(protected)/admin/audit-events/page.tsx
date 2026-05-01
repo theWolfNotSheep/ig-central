@@ -13,7 +13,7 @@ import api from "@/lib/axios/axios.client";
  * Phase 3 — Audit Explorer (Tier 2).
  *
  * Reads `GET /api/admin/audit-events/v2` (proxy in front of
- * `gls-audit-collector`'s `/v1/events`). Surfaces the v2 envelope
+ * `igc-audit-collector`'s `/v1/events`). Surfaces the v2 envelope
  * stream — pipeline events, classifier decisions, governance
  * actions — that the legacy `/admin/audit` page doesn't show
  * (that one queries the per-service request audit log).

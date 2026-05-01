@@ -87,7 +87,7 @@ Single decision: do new services deploy to K8s or stay on Docker Compose for v1?
 - [x] Per-folder: `VERSION` (semver, start at `0.1.0`), `CHANGELOG.md`, `README.md` describing scope.
 
 #### 0.4 `contracts/_shared/` content (hand-authored)
-- [x] `error-envelope.yaml` — RFC 7807 with GLS extensions (`code`, `lastErrorStage`, `retryable`, `retryAfterMs`, `trace[]`).
+- [x] `error-envelope.yaml` — RFC 7807 with IGC extensions (`code`, `lastErrorStage`, `retryable`, `retryAfterMs`, `trace[]`).
 - [x] `security-schemes.yaml` — JWT scheme definition (per A6 decision).
 - [x] `common-headers.yaml` — `traceparent`, `Idempotency-Key`, `X-Request-Id`, `Prefer` semantics.
 - [x] `capabilities.yaml` — `GET /v1/capabilities` response shape.
@@ -102,29 +102,29 @@ Single decision: do new services deploy to K8s or stay on Docker Compose for v1?
 - [x] Pre-commit hook: validate any spec edited under `contracts/` against its ruleset.
 
 #### 0.6 AsyncAPI 3.0 setup
-- [x] `contracts/messaging/asyncapi.yaml` — declare existing Rabbit topology as it stands today (`gls.documents.{ingested, classified}`, `gls.pipeline.llm.*`, `gls.audit.*`, `gls.config.changed`). (`gls.config.changed` declared as forward-looking in `info.description` only — full channel lands with 0.8.)
+- [x] `contracts/messaging/asyncapi.yaml` — declare existing Rabbit topology as it stands today (`igc.documents.{ingested, classified}`, `igc.pipeline.llm.*`, `igc.audit.*`, `igc.config.changed`). (`igc.config.changed` declared as forward-looking in `info.description` only — full channel lands with 0.8.)
 - [x] `contracts/audit/asyncapi.yaml` — Tier 1, Tier 2, Tier 3 audit channels.
 
 #### 0.7 Audit infrastructure (foundation, not unhappy path)
 - [x] `contracts/audit/event-envelope.schema.json` — JSON Schema 2020-12 for the common envelope (per §7.4).
 - [x] `audit_outbox` MongoDB collection schema + indexes.
-- [ ] **`gls-platform-audit` shared library** (JVM): envelope construction, outbox writer, relay-to-Rabbit, retry/backoff. Single dependency every service imports. (Envelope, outbox writer, schema validation, Spring Boot starter auto-config, and the outbox-to-Rabbit relay all landed; **leader election (ShedLock for Tier 1 single-writer) + comprehensive metrics + circuit breaker still outstanding**.)
-- [ ] Equivalent Python module sketch (for `gls-bert-trainer` later) — design doc only at this phase.
+- [ ] **`igc-platform-audit` shared library** (JVM): envelope construction, outbox writer, relay-to-Rabbit, retry/backoff. Single dependency every service imports. (Envelope, outbox writer, schema validation, Spring Boot starter auto-config, and the outbox-to-Rabbit relay all landed; **leader election (ShedLock for Tier 1 single-writer) + comprehensive metrics + circuit breaker still outstanding**.)
+- [ ] Equivalent Python module sketch (for `igc-bert-trainer` later) — design doc only at this phase.
 - [x] Audit relay pattern documented in CLAUDE.md.
 
-#### 0.8 `gls.config.changed` cache-invalidation infrastructure (per CSV #30)
-- [x] AsyncAPI for the `gls.config.changed` channel.
-- [x] `gls-platform-config` shared library: cache-with-invalidation primitive, event publisher, event subscriber.
+#### 0.8 `igc.config.changed` cache-invalidation infrastructure (per CSV #30)
+- [x] AsyncAPI for the `igc.config.changed` channel.
+- [x] `igc-platform-config` shared library: cache-with-invalidation primitive, event publisher, event subscriber.
 - [x] Existing `AppConfigService` migrated to use it (replaces Caffeine TTL).
 - [x] MCP server's Caffeine cache for governance entities replaced with the new pattern. (Substrate intentionally stays Caffeine — TTL replaced with change-driven; CSV #30 specifies the pattern, not the storage. Hub-side publishers tracked under Track A.)
 
 #### 0.9 Maven BOM decoupling
-- [x] Introduce per-deployable version properties in `backend/bom/pom.xml`: `gls.api.version`, `gls.orchestrator.version`, etc. All initially set to the current SNAPSHOT — values don't change yet, just the seam exists.
+- [x] Introduce per-deployable version properties in `backend/bom/pom.xml`: `igc.api.version`, `igc.orchestrator.version`, etc. All initially set to the current SNAPSHOT — values don't change yet, just the seam exists.
 - [x] Document independent-version policy in CLAUDE.md.
 
 #### 0.10 Schema migration tooling
 - [x] Pick migration tool — Mongock recommended (MongoDB-native; equivalent to Liquibase/Flyway). Log decision. (CSV #41.)
-- [x] Wire into `gls-app-assembly` startup.
+- [x] Wire into `igc-app-assembly` startup.
 - [x] Write a no-op migration as the smoke test. (V001_MongockSmoke.)
 - [x] Document migration-on-startup policy.
 
@@ -142,8 +142,8 @@ Single decision: do new services deploy to K8s or stay on Docker Compose for v1?
 
 - All four shape decisions (A1, A2, A5, A6) are DECIDED in the CSV.
 - `contracts/` directory exists with `_shared/`, `messaging/`, `audit/` content; CI passes spec-diff and version-bump checks.
-- `gls-platform-audit` and `gls-platform-config` libraries published to local Maven repo and consumed by `gls-app-assembly` without behavioural change.
-- Existing `AppConfigService` runs on the new `gls.config.changed` cache pattern; integration test proves cache invalidation works end-to-end.
+- `igc-platform-audit` and `igc-platform-config` libraries published to local Maven repo and consumed by `igc-app-assembly` without behavioural change.
+- Existing `AppConfigService` runs on the new `igc.config.changed` cache pattern; integration test proves cache invalidation works end-to-end.
 - Performance baseline captured and committed.
 - Mongock migration runs on app startup with no errors.
 - A "hello-world" OpenAPI spec for a placeholder service compiles to a stub via the generator.
@@ -160,7 +160,7 @@ Single decision: do new services deploy to K8s or stay on Docker Compose for v1?
 
 ---
 
-## Phase 0.5 — Reference implementation (`gls-extraction-tika`)
+## Phase 0.5 — Reference implementation (`igc-extraction-tika`)
 
 **Goal:** one service end-to-end with *every* concern future services will need. The pattern, not the product.
 
@@ -169,13 +169,13 @@ Why this service: it's the simplest member of the extraction family, has a small
 ### Scope
 
 #### 0.5.1 Module + contract
-- [x] New Maven module `gls-extraction-tika` with its own `pom.xml`, version property, Dockerfile.
+- [x] New Maven module `igc-extraction-tika` with its own `pom.xml`, version property, Dockerfile.
 - [x] `contracts/extraction/openapi.yaml` — `POST /v1/extract`, `GET /v1/capabilities`, `GET /actuator/health`. References `_shared/` for error envelope, security, headers.
 - [x] `VERSION` 0.1.0, `CHANGELOG.md` initial entry.
 
 #### 0.5.2 Implementation
 - [x] Generated server stub from contract.
-- [x] Tika-based text extraction (port logic from existing `gls-document-processing`).
+- [x] Tika-based text extraction (port logic from existing `igc-document-processing`).
 - [x] Returns text inline if ≤ 256 KB, else `textRef` to MinIO (per CSV #19).
 - [x] Idempotency on `nodeRunId` with 24h TTL (per CSV #16). (`extraction_idempotency` Mongo collection with TTL index; `IdempotencyStore` wraps `tryAcquire` / `cacheResult` / `releaseOnFailure`. Cached row → 200 with replayed response; in-flight → 409 `IDEMPOTENCY_IN_FLIGHT`. Failures delete the row so retries can proceed without waiting for TTL.)
 
@@ -184,23 +184,23 @@ Why this service: it's the simplest member of the extraction family, has a small
 - [x] **Tracing:** `traceparent` propagation; spans for `tika.parse`, `minio.fetch`. (`traceparent` is propagated via Spring Boot's `ServerHttpObservationFilter` (auto-wired for free) + by the controller into audit envelopes. `@Observed(name="tika.parse")` and `@Observed(name="minio.fetch")` create nested spans wired through `micrometer-tracing-bridge-otel`. The OTLP exporter to a real collector is deployment-side — `opentelemetry-exporter-otlp` is added per-environment, not in the build.)
 - [x] **Health probes:** liveness (process alive), readiness (MinIO reachable, Tika initialised). (`TikaHealthIndicator` parses a tiny synthetic input on every check; `MinioHealthIndicator` calls `listBuckets()` and reports the count. Spring Boot 4 relocates the `Health` / `HealthIndicator` types — see `docs/service-template.md`.)
 - [x] **Error returns:** RFC 7807 with `EXTRACTION_OOM`, `EXTRACTION_CORRUPT`, `EXTRACTION_TIMEOUT` codes. (`ExtractionExceptionHandler` maps `DocumentNotFoundException` → 404 `DOCUMENT_NOT_FOUND`, `DocumentEtagMismatchException` → 409 `DOCUMENT_ETAG_MISMATCH`, `UnparseableDocumentException` → 422 `EXTRACTION_CORRUPT`, `DocumentTooLargeException` → 413 `EXTRACTION_TOO_LARGE`, `UncheckedIOException` → 503 `EXTRACTION_SOURCE_UNAVAILABLE`. `EXTRACTION_OOM` / `EXTRACTION_TIMEOUT` not yet thrown — they apply once async parsing / circuit breakers land.)
-- [x] **Metrics:** Prometheus counters, latency histogram, error rate. (`ExtractMetrics` records `gls_extraction_duration_seconds` (Timer) and `gls_extraction_result_total` (Counter) tagged by `outcome` / `source` / `mime_family` / `error_code` from a closed taxonomy. Idempotency short-circuits report `outcome=cached` / `outcome=in_flight`. `gls_extraction_bytes_processed` summary captures the per-extract byte count. Surfaced via `/actuator/prometheus`.)
+- [x] **Metrics:** Prometheus counters, latency histogram, error rate. (`ExtractMetrics` records `igc_extraction_duration_seconds` (Timer) and `igc_extraction_result_total` (Counter) tagged by `outcome` / `source` / `mime_family` / `error_code` from a closed taxonomy. Idempotency short-circuits report `outcome=cached` / `outcome=in_flight`. `igc_extraction_bytes_processed` summary captures the per-extract byte count. Surfaced via `/actuator/prometheus`.)
 - [ ] **JWT validation** middleware (per A6 decision).
 
 #### 0.5.4 Tests
 - [ ] Contract test: spec lints, generated stub compiles.
 - [ ] Unit tests: Tika parsing for office docs, native PDFs, text, HTML, .eml.
-- [ ] Integration test: `docker-compose up gls-extraction-tika minio rabbitmq mongo` → POST a real document → assert response shape + audit event in Tier 2 store.
+- [ ] Integration test: `docker-compose up igc-extraction-tika minio rabbitmq mongo` → POST a real document → assert response shape + audit event in Tier 2 store.
 - [ ] Failure-mode tests: 200MB PDF → 413; corrupt file → 422; MinIO down → 503.
 - [ ] Smoke test: deploys, takes traffic, returns 200s under nominal load.
 
 #### 0.5.5 Deployment
 - [x] Dockerfile, Docker Compose service definition, K8s manifest (Deployment, Service, HPA shell — values empty, just the structure). (Multi-stage Dockerfile + Docker Compose placeholder block landed; **K8s manifests still outstanding** — defer until 0.2's deployment-target reasoning genuinely calls for K8s.)
-- [ ] CI/CD: builds image on PR, pushes to `ghcr.io/.../gls-extraction-tika:${VERSION}` on tag.
+- [ ] CI/CD: builds image on PR, pushes to `ghcr.io/.../igc-extraction-tika:${VERSION}` on tag.
 
 #### 0.5.6 Documentation: the cloneable pattern
-- [x] `gls-extraction-tika/README.md` — points at the contract, describes the pattern.
-- [x] `docs/service-template.md` — generic version of the above; explains how to clone for the next service. (Bring-up checklist, substrate use (`gls-platform-audit`, `gls-platform-config`, generator), conventions (RFC 7807, idempotency, capabilities), repo-root Docker build context, generator + Mockito gotchas accumulated across 0.5.1–0.5.5.)
+- [x] `igc-extraction-tika/README.md` — points at the contract, describes the pattern.
+- [x] `docs/service-template.md` — generic version of the above; explains how to clone for the next service. (Bring-up checklist, substrate use (`igc-platform-audit`, `igc-platform-config`, generator), conventions (RFC 7807, idempotency, capabilities), repo-root Docker build context, generator + Mockito gotchas accumulated across 0.5.1–0.5.5.)
 
 ### Acceptance gate
 
@@ -210,7 +210,7 @@ Why this service: it's the simplest member of the extraction family, has a small
 - Distributed traces show full call from caller through Tika.
 - All RFC 7807 error codes exercised in tests.
 - `docs/service-template.md` exists and is referenced from CLAUDE.md as the canonical pattern.
-- Performance: extraction latency within 20% of current `gls-document-processing` baseline.
+- Performance: extraction latency within 20% of current `igc-document-processing` baseline.
 
 ### Risk callouts
 
@@ -233,7 +233,7 @@ Why this service: it's the simplest member of the extraction family, has a small
 
 Clone the Tika pattern.
 
-- [ ] **`gls-extraction-archive`** — handles `.zip`, `.mbox`, `.pst`. On encountering archives, fans out child documents back to step ① ingest. Recursive ingest pattern documented. Decision: CSV #43 — caller owns fan-out (one-level walk, children returned inline; orchestrator publishes per-child ingest events).
+- [ ] **`igc-extraction-archive`** — handles `.zip`, `.mbox`, `.pst`. On encountering archives, fans out child documents back to step ① ingest. Recursive ingest pattern documented. Decision: CSV #43 — caller owns fan-out (one-level walk, children returned inline; orchestrator publishes per-child ingest events).
   - [x] Module + contract (`contracts/extraction-archive/`, BOM property, reactor entry).
   - [x] Generated server stub + parser dispatch (ZIP, MBOX, PST via `java-libpst` per CSV #44) + MinIO source / sink.
   - [x] Idempotency (`archive_idempotency` Mongo TTL), audit (`EXTRACTION_*` Tier 2), health (parser dispatcher + MinIO), metrics, tracing (`archive.walk`, `minio.fetch`, `minio.put`).
@@ -241,23 +241,23 @@ Clone the Tika pattern.
   - [x] Tests — unit only (37 in module). Integration tests blocked on issue #7.
   - [x] Dockerfile + Compose entry.
   - [x] Per-service README.
-- [x] **`gls-extraction-ocr`** — Tesseract via Tess4J (CSV #45). Contract + module + impl + Dockerfile (apt-installs `tesseract-ocr` + per-build language packs) + Compose entry. JWT and integration tests blocked (same as Tika / archive).
-- [x] **`gls-extraction-audio`** — Whisper backend (CSV #46) with `Prefer: respond-async` semantics (CSV #47). Pluggable backend interface in this repo: `OpenAiWhisperService` (cloud) + `NotConfiguredAudioTranscriptionService` (default fallback). Sync + async paths share idempotency via the `audio_jobs` Mongo collection. JWT and integration tests blocked (same as Tika / archive / OCR).
-- [x] Mime-detection logic — where does it live? Decision: at ingest in `gls-api` / `gls-connectors` using Tika's detector. Log in CSV. (CSV #42 — DECIDED.)
+- [x] **`igc-extraction-ocr`** — Tesseract via Tess4J (CSV #45). Contract + module + impl + Dockerfile (apt-installs `tesseract-ocr` + per-build language packs) + Compose entry. JWT and integration tests blocked (same as Tika / archive).
+- [x] **`igc-extraction-audio`** — Whisper backend (CSV #46) with `Prefer: respond-async` semantics (CSV #47). Pluggable backend interface in this repo: `OpenAiWhisperService` (cloud) + `NotConfiguredAudioTranscriptionService` (default fallback). Sync + async paths share idempotency via the `audio_jobs` Mongo collection. JWT and integration tests blocked (same as Tika / archive / OCR).
+- [x] Mime-detection logic — where does it live? Decision: at ingest in `igc-api` / `igc-connectors` using Tika's detector. Log in CSV. (CSV #42 — DECIDED.)
 
-### 1.2 `gls-classifier-router` (mock implementation)
+### 1.2 `igc-classifier-router` (mock implementation)
 
 First iteration is a *proxy* — accepts the new contract, dispatches to the existing LLM worker. Proves orchestrator integration without any model work.
 
 - [x] `contracts/classifier-router/openapi.yaml` per §11.A decisions.
 - [x] Mock implementation (Phase 1.2 PR1) — `MockCascadeService` returns deterministic `tierOfDecision=MOCK`.
-- [x] Real LLM-worker dispatch (Phase 1.2 PR2) — `LlmDispatchCascadeService` publishes to `gls.pipeline` exchange (routing key `pipeline.llm.requested`); per-replica auto-named queue bound to `pipeline.llm.completed` correlates by `jobId`. Selected via `gls.router.cascade.llm.enabled=true`. Default still mock so the router stays self-contained until the orchestrator cutover (1.3) lands.
+- [x] Real LLM-worker dispatch (Phase 1.2 PR2) — `LlmDispatchCascadeService` publishes to `igc.pipeline` exchange (routing key `pipeline.llm.requested`); per-replica auto-named queue bound to `pipeline.llm.completed` correlates by `jobId`. Selected via `igc.router.cascade.llm.enabled=true`. Default still mock so the router stays self-contained until the orchestrator cutover (1.3) lands.
 - [x] Cascade policy block schema (`ROUTER` block content) — `contracts/blocks/router.schema.json` v0.2.0. Per-tier `enabled` + `accept`, fallback strategy (`LLM_FLOOR` / `ROUTER_SHORT_CIRCUIT`), per-category overrides, optional cost budget.
 - [x] Admin migration — Mongock `V003_DefaultRouterBlock` seeds the `default-router` block with `bertAccept=1.01`, `slmAccept=1.01`, `llmAccept=0.0`, fallback `LLM_FLOOR`. Cascade is functionally disabled until per-category tuning lands in 1.4–1.6.
 
 ### 1.3 Orchestrator cutover (no behaviour change)
 
-- [x] Replace direct LLM dispatch in `PipelineExecutionEngine` with a call to `gls-classifier-router`. `ClassifierRouterClient` (`@ConditionalOnProperty pipeline.classifier-router.enabled=true`) wraps a JDK `HttpClient` against `POST /v1/classify` and translates the router's `ClassifyResponse` back into the existing `LlmJobCompletedEvent` shape; engine calls `resumePipeline(event)` inline.
+- [x] Replace direct LLM dispatch in `PipelineExecutionEngine` with a call to `igc-classifier-router`. `ClassifierRouterClient` (`@ConditionalOnProperty pipeline.classifier-router.enabled=true`) wraps a JDK `HttpClient` against `POST /v1/classify` and translates the router's `ClassifyResponse` back into the existing `LlmJobCompletedEvent` shape; engine calls `resumePipeline(event)` inline.
 - [x] Same outcome from a user's perspective; under the hood, traffic now flows through the new path. The router internally dispatches via the existing LLM worker (`LlmDispatchCascadeService`), so the underlying model call is unchanged — only the orchestrator's transport changes.
 - [x] **Rollback plan:** feature flag `pipeline.classifier-router.enabled` gates the new path; flip to `false` to revert. Default `false` — the legacy async-Rabbit path stays primary until explicitly flipped.
 - [ ] Performance comparison against baseline: confirm latency is within 10% of current. **Blocked on Phase 0.11** load driver + first captured baseline (no representative-corpus data yet).
@@ -266,39 +266,39 @@ First iteration is a *proxy* — accepts the new contract, dispatches to the exi
 
 Per CSV #2 (DECIDED hybrid).
 
-- [x] **`gls-bert-trainer`** (Python, k8s Job): reads training samples from Mongo, fine-tunes ModernBERT on the org's top-3 categories, exports ONNX, publishes to MinIO under versioned key. Phase 1.4 PR4 — sketch with real `pymongo` reader (top-N categories with min-samples gate), real Optimum + HF Transformers fine-tune + ONNX export, real `minio` publisher (versioned object key + metadata sidecar shaped to match the BERT_CLASSIFIER block schema's `trainingMetadata` field). Skipped (with a clear log) when fewer than `min_samples_per_class * top_n` samples exist. Tests cover the Mongo aggregation shape + the publisher's object-key construction; the actual training run is gated on a GPU + a populated samples collection.
-- [x] **`gls-bert-inference`** (JVM, DJL + ONNX Runtime): loads ONNX from MinIO at startup, exposes `POST /v1/infer`, `POST /v1/models/reload`, `GET /v1/models`. Phase 1.4 PR1 — first cut ships the contract surface, JVM module, DJL classpath, audit / metrics / health / model-readiness wiring, and a stub `NotLoadedInferenceEngine` that returns `MODEL_NOT_LOADED` 503 until the trainer publishes an artefact. The real DJL + ONNX engine swaps in behind the `InferenceEngine` interface in a follow-up PR.
+- [x] **`igc-bert-trainer`** (Python, k8s Job): reads training samples from Mongo, fine-tunes ModernBERT on the org's top-3 categories, exports ONNX, publishes to MinIO under versioned key. Phase 1.4 PR4 — sketch with real `pymongo` reader (top-N categories with min-samples gate), real Optimum + HF Transformers fine-tune + ONNX export, real `minio` publisher (versioned object key + metadata sidecar shaped to match the BERT_CLASSIFIER block schema's `trainingMetadata` field). Skipped (with a clear log) when fewer than `min_samples_per_class * top_n` samples exist. Tests cover the Mongo aggregation shape + the publisher's object-key construction; the actual training run is gated on a GPU + a populated samples collection.
+- [x] **`igc-bert-inference`** (JVM, DJL + ONNX Runtime): loads ONNX from MinIO at startup, exposes `POST /v1/infer`, `POST /v1/models/reload`, `GET /v1/models`. Phase 1.4 PR1 — first cut ships the contract surface, JVM module, DJL classpath, audit / metrics / health / model-readiness wiring, and a stub `NotLoadedInferenceEngine` that returns `MODEL_NOT_LOADED` 503 until the trainer publishes an artefact. The real DJL + ONNX engine swaps in behind the `InferenceEngine` interface in a follow-up PR.
 - [x] `BERT_CLASSIFIER` block type: links categories to model version + acceptance threshold. Phase 1.4 PR1 — `contracts/blocks/bert-classifier.schema.json` v0.3.0 carries `modelVersion`, optional `artifactRef` MinIO pointer, `labelMapping[]`, optional `trainingMetadata`, optional `minTextLength`. The bert-inference service consumes it once the trainer's first artefact is wired.
-- [x] Wire `gls-bert-inference` into `gls-classifier-router` cascade behind the existing `ROUTER` block. Conservative thresholds (`bertAccept=0.92`). Phase 1.4 PR2 — `BertHttpDispatcher` (synchronous JDK `HttpClient` to `POST /v1/infer`) + `BertOrchestratorCascadeService` (wraps the existing inner cascade — LLM-direct or mock — and dispatches to BERT for `BERT_CLASSIFIER` blocks; falls through to inner on `MODEL_NOT_LOADED` / transport / 5xx). Activated by `gls.router.cascade.bert.enabled=true`; default off. ROUTER block threshold reading is deferred to the per-category tuning PR — for now BERT 200 responses are accepted as-is (the trainer hasn't published an artefact, so `MODEL_NOT_LOADED` is the only realistic response and the cascade always escalates).
+- [x] Wire `igc-bert-inference` into `igc-classifier-router` cascade behind the existing `ROUTER` block. Conservative thresholds (`bertAccept=0.92`). Phase 1.4 PR2 — `BertHttpDispatcher` (synchronous JDK `HttpClient` to `POST /v1/infer`) + `BertOrchestratorCascadeService` (wraps the existing inner cascade — LLM-direct or mock — and dispatches to BERT for `BERT_CLASSIFIER` blocks; falls through to inner on `MODEL_NOT_LOADED` / transport / 5xx). Activated by `igc.router.cascade.bert.enabled=true`; default off. ROUTER block threshold reading is deferred to the per-category tuning PR — for now BERT 200 responses are accepted as-is (the trainer hasn't published an artefact, so `MODEL_NOT_LOADED` is the only realistic response and the cascade always escalates).
 - [ ] Enable BERT for the org's top-1 category first; observe escalation rate; widen.
 
 ### 1.5 SLM worker
 
-- [x] **`gls-slm-worker`** with two backends: Anthropic Haiku (cloud) and Ollama (local) — selectable via SLM block configuration. Phase 1.5 PR1 (module + contract + stub backend); PR2 (`AnthropicHaikuSlmService` via Spring AI + `claude-haiku-4-5`); PR4 (`OllamaSlmService` via Spring AI + `llama3.1:8b`). Backend selected via `gls.slm.worker.backend=anthropic` / `=ollama`.
-- [x] Same OpenAPI contract as LLM worker. Phase 1.5 PR1 — `contracts/slm-worker/openapi.yaml` v0.1.0 sets the shape the LLM worker rework (Phase 1.6) will conform to: `POST /v1/classify` with sync + `Prefer: respond-async`, `GET /v1/jobs/{nodeRunId}`, `GET /v1/backends`, `GET /v1/capabilities`, `GET /actuator/health`. Same `JobStore` shape as `gls-extraction-audio` and `gls-classifier-router`.
-- [x] MCP integration mandatory (each worker calls MCP itself per CSV #1). Phase 1.5 PR5 — `spring-ai-starter-mcp-client` added; `SlmBackendConfig` injects all `ToolCallbackProvider` beans and passes them to both `AnthropicHaikuSlmService` and `OllamaSlmService` via a new constructor overload. The ChatClient builder calls `.defaultToolCallbacks(...)` only when there's at least one provider; missing MCP server → starter logs WARN, registers no tools, SLM call still works without them. `spring.ai.mcp.client.sse.connections.governance.url=${GLS_MCP_SERVER_URL:http://gls-mcp-server:8081}`.
-- [x] Wire into cascade as the middle tier. Phase 1.5 PR3 — `SlmHttpDispatcher` + `SlmOrchestratorCascadeService` in `gls-classifier-router`. For `PROMPT` blocks: dispatches to `gls-slm-worker`; on `SLM_NOT_CONFIGURED` (or transport / 5xx) falls through to inner. Composes with the BERT tier — full cascade is BERT → SLM → inner (LLM/mock). Activated by `gls.router.cascade.slm.enabled=true`; default off.
+- [x] **`igc-slm-worker`** with two backends: Anthropic Haiku (cloud) and Ollama (local) — selectable via SLM block configuration. Phase 1.5 PR1 (module + contract + stub backend); PR2 (`AnthropicHaikuSlmService` via Spring AI + `claude-haiku-4-5`); PR4 (`OllamaSlmService` via Spring AI + `llama3.1:8b`). Backend selected via `igc.slm.worker.backend=anthropic` / `=ollama`.
+- [x] Same OpenAPI contract as LLM worker. Phase 1.5 PR1 — `contracts/slm-worker/openapi.yaml` v0.1.0 sets the shape the LLM worker rework (Phase 1.6) will conform to: `POST /v1/classify` with sync + `Prefer: respond-async`, `GET /v1/jobs/{nodeRunId}`, `GET /v1/backends`, `GET /v1/capabilities`, `GET /actuator/health`. Same `JobStore` shape as `igc-extraction-audio` and `igc-classifier-router`.
+- [x] MCP integration mandatory (each worker calls MCP itself per CSV #1). Phase 1.5 PR5 — `spring-ai-starter-mcp-client` added; `SlmBackendConfig` injects all `ToolCallbackProvider` beans and passes them to both `AnthropicHaikuSlmService` and `OllamaSlmService` via a new constructor overload. The ChatClient builder calls `.defaultToolCallbacks(...)` only when there's at least one provider; missing MCP server → starter logs WARN, registers no tools, SLM call still works without them. `spring.ai.mcp.client.sse.connections.governance.url=${IGC_MCP_SERVER_URL:http://igc-mcp-server:8081}`.
+- [x] Wire into cascade as the middle tier. Phase 1.5 PR3 — `SlmHttpDispatcher` + `SlmOrchestratorCascadeService` in `igc-classifier-router`. For `PROMPT` blocks: dispatches to `igc-slm-worker`; on `SLM_NOT_CONFIGURED` (or transport / 5xx) falls through to inner. Composes with the BERT tier — full cascade is BERT → SLM → inner (LLM/mock). Activated by `igc.router.cascade.slm.enabled=true`; default off.
 - [ ] Tune `slmAcceptThreshold` per category against held-out evaluation set.
 
 ### 1.6 LLM worker rework
 
-- [x] Move existing `gls-llm-orchestration` logic into the new `gls-llm-worker` shape (sync entry point + async path retained). Phase 1.6 PR1 (module + contract + stub) and PR2 (real Anthropic + Ollama backends via Spring AI starters; same shape as SLM PR2/PR4). MCP integration via `spring-ai-starter-mcp-client` per CSV #1 — every backend hands the configured `ToolCallbackProvider` beans to its ChatClient builder. Default model `claude-sonnet-4-5` for Anthropic, `qwen2.5:32b` for Ollama (matches the legacy orchestrator's defaults).
-- [x] Conform to new contract (RFC 7807 errors, idempotency, traceparent). Phase 1.6 PR1 — `contracts/llm-worker/openapi.yaml` v0.1.0 mirrors `gls-slm-worker`'s shape: `POST /v1/classify` with sync + `Prefer: respond-async`, `GET /v1/jobs/{nodeRunId}`, `GET /v1/capabilities`, `GET /actuator/health`. Same `JobStore` lifecycle as the rest of the v2 services.
-- [x] Cost budget gate: per-day spending cap, configurable. Phase 1.6 PR4 — `CostBudgetTracker` (in-memory atomic counter resetting at UTC midnight). `gls.llm.worker.budget.daily-token-cap` (default 0 = disabled). When the running daily total crosses the cap, the next call gets 429 `LLM_BUDGET_EXCEEDED` with a `Retry-After: <seconds-until-midnight-UTC>` header.
-- [x] Rate-limit semaphore per replica. Phase 1.6 PR4 — `RateLimitGate` (bounded fair `Semaphore`). `gls.llm.worker.rate-limit.permits` (default 0 = disabled), `wait-ms` (default 0). When no permit is available within the wait window, returns 429 `LLM_RATE_LIMITED` with `Retry-After: 1`.
+- [x] Move existing `igc-llm-orchestration` logic into the new `igc-llm-worker` shape (sync entry point + async path retained). Phase 1.6 PR1 (module + contract + stub) and PR2 (real Anthropic + Ollama backends via Spring AI starters; same shape as SLM PR2/PR4). MCP integration via `spring-ai-starter-mcp-client` per CSV #1 — every backend hands the configured `ToolCallbackProvider` beans to its ChatClient builder. Default model `claude-sonnet-4-5` for Anthropic, `qwen2.5:32b` for Ollama (matches the legacy orchestrator's defaults).
+- [x] Conform to new contract (RFC 7807 errors, idempotency, traceparent). Phase 1.6 PR1 — `contracts/llm-worker/openapi.yaml` v0.1.0 mirrors `igc-slm-worker`'s shape: `POST /v1/classify` with sync + `Prefer: respond-async`, `GET /v1/jobs/{nodeRunId}`, `GET /v1/capabilities`, `GET /actuator/health`. Same `JobStore` lifecycle as the rest of the v2 services.
+- [x] Cost budget gate: per-day spending cap, configurable. Phase 1.6 PR4 — `CostBudgetTracker` (in-memory atomic counter resetting at UTC midnight). `igc.llm.worker.budget.daily-token-cap` (default 0 = disabled). When the running daily total crosses the cap, the next call gets 429 `LLM_BUDGET_EXCEEDED` with a `Retry-After: <seconds-until-midnight-UTC>` header.
+- [x] Rate-limit semaphore per replica. Phase 1.6 PR4 — `RateLimitGate` (bounded fair `Semaphore`). `igc.llm.worker.rate-limit.permits` (default 0 = disabled), `wait-ms` (default 0). When no permit is available within the wait window, returns 429 `LLM_RATE_LIMITED` with `Retry-After: 1`.
 
 ### 1.7 Hub-component-to-taxonomy wiring (CSV #31–34)
 
-- [x] **PiiTypeDefinition** gains `applicableCategoryIds[]`. Migration: existing definitions → empty array (= global, current behaviour). Phase 1.7 PR1 — field added to `gls-governance` model + Mongock `V004_BackfillApplicableCategoryIds` populates `[]` on every pre-1.7 row.
+- [x] **PiiTypeDefinition** gains `applicableCategoryIds[]`. Migration: existing definitions → empty array (= global, current behaviour). Phase 1.7 PR1 — field added to `igc-governance` model + Mongock `V004_BackfillApplicableCategoryIds` populates `[]` on every pre-1.7 row.
 - [x] **StorageTier** gains `applicableCategoryIds[]`. Phase 1.7 PR1 — same shape; same Mongock backfill.
 - [x] **TraitDefinition** gains `applicableCategoryIds[]`. Phase 1.7 PR1 — same shape; same Mongock backfill.
 - [x] **SensitivityDefinition** promoted to first-class entity. Migration: existing enum values seed entities with `applicableCategoryIds=[]`. Phase 1.7 PR1 — `SensitivityDefinition` was already a `@Document` collection (so the "promote" half is pre-existing); this PR adds `applicableCategoryIds` and the V004 backfill restores the `[]` default for any pre-1.7 row.
 - [x] Hub `PackImportService` updated to preserve `applicableCategoryIds[]` on import. Phase 1.7 PR2 — `strListOrNull` helper distinguishes "key absent" (preserve existing value) from "explicit empty array" (reset to global). All four apply* methods (`applySensitivity`, `applyStorageTier`, `applyPiiType`, `applyTrait`) opt in.
-- [x] Hub `PackImportService` fires `gls.config.changed` events for affected component types (per CSV #30). Already implemented via `GovernanceConfigChangeBridge` in `gls-governance` (Phase 0.7+) — every Spring Data Mongo `AfterSaveEvent` for the four entity types is bridged to a `gls.config.changed` publish. PackImportService's `repo.save(...)` calls trigger the bridge automatically; no PackImportService changes needed.
+- [x] Hub `PackImportService` fires `igc.config.changed` events for affected component types (per CSV #30). Already implemented via `GovernanceConfigChangeBridge` in `igc-governance` (Phase 0.7+) — every Spring Data Mongo `AfterSaveEvent` for the four entity types is bridged to a `igc.config.changed` publish. PackImportService's `repo.save(...)` calls trigger the bridge automatically; no PackImportService changes needed.
 
 ### 1.8 `POLICY` block type + interpreter (CSV #35)
 
-- [x] `POLICY` added to `BlockType` enum. Phase 1.8 PR1 — `gls-governance.PipelineBlock.BlockType.POLICY`.
+- [x] `POLICY` added to `BlockType` enum. Phase 1.8 PR1 — `igc-governance.PipelineBlock.BlockType.POLICY`.
 - [x] Block content schema: `requiredScans[]` (refs to `PiiTypeDefinition`s), `metadataSchemaIds[]`, `governancePolicyIds[]`, optional `conditions{}` for per-category overrides. Phase 1.8 PR1 — `contracts/blocks/policy.schema.json` v0.4.0. `requiredScans[]` carries `(scanType, ref, blocking)` per scan; `conditions.bySensitivity[]` for per-sensitivity overrides.
 - [x] In-engine interpreter (Option A from CSV #37): a node in the visual DAG that runs after classification. Phase 1.8 PR2 (`PolicyBlockResolver` + typed `PolicyBlock`) and PR3 (engine wire-in: after `applyClassificationToDocument`, the engine resolves the POLICY block for the just-classified category and stashes effective `policyRequiredScanCount` / `policyMetadataSchemaIds` / `policyGovernancePolicyIds` in shared context). Observe-only this phase; Phase 1.9 (Stage ④) consumes the context to drive the post-classify pipeline. The visual-DAG-node form-factor (separate node type vs. built-in step) is deferred to Phase 1.9 once the dispatch shape is concrete.
 - [x] Per-category POLICY blocks seeded at install time from the imported governance pack. Phase 1.8 PR4 — `PackImportService` adds a synthetic `seedPolicyBlocksForCategories(ctx)` step after the component import loop. For every category in `ctx.categoryNameToId` without a pre-existing block, creates a `policy-${categoryId}`-named POLICY block with empty `requiredScans` / `metadataSchemaIds` / `governancePolicyIds`. Idempotent — re-imports skip categories that already have a block. Operators populate the block content via the admin UI; future PRs let pack files ship explicit POLICY blocks that supersede the seed.
@@ -306,35 +306,35 @@ Per CSV #2 (DECIDED hybrid).
 ### 1.9 Stage ④ scan dispatch (CSV #36)
 
 - [x] PII / PHI / PCI scan PROMPT blocks created per category needing them. Phase 1.9 PR1: `prompt.schema.json` formalises the PROMPT block content shape (introducing the `kind` discriminator: `CLASSIFICATION` / `SCAN` / `METADATA_EXTRACTION` / `GENERAL`); `PackImportService.seedScanPromptBlocksForPiiTypes` auto-creates a `kind=SCAN` PROMPT block per `PiiTypeDefinition` (id `scan-pii-${key}`), inheriting the PII type's `applicableCategoryIds` for category scoping.
-- [x] Stage ④ node calls `gls-classifier-router` with the scan PROMPT block — same cascade, different content. Phase 1.9 PR2: `policyRequiredScans[]` now plumbed into the engine's shared context (was just count-only); new `PolicyScanDispatcher` iterates the resolved `requiredScans` and dispatches each through `ScanRouterClient` (sibling of `ClassifierRouterClient` with scan-specific result parsing); per-scan outcomes recorded in `policyScanResults` for PR3 / PR4. Observe-only at this phase — blocking failures are logged but don't gate the pipeline.
+- [x] Stage ④ node calls `igc-classifier-router` with the scan PROMPT block — same cascade, different content. Phase 1.9 PR2: `policyRequiredScans[]` now plumbed into the engine's shared context (was just count-only); new `PolicyScanDispatcher` iterates the resolved `requiredScans` and dispatches each through `ScanRouterClient` (sibling of `ClassifierRouterClient` with scan-specific result parsing); per-scan outcomes recorded in `policyScanResults` for PR3 / PR4. Observe-only at this phase — blocking failures are logged but don't gate the pipeline.
 - [x] Metadata extraction PROMPT blocks created per `MetadataSchema`. Phase 1.9 PR3: `PackImportService.seedExtractionPromptBlocksForMetadataSchemas` auto-creates a `kind=METADATA_EXTRACTION` PROMPT block per `MetadataSchema` (id `extract-metadata-${schemaId}`); systemPrompt enumerates the schema's fields with type / required-ness / hints / examples and instructs strict-JSON response. Engine wires `MetadataExtractionDispatcher` after the scan dispatcher to iterate `policyMetadataSchemaIds[]` and call the cascade router for each via `ScanRouterClient`. Per-schema outcomes recorded in `policyExtractionResults` for PR4. Observe-only.
 - [x] Results aggregated, passed to enforcement. Phase 1.9 PR4: `DocumentClassificationResult` gains a `policyScanFindings: Map<String, Object>` field keyed by scan ref. `PipelineExecutionEngine.persistPolicyResults` runs after the dispatchers — merges successful extractions' `extractedFields` into the existing `extractedMetadata` map (string-coerced; classification-time metadata wins on conflict) and stores scan results under `policyScanFindings`. Downstream nodes (governance / enforcement / indexing) read these as part of the canonical record. Pure aggregation helpers (`mergeExtractedFields`, `aggregateScanFindings`) extracted as package-private static for unit testing.
 
-### 1.10 `gls-enforcement-worker` split
+### 1.10 `igc-enforcement-worker` split
 
-- [x] Split out from monolith into its own deployable. Phase 1.10 PR2: `gls-governance-enforcement` becomes the new HTTP worker. `EnforceController` / `JobController` / `MetaController` implement the generated stubs; `JobStore` (Mongo `enforcement_jobs` collection) handles `nodeRunId` idempotency + async-job poll surface; `AsyncDispatcher` + `AsyncConfig` wire `Prefer: respond-async`; `EnforceExceptionHandler` maps to RFC 7807 problem+json. Dockerfile + compose entry added; container exposes :8097. Legacy Rabbit consumer is gated off in this container via `PIPELINE_EXECUTION_ENGINE_ENABLED=true`.
+- [x] Split out from monolith into its own deployable. Phase 1.10 PR2: `igc-governance-enforcement` becomes the new HTTP worker. `EnforceController` / `JobController` / `MetaController` implement the generated stubs; `JobStore` (Mongo `enforcement_jobs` collection) handles `nodeRunId` idempotency + async-job poll surface; `AsyncDispatcher` + `AsyncConfig` wire `Prefer: respond-async`; `EnforceExceptionHandler` maps to RFC 7807 problem+json. Dockerfile + compose entry added; container exposes :8097. Legacy Rabbit consumer is gated off in this container via `PIPELINE_EXECUTION_ENGINE_ENABLED=true`.
 - [x] Same contract surface as Phase 0.5 reference; happy + per-service errors only. Phase 1.10 PR1: `contracts/enforcement-worker/openapi.yaml` v0.1.0 — `POST /v1/enforce` (sync + async via `Prefer: respond-async`), `GET /v1/jobs/{nodeRunId}`, `GET /v1/capabilities`, `/actuator/health`. `EnforceRequest` / `ClassificationEvent` / `EnforceResponse` / `AppliedSummary` schemas mirror the existing `EnforcementService.enforce` shape; `policyContext` carries the Phase 1.9 `governancePolicyIds` so the worker doesn't re-resolve. Spectral clean. PR2 bumped to v0.2.0 with corrected `retentionTrigger` / `expectedDispositionAction` enums (PR1 used aspirational values that didn't match the canonical Java enums).
 - [x] Rollback: feature flag. Phase 1.10 PR3: `EnforcementWorkerClient` (sync HTTP) wired into `PipelineExecutionEngine.applyEnforcement` via `ObjectProvider<>`. Behind `pipeline.enforcement-worker.enabled` (default off); when off, the engine keeps calling the in-process `EnforcementService`. Worker writes the document before responding; engine re-fetches by id to apply per-node toggle clearing + status routing. Roll forward by setting `PIPELINE_ENFORCEMENT_WORKER_ENABLED=true`; roll back by unsetting.
 
-### 1.11 `gls-indexing-worker` (NEW)
+### 1.11 `igc-indexing-worker` (NEW)
 
-- [x] Greenfield service consuming `gls.documents.classified`. Phase 1.11 PR1: contract scaffolding under `contracts/indexing-worker/` (REST admin surface) + `contracts/messaging/asyncapi.yaml` v0.4.0 declares `gls-indexing-worker` as a third consumer of `documentClassified` alongside `ClassificationEnforcementConsumer` and `PipelineExecutionConsumer`. No new channel; reuses existing `DocumentClassifiedEvent`. PR2: greenfield `gls-indexing-worker` Spring Boot module shipped — `DocumentClassifiedConsumer` (`@RabbitListener` on `gls.documents.classified.indexing` queue), `IndexController` / `ReindexController` / `JobController` / `MetaController` implementing the generated stubs, Mongo-backed `JobStore`, Dockerfile + compose entry on :8098. PR3 will cut the in-process `ElasticsearchIndexService` callers over.
+- [x] Greenfield service consuming `igc.documents.classified`. Phase 1.11 PR1: contract scaffolding under `contracts/indexing-worker/` (REST admin surface) + `contracts/messaging/asyncapi.yaml` v0.4.0 declares `igc-indexing-worker` as a third consumer of `documentClassified` alongside `ClassificationEnforcementConsumer` and `PipelineExecutionConsumer`. No new channel; reuses existing `DocumentClassifiedEvent`. PR2: greenfield `igc-indexing-worker` Spring Boot module shipped — `DocumentClassifiedConsumer` (`@RabbitListener` on `igc.documents.classified.indexing` queue), `IndexController` / `ReindexController` / `JobController` / `MetaController` implementing the generated stubs, Mongo-backed `JobStore`, Dockerfile + compose entry on :8098. PR3 will cut the in-process `ElasticsearchIndexService` callers over.
 - [x] Writes document body + `extractedMetadata` to Elasticsearch. Phase 1.11 PR2: `IndexingService` lifted from the legacy `ElasticsearchIndexService` (same JDK `HttpClient` + `buildEsDocument` JSON builder + `ig_central_documents` mappings) — searchable fields, tags, classification codes, truncated-to-50KB extracted text, dynamic `extractedMetadata` map. `@PostConstruct ensureIndex()` creates the index on startup if missing.
 - [x] Per-service error handling: ES down → INDEX_FAILED with retry; mapping conflict → quarantine collection. Phase 1.11 PR1: contracted via `code=INDEX_BACKEND_UNAVAILABLE` (503) and `code=INDEX_MAPPING_CONFLICT` (422) on the REST surface. PR2: `IndexingService` raises `IndexBackendUnavailableException` for ES 5xx / transport failures (consumer rethrows so Spring AMQP requeues / DLXes per broker config) and `MappingConflictException` for ES 4xx (service parks the doc in a new `index_quarantine` Mongo collection then throws; consumer swallows so the message is acked rather than infinite-looped). RFC 7807 problem+json envelope on the REST surface via `IndexingExceptionHandler`.
-- [x] Cutover behind feature flag. Phase 1.11 PR3: new `IndexingWorkerClient` (HTTP) in `gls-app-assembly`, conditional on `pipeline.indexing-worker.enabled=true`. Legacy `ElasticsearchIndexService` injects `ObjectProvider<IndexingWorkerClient>` and routes each public write (`indexDocument` / `removeDocument` / `reindexAll`) to the worker when the bean is present; falls back to the in-process write when absent. The 3 callers (`DocumentController` / `MonitoringController` / `PipelineWebhookController`) are unchanged — the seam lives inside the legacy service. Roll forward: `PIPELINE_INDEXING_WORKER_ENABLED=true`. Roll back: unset the flag.
+- [x] Cutover behind feature flag. Phase 1.11 PR3: new `IndexingWorkerClient` (HTTP) in `igc-app-assembly`, conditional on `pipeline.indexing-worker.enabled=true`. Legacy `ElasticsearchIndexService` injects `ObjectProvider<IndexingWorkerClient>` and routes each public write (`indexDocument` / `removeDocument` / `reindexAll`) to the worker when the bean is present; falls back to the in-process write when absent. The 3 callers (`DocumentController` / `MonitoringController` / `PipelineWebhookController`) are unchanged — the seam lives inside the legacy service. Roll forward: `PIPELINE_INDEXING_WORKER_ENABLED=true`. Roll back: unset the flag.
 
-### 1.12 `gls-audit-collector` (Tier 1 + Tier 2)
+### 1.12 `igc-audit-collector` (Tier 1 + Tier 2)
 
-- [x] Single binary with two roles (Class D singleton for Tier 1, Class B horizontal for Tier 2). Phase 1.12 PR1: REST contract scaffolded under `contracts/audit-collector/openapi.yaml` v0.1.0 — `GET /v1/events` (Tier 2 search, cursor pagination), `GET /v1/events/{eventId}` (single fetch, both tiers), `GET /v1/chains/{resourceType}/{resourceId}/verify` (Tier 1 hash-chain integrity), `GET /v1/capabilities`, `/actuator/health`. The async consumer side already exists in `contracts/audit/asyncapi.yaml` (operations `consumeAuditTier1` / `consumeAuditTier2`). PR2: greenfield `gls-audit-collector` Spring Boot module shipped — two `@RabbitListener`s on `gls.audit.tier1.collector` + `gls.audit.tier2.collector` (bound to existing `gls.audit` topic exchange), Mongo-backed `audit_tier1_events` + `audit_tier2_events` collections with composite indexes for chain lookup + Tier 2 search, REST controllers (`EventsController` / `ChainsController` / `MetaController`), Dockerfile + compose entry on :8099. The collector container disables the platform-audit outbox relay (`gls.platform.audit.relay.enabled=false`) so it doesn't double-emit events it just consumed.
-- [x] Hash-chain implementation for Tier 1 with per-resource chains (per CSV #4). Publisher-side (`Tier1HashTransformer` in `gls-platform-audit`) already done in Phase 0.7. PR2: consumer-side validation in `Tier1Consumer` — looks up the latest stored event for the resource via `findFirstByResourceTypeAndResourceIdOrderByTimestampDesc`, recomputes its hash via `EventHasher`, compares against the incoming event's `previousEventHash`. Mismatch → `ChainBrokenException` → log + ack (broken chains are permanent, requeueing won't help; a real deployment binds a DLX for forensics — Phase 2 reliability follow-up). `ChainVerifier` walks the full chain for the contracted `GET /v1/chains/.../verify` endpoint.
-- [x] Tier 1 backend: external WORM (per CSV #3) — e.g. S3 Object Lock or Mongo append-only with role-based deny. Phase 1.12 PR4: Tier 1 storage refactored behind a `Tier1Store` interface that intentionally does **not** expose `save` / `update` / `delete` operations (compile-time guarantee of append-only intent). `AppendOnlyMongoTier1Store` is the default — uses `repo.insert()` (the only Mongo write primitive that throws on collision rather than upserting) and translates `DuplicateKeyException` into a typed `AppendOnlyViolationException` the consumer treats as idempotent. Operators harden at the datastore layer by granting only `insert` + `find` to the collector's service account; explicit deny on `update` / `delete` / `dropCollection` / `renameCollectionSameDB` (documented in `application.yaml`). Selectable via `gls.audit.collector.tier1-backend=mongo|<future>` for an S3 Object Lock swap follow-up.
-- [x] Tier 2 backend: OpenSearch hot + S3 cold via ILM. Phase 1.12 PR3: introduced `Tier2Store` interface; existing Mongo logic refactored into `MongoTier2Store` (default), new `EsTier2Store` swap-in active when `gls.audit.collector.tier2-backend=es`. ES backend talks to the existing Elasticsearch container via JDK `HttpClient` (mirrors the `gls-indexing-worker` pattern); index `audit_tier2_events` auto-created with explicit mappings on the denormalised filter fields. OpenSearch + S3 ILM remains a future follow-up; the Mongo default stays primary until the ES index is observed in real workloads.
-- [x] Existing services begin emitting via `gls-platform-audit` library. Phase 1.12 PR5: `gls-governance-enforcement` migrated (8 emit sites — PII_SENSITIVITY_ESCALATED ×2, GOVERNANCE_APPLIED, STORAGE_TIER_MIGRATED, STORAGE_MIGRATION_FAILED, DOCUMENT_DISPOSED, DOCUMENT_ARCHIVED, DOCUMENT_ANONYMISED, DISPOSITION_FAILED). PR6: `gls-app-assembly` migrated — `PlatformAuditEmitter` helper supports both USER and SYSTEM actor types; 12 emit sites covered across `FilingService` (DOCUMENT_FILED, DOCUMENT_RETURNED_TO_TRIAGE, DOCUMENT_RETURNED_TO_INBOX), `ReviewQueueController` (CLASSIFICATION_APPROVED, CLASSIFICATION_OVERRIDDEN, CLASSIFICATION_REJECTED, PII_REPORTED), `DocumentController` (DOCUMENT_VIEWED ×2, DOCUMENT_DOWNLOADED, ACCESS_DENIED ×3). Both PRs use the same dual-write pattern: legacy `auditEventRepository.save(...)` retains alongside the new `platformAudit.emit*(...)` call, so existing admin UI surfaces keep working while the new collector accumulates events in parallel. Connectors migration follows in Phase 1.13.
+- [x] Single binary with two roles (Class D singleton for Tier 1, Class B horizontal for Tier 2). Phase 1.12 PR1: REST contract scaffolded under `contracts/audit-collector/openapi.yaml` v0.1.0 — `GET /v1/events` (Tier 2 search, cursor pagination), `GET /v1/events/{eventId}` (single fetch, both tiers), `GET /v1/chains/{resourceType}/{resourceId}/verify` (Tier 1 hash-chain integrity), `GET /v1/capabilities`, `/actuator/health`. The async consumer side already exists in `contracts/audit/asyncapi.yaml` (operations `consumeAuditTier1` / `consumeAuditTier2`). PR2: greenfield `igc-audit-collector` Spring Boot module shipped — two `@RabbitListener`s on `igc.audit.tier1.collector` + `igc.audit.tier2.collector` (bound to existing `igc.audit` topic exchange), Mongo-backed `audit_tier1_events` + `audit_tier2_events` collections with composite indexes for chain lookup + Tier 2 search, REST controllers (`EventsController` / `ChainsController` / `MetaController`), Dockerfile + compose entry on :8099. The collector container disables the platform-audit outbox relay (`igc.platform.audit.relay.enabled=false`) so it doesn't double-emit events it just consumed.
+- [x] Hash-chain implementation for Tier 1 with per-resource chains (per CSV #4). Publisher-side (`Tier1HashTransformer` in `igc-platform-audit`) already done in Phase 0.7. PR2: consumer-side validation in `Tier1Consumer` — looks up the latest stored event for the resource via `findFirstByResourceTypeAndResourceIdOrderByTimestampDesc`, recomputes its hash via `EventHasher`, compares against the incoming event's `previousEventHash`. Mismatch → `ChainBrokenException` → log + ack (broken chains are permanent, requeueing won't help; a real deployment binds a DLX for forensics — Phase 2 reliability follow-up). `ChainVerifier` walks the full chain for the contracted `GET /v1/chains/.../verify` endpoint.
+- [x] Tier 1 backend: external WORM (per CSV #3) — e.g. S3 Object Lock or Mongo append-only with role-based deny. Phase 1.12 PR4: Tier 1 storage refactored behind a `Tier1Store` interface that intentionally does **not** expose `save` / `update` / `delete` operations (compile-time guarantee of append-only intent). `AppendOnlyMongoTier1Store` is the default — uses `repo.insert()` (the only Mongo write primitive that throws on collision rather than upserting) and translates `DuplicateKeyException` into a typed `AppendOnlyViolationException` the consumer treats as idempotent. Operators harden at the datastore layer by granting only `insert` + `find` to the collector's service account; explicit deny on `update` / `delete` / `dropCollection` / `renameCollectionSameDB` (documented in `application.yaml`). Selectable via `igc.audit.collector.tier1-backend=mongo|<future>` for an S3 Object Lock swap follow-up.
+- [x] Tier 2 backend: OpenSearch hot + S3 cold via ILM. Phase 1.12 PR3: introduced `Tier2Store` interface; existing Mongo logic refactored into `MongoTier2Store` (default), new `EsTier2Store` swap-in active when `igc.audit.collector.tier2-backend=es`. ES backend talks to the existing Elasticsearch container via JDK `HttpClient` (mirrors the `igc-indexing-worker` pattern); index `audit_tier2_events` auto-created with explicit mappings on the denormalised filter fields. OpenSearch + S3 ILM remains a future follow-up; the Mongo default stays primary until the ES index is observed in real workloads.
+- [x] Existing services begin emitting via `igc-platform-audit` library. Phase 1.12 PR5: `igc-governance-enforcement` migrated (8 emit sites — PII_SENSITIVITY_ESCALATED ×2, GOVERNANCE_APPLIED, STORAGE_TIER_MIGRATED, STORAGE_MIGRATION_FAILED, DOCUMENT_DISPOSED, DOCUMENT_ARCHIVED, DOCUMENT_ANONYMISED, DISPOSITION_FAILED). PR6: `igc-app-assembly` migrated — `PlatformAuditEmitter` helper supports both USER and SYSTEM actor types; 12 emit sites covered across `FilingService` (DOCUMENT_FILED, DOCUMENT_RETURNED_TO_TRIAGE, DOCUMENT_RETURNED_TO_INBOX), `ReviewQueueController` (CLASSIFICATION_APPROVED, CLASSIFICATION_OVERRIDDEN, CLASSIFICATION_REJECTED, PII_REPORTED), `DocumentController` (DOCUMENT_VIEWED ×2, DOCUMENT_DOWNLOADED, ACCESS_DENIED ×3). Both PRs use the same dual-write pattern: legacy `auditEventRepository.save(...)` retains alongside the new `platformAudit.emit*(...)` call, so existing admin UI surfaces keep working while the new collector accumulates events in parallel. Connectors migration follows in Phase 1.13.
 
 ### 1.13 Connectors family review
 
-- [x] `gls-connectors` already exists in some form (Drive, Gmail). Audit current code; conform to new contract surface; add `gls-platform-audit` integration. Phase 1.13 PR1: surveyed `GoogleDriveFolderMonitor`, `GoogleDriveService`, `GmailService`, `GmailPollingScheduler`, `EmailIngestionService` — connectors handle ingestion not state-change auditing, so no `auditEventRepository.save(...)` calls existed to migrate. The audit-relevant events (DOCUMENT_INGESTED, DOCUMENT_CLASSIFIED, GOVERNANCE_APPLIED) flow from downstream services already migrated in PR5/PR6. `gls-platform-audit` dependency was already pulled in via PR6's `gls-app-assembly` migration so connectors can emit through the new pipeline when state-change auditing is added in future.
-- [x] Per-source watch sharding via ShedLock. Phase 1.13 PR1: new `PerSourceLock` helper in `infrastructure.services.connectors` wraps `LockProvider.lock()` with a per-iteration acquire pattern (different from method-level `@SchedulerLock` — multiple replicas can run the scheduled method, each picks up whichever sources are unlocked). Wired into `GoogleDriveFolderMonitor.checkMonitoredFolders` (per-drive lock keyed on `drive-poll-<driveId>`) and `GmailPollingScheduler.pollGmailWatchers` (per-watcher lock keyed on `gmail-poll-<pipelineId>-<nodeId>`). `LockProvider` is auto-configured by `gls-platform-audit`'s `AuditRelayLockConfig` (Mongo-backed); single-replica deployments without ShedLock fall through to the action via `ObjectProvider.getIfAvailable()`-returns-null no-op.
+- [x] `igc-connectors` already exists in some form (Drive, Gmail). Audit current code; conform to new contract surface; add `igc-platform-audit` integration. Phase 1.13 PR1: surveyed `GoogleDriveFolderMonitor`, `GoogleDriveService`, `GmailService`, `GmailPollingScheduler`, `EmailIngestionService` — connectors handle ingestion not state-change auditing, so no `auditEventRepository.save(...)` calls existed to migrate. The audit-relevant events (DOCUMENT_INGESTED, DOCUMENT_CLASSIFIED, GOVERNANCE_APPLIED) flow from downstream services already migrated in PR5/PR6. `igc-platform-audit` dependency was already pulled in via PR6's `igc-app-assembly` migration so connectors can emit through the new pipeline when state-change auditing is added in future.
+- [x] Per-source watch sharding via ShedLock. Phase 1.13 PR1: new `PerSourceLock` helper in `infrastructure.services.connectors` wraps `LockProvider.lock()` with a per-iteration acquire pattern (different from method-level `@SchedulerLock` — multiple replicas can run the scheduled method, each picks up whichever sources are unlocked). Wired into `GoogleDriveFolderMonitor.checkMonitoredFolders` (per-drive lock keyed on `drive-poll-<driveId>`) and `GmailPollingScheduler.pollGmailWatchers` (per-watcher lock keyed on `gmail-poll-<pipelineId>-<nodeId>`). `LockProvider` is auto-configured by `igc-platform-audit`'s `AuditRelayLockConfig` (Mongo-backed); single-replica deployments without ShedLock fall through to the action via `ObjectProvider.getIfAvailable()`-returns-null no-op.
 
 ### Acceptance gate (Phase 1 overall)
 
@@ -376,11 +376,11 @@ Before moving to the next service in the order:
 
 #### 2.1 Recovery jobs
 
-- [ ] `StaleDocumentRecoveryTask` in `gls-scheduler`: detects pipeline runs stuck > 15 min; resets to last completed node; re-queues.
+- [ ] `StaleDocumentRecoveryTask` in `igc-scheduler`: detects pipeline runs stuck > 15 min; resets to last completed node; re-queues.
 - [ ] `classification_outbox` reconciler (per §6.5): drains pending classifications when MCP recovers.
-- [ ] Audit outbox replay: on `gls-audit-collector` restart, drains any unacked outbox rows.
+- [ ] Audit outbox replay: on `igc-audit-collector` restart, drains any unacked outbox rows.
 - [ ] ES reconciliation job: rebuild ES from Mongo if index is corrupted or behind.
-- [ ] Hub pack import retry on `gls.config.changed` failure.
+- [ ] Hub pack import retry on `igc.config.changed` failure.
 
 #### 2.2 Vendor / external API resilience
 
@@ -399,8 +399,8 @@ Before moving to the next service in the order:
 
 #### 2.4 Failover + leader election
 
-- [ ] `gls-audit-collector` Tier 1 leader election via ShedLock.
-- [ ] `gls-scheduler` leader election (already singleton-style; ensure HA).
+- [ ] `igc-audit-collector` Tier 1 leader election via ShedLock.
+- [ ] `igc-scheduler` leader election (already singleton-style; ensure HA).
 - [ ] Connector per-source watches: ShedLock keys per shared drive / per mailbox.
 
 #### 2.5 Chaos + integration tests
@@ -498,7 +498,7 @@ Before moving to the next service in the order:
 
 #### 3.7 Subscriptions, roles, features
 
-- [ ] Existing UI in `gls-app-assembly` carried forward; ensure it works against new architecture.
+- [ ] Existing UI in `igc-app-assembly` carried forward; ensure it works against new architecture.
 - [ ] Role-feature matrix admin.
 - [ ] User assignment.
 
@@ -535,7 +535,7 @@ Before moving to the next service in the order:
 
 Runs alongside Phases 0–2. Hub is treated as an external dependency in this plan, but its evolution is required for v2 to fully work.
 
-- **Phase 0:** AsyncAPI for `gls.config.changed` events that hub will fire. `PackImportService` design doc.
+- **Phase 0:** AsyncAPI for `igc.config.changed` events that hub will fire. `PackImportService` design doc.
 - **Phase 1:** `PackImportService` updated to fire events; pack model gains `applicableCategoryIds[]` plumbing.
 - **Phase 2:** Hub-side resilience (retry on event publish failure).
 - **Phase 3:** Hub admin UI updates to match local UI conventions.
@@ -579,7 +579,7 @@ These minimum views get *replaced* or *enhanced* in Phase 3.
 | Phase | Gate condition |
 |---|---|
 | 0 | A1/A2/A5/A6 DECIDED; `contracts/_shared/` complete; CI gates green; performance baseline captured. |
-| 0.5 | Reference service deployed end-to-end; pattern documented; latency within 20% of `gls-document-processing` baseline. |
+| 0.5 | Reference service deployed end-to-end; pattern documented; latency within 20% of `igc-document-processing` baseline. |
 | 1 | End-to-end happy path through new architecture; latency within 10% of baseline; hub propagation < 30s; rollback flags work. |
 | 2 | All §6 scenarios in automated tests; chaos suite passes; vendor outage simulated; audit chain integrity verified. |
 | 3 | Full admin UX; usability test passes; hub pack import is one-click. |

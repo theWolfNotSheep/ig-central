@@ -14,7 +14,7 @@
 
 4. **Select the Workspace label** — The page shows available labels discovered from your files. Click the "Lifecycle Status" label (or whichever label appears). *"The system discovers labels by reading them from your files. Here's the lifecycle status label that's already applied to documents in this Drive."*
 
-5. **Configure field mapping (outbound)** — Map GLS fields to label fields: Category → the category field, Sensitivity → the sensitivity field, Classification Code → a text field. *"Field mapping controls what gets written back to Drive after classification. When IG Central classifies a document, it updates the Drive label automatically — so other users see the classification directly in Google Drive."*
+5. **Configure field mapping (outbound)** — Map IGC fields to label fields: Category → the category field, Sensitivity → the sensitivity field, Classification Code → a text field. *"Field mapping controls what gets written back to Drive after classification. When IG Central classifies a document, it updates the Drive label automatically — so other users see the classification directly in Google Drive."*
 
 6. **Save the field mapping** — Click "Save Configuration". *"That handles the outbound direction — classification results flowing to Drive labels."*
 

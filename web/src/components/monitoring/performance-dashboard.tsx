@@ -15,7 +15,7 @@ import api from "@/lib/axios/axios.client";
  * Phase 3 PR2 — Performance dashboards.
  *
  * Reads `GET /api/admin/metrics/dashboard` (backed by the shipped
- * Phase 2 Micrometer metrics on gls-app-assembly) and renders four
+ * Phase 2 Micrometer metrics on igc-app-assembly) and renders four
  * sections: stale-pipeline detection age, connector lock activity,
  * scheduler lock outcomes, and DLQ replay activity.
  *
@@ -438,9 +438,9 @@ function ServiceCard({ svc, probeTimeMs }: { svc: ServiceProbeResult; probeTimeM
 
 function RouterMetrics({ samples, probeTimeMs }: { samples: PromSample[]; probeTimeMs: number }) {
     const byMetric = groupByMetric(samples);
-    const tierCounts = byMetric["gls_router_classify_result_total"] ?? [];
-    const tierByCategory = byMetric["gls_router_classify_tier_by_category_total"] ?? [];
-    const cost = byMetric["gls_router_classify_cost_units_total"] ?? [];
+    const tierCounts = byMetric["igc_router_classify_result_total"] ?? [];
+    const tierByCategory = byMetric["igc_router_classify_tier_by_category_total"] ?? [];
+    const cost = byMetric["igc_router_classify_cost_units_total"] ?? [];
     const budgetExhausted = byMetric["router_llm_budget_exhausted_until_epoch_s"] ?? [];
     const permitsAvailable = byMetric["router_rate_limit_permits_available"] ?? [];
     const permitsTotal = byMetric["router_rate_limit_permits_total"] ?? [];

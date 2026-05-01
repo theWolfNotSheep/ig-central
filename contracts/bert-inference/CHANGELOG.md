@@ -8,7 +8,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `openapi.yaml` — initial OpenAPI 3.1.1 declaration of `gls-bert-inference`. Five operations:
+- `openapi.yaml` — initial OpenAPI 3.1.1 declaration of `igc-bert-inference`. Five operations:
   - `POST /v1/infer` — synchronous BERT classification. Returns `MODEL_NOT_LOADED` 503 until a trained artefact is wired (Phase 1.4 follow-up).
   - `GET /v1/models` — list loaded models with version + labels + block ids.
   - `POST /v1/models/reload` — ops trigger to re-fetch the configured ONNX from MinIO.

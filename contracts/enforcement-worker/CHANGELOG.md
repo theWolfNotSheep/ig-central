@@ -28,7 +28,7 @@ version bump deferred to 1.0.0 when the surface stabilises.
 
 ### Added
 
-- Initial contract for `gls-enforcement-worker` — Phase 1.10 PR1.
+- Initial contract for `igc-enforcement-worker` — Phase 1.10 PR1.
   Carves out the enforcement stage from the monolith into its own
   deployable. Sync + async surface (`Prefer: respond-async` per CSV
   #13 / #47), `nodeRunId`-keyed idempotency (CSV #16), RFC 7807

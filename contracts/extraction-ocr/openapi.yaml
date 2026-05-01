@@ -25,11 +25,11 @@ info:
     **Supported mime types** (initial scope):
     - `image/png`, `image/jpeg`, `image/tiff`, `image/bmp`
     - `application/pdf` — image-only / scanned PDFs (text-extractable
-      PDFs go to `gls-extraction-tika` per the orchestrator's mime
+      PDFs go to `igc-extraction-tika` per the orchestrator's mime
       routing).
 
 servers:
-  - url: http://gls-extraction-ocr:8080
+  - url: http://igc-extraction-ocr:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8091
     description: Local dev (override).

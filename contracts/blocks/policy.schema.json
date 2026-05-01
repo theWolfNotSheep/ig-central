@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gls.local/contracts/blocks/policy.schema.json",
+  "$id": "https://igc.local/contracts/blocks/policy.schema.json",
   "title": "POLICY block content",
   "description": "Carries post-classification policy for a category — which PII scans run, which metadata schemas extract, which governance policies enforce. Per architecture §3 / CSV #35. The in-engine interpreter (CSV #37 Option A) reads this block after the classifier and dispatches the corresponding stage-④ work.",
   "type": "object",
@@ -59,7 +59,7 @@
     "governancePolicyIds": {
       "type": "array",
       "maxItems": 16,
-      "description": "References to `GovernancePolicy` documents (storage tier, retention schedule, access controls) that apply to this category. Engine hands them to `gls-enforcement-worker` after scans + metadata extraction succeed.",
+      "description": "References to `GovernancePolicy` documents (storage tier, retention schedule, access controls) that apply to this category. Engine hands them to `igc-enforcement-worker` after scans + metadata extraction succeed.",
       "items": {
         "type": "string",
         "minLength": 1,

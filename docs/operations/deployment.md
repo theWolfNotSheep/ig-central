@@ -1,4 +1,4 @@
-# GLS Deployment Guide
+# IGC Deployment Guide
 
 Deployment guide for Governance-Led Storage on a single server using Docker Compose with Cloudflare tunnel for public access.
 
@@ -23,20 +23,20 @@ The platform runs as a set of Docker containers on a single host. Cloudflare tun
 
 | Service | Container | Port | Description |
 |---|---|---|---|
-| **nginx** | gls-nginx | 80 | Reverse proxy; routes `/api/` to API, everything else to frontend |
-| **api** | gls-api | 8080 | Main Spring Boot API, pipeline execution, governance enforcement |
-| **llm-worker** | gls-llm-worker | 8082 | LLM classification worker; consumes from RabbitMQ, calls Anthropic/Ollama |
-| **mcp-server** | gls-mcp-server | 8081 | MCP tool server; provides correction history and metadata schemas to LLM |
-| **web** | gls-web | 3000 | Next.js frontend |
-| **mongo** | gls-mongo | 27017 | MongoDB 7 document database (system of record) |
-| **elasticsearch** | gls-elasticsearch | 9200 | Elasticsearch 8.17 search index |
-| **rabbitmq** | gls-rabbitmq | 5672/15672 | RabbitMQ 4 message queue (management UI on 15672) |
-| **minio** | gls-minio | 9000/9001 | MinIO object storage (console on 9001) |
-| **bert-classifier** | gls-bert-classifier | 8000 | BERT accelerator for fast pre-classification |
-| **cloudflared** | gls-cloudflared | -- | Cloudflare tunnel agent |
-| **governance-hub** | gls-governance-hub | 8090 | Governance pack marketplace API |
-| **web-hub** | gls-web-hub | 3002 | Governance Hub frontend |
-| **hub-mongo** | gls-hub-mongo | 27017 | Separate MongoDB for Governance Hub |
+| **nginx** | igc-nginx | 80 | Reverse proxy; routes `/api/` to API, everything else to frontend |
+| **api** | igc-api | 8080 | Main Spring Boot API, pipeline execution, governance enforcement |
+| **llm-worker** | igc-llm-worker | 8082 | LLM classification worker; consumes from RabbitMQ, calls Anthropic/Ollama |
+| **mcp-server** | igc-mcp-server | 8081 | MCP tool server; provides correction history and metadata schemas to LLM |
+| **web** | igc-web | 3000 | Next.js frontend |
+| **mongo** | igc-mongo | 27017 | MongoDB 7 document database (system of record) |
+| **elasticsearch** | igc-elasticsearch | 9200 | Elasticsearch 8.17 search index |
+| **rabbitmq** | igc-rabbitmq | 5672/15672 | RabbitMQ 4 message queue (management UI on 15672) |
+| **minio** | igc-minio | 9000/9001 | MinIO object storage (console on 9001) |
+| **bert-classifier** | igc-bert-classifier | 8000 | BERT accelerator for fast pre-classification |
+| **cloudflared** | igc-cloudflared | -- | Cloudflare tunnel agent |
+| **governance-hub** | igc-governance-hub | 8090 | Governance pack marketplace API |
+| **web-hub** | igc-web-hub | 3002 | Governance Hub frontend |
+| **hub-mongo** | igc-hub-mongo | 27017 | Separate MongoDB for Governance Hub |
 
 ---
 
@@ -57,7 +57,7 @@ cp .env.example .env
 | `ADMIN_EMAIL` | Initial admin account email | `admin@example.com` |
 | `ADMIN_PASSWORD` | Initial admin account password | `ChangeMe123!` |
 | `TUNNEL_TOKEN` | Cloudflare tunnel token from Zero Trust dashboard | (long token string) |
-| `PUBLIC_URL` | Public-facing URL for the platform | `https://gls.example.com` |
+| `PUBLIC_URL` | Public-facing URL for the platform | `https://igc.example.com` |
 
 ### Recommended
 
@@ -68,13 +68,13 @@ cp .env.example .env
 | `RABBITMQ_PASSWORD` | RabbitMQ password | `guest` |
 | `MINIO_ACCESS_KEY` | MinIO root user | `minioadmin` |
 | `MINIO_SECRET_KEY` | MinIO root password | `minioadmin` |
-| `MINIO_BUCKET` | MinIO bucket name for documents | `gls-documents` |
+| `MINIO_BUCKET` | MinIO bucket name for documents | `igc-documents` |
 
 ### Optional
 
 | Variable | Description | Default |
 |---|---|---|
-| `COMPOSE_PROJECT_NAME` | Docker Compose project prefix | `gls` |
+| `COMPOSE_PROJECT_NAME` | Docker Compose project prefix | `igc` |
 | `APP_ENV` | Environment label (`DEV`, `STAGING`, `PROD`) | `DEV` |
 | `MONGO_DB_NAME` | MongoDB database name | `governance_led_storage_main` |
 | `BACKEND_BASE_URL` | Backend URL (used internally) | `http://localhost:8080` |
@@ -132,10 +132,10 @@ cp .env.example .env
 Set production values:
 
 ```env
-COMPOSE_PROJECT_NAME=gls
+COMPOSE_PROJECT_NAME=igc
 APP_ENV=PROD
-PUBLIC_URL=https://gls.example.com
-BACKEND_BASE_URL=https://gls.example.com
+PUBLIC_URL=https://igc.example.com
+BACKEND_BASE_URL=https://igc.example.com
 
 MONGO_PASSWORD=<strong-random-password>
 JWT_SECRET=<openssl rand -base64 64>
@@ -144,9 +144,9 @@ ADMIN_PASSWORD=<strong-initial-password>
 
 TUNNEL_TOKEN=<cloudflare-tunnel-token>
 
-RABBITMQ_USER=gls_rabbit
+RABBITMQ_USER=igc_rabbit
 RABBITMQ_PASSWORD=<strong-random-password>
-MINIO_ACCESS_KEY=gls_minio
+MINIO_ACCESS_KEY=igc_minio
 MINIO_SECRET_KEY=<strong-random-password>
 
 ANTHROPIC_API_KEY=sk-ant-...
@@ -226,15 +226,15 @@ All persistent data is stored under `./data/` on the host:
 
 ```bash
 # Backup
-docker exec gls-mongo mongodump \
+docker exec igc-mongo mongodump \
   --uri="mongodb://root:<MONGO_PASSWORD>@localhost:27017/governance_led_storage_main?authSource=admin" \
   --out=/tmp/backup
 
-docker cp gls-mongo:/tmp/backup ./backups/mongo-$(date +%Y%m%d)
+docker cp igc-mongo:/tmp/backup ./backups/mongo-$(date +%Y%m%d)
 
 # Restore
-docker cp ./backups/mongo-20260415 gls-mongo:/tmp/restore
-docker exec gls-mongo mongorestore \
+docker cp ./backups/mongo-20260415 igc-mongo:/tmp/restore
+docker exec igc-mongo mongorestore \
   --uri="mongodb://root:<MONGO_PASSWORD>@localhost:27017/governance_led_storage_main?authSource=admin" \
   --drop /tmp/restore/governance_led_storage_main
 ```
@@ -324,14 +324,14 @@ These are likely stale. The Monitoring page in the admin UI shows stuck document
 
 ```bash
 # Check RabbitMQ queues
-docker exec gls-rabbitmq rabbitmqctl list_queues name messages consumers
+docker exec igc-rabbitmq rabbitmqctl list_queues name messages consumers
 ```
 
 ### Queue buildup (messages not being consumed)
 
 ```bash
 # Check consumer count
-docker exec gls-rabbitmq rabbitmqctl list_queues name consumers
+docker exec igc-rabbitmq rabbitmqctl list_queues name consumers
 
 # If consumers = 0, the llm-worker may have crashed
 docker compose restart llm-worker

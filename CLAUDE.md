@@ -9,14 +9,14 @@
 
 ### Module structure
 
-- `gls-platform` — Core platform: identity, security, JWT, OAuth2, config, products/licensing
-- `gls-governance` — Governance rules and policy engine
-- `gls-document` — Document domain: models, repositories, storage services
-- `gls-document-processing` — Document processing pipeline
-- `gls-governance-enforcement` — Governance enforcement services
-- `gls-mcp-server` — MCP server integration
-- `gls-llm-orchestration` — LLM orchestration layer (RabbitMQ, Anthropic)
-- `gls-app-assembly` — Spring Boot entry point, config, seeders, controllers
+- `igc-platform` — Core platform: identity, security, JWT, OAuth2, config, products/licensing
+- `igc-governance` — Governance rules and policy engine
+- `igc-document` — Document domain: models, repositories, storage services
+- `igc-document-processing` — Document processing pipeline
+- `igc-governance-enforcement` — Governance enforcement services
+- `igc-mcp-server` — MCP server integration
+- `igc-llm-orchestration` — LLM orchestration layer (RabbitMQ, Anthropic)
+- `igc-app-assembly` — Spring Boot entry point, config, seeders, controllers
 
 ## API Contracts
 
@@ -159,7 +159,7 @@ Subscription (links a user/company to a Product)
 - Subscription roles use `SUB_` prefix to distinguish from system roles (e.g. `ADMIN`)
 - The admin panel will manage all CRUD for Features, Roles, Products, and Subscriptions
 
-### Platform services (in `gls-platform`)
+### Platform services (in `igc-platform`)
 
 - `AppConfigService` — runtime config CRUD with in-memory cache + refresh
 - `SubscriptionPermissionSyncService` — syncs subscription roles/permissions to user model
@@ -241,7 +241,7 @@ UPLOADED → PROCESSING → PROCESSED → CLASSIFYING → CLASSIFIED → GOVERNA
 **All user-facing items must be addressable by slug, not raw MongoDB ObjectId.**
 
 - Slugs are generated on creation: `{slugified-name}-{last-6-chars-of-id}` (e.g. `maternity-leave-confirmation-a3f2b1`)
-- `SlugGenerator` utility in `gls-document` handles generation
+- `SlugGenerator` utility in `igc-document` handles generation
 - Documents have a `slug` field with a unique sparse index
 - Backend exposes `/by-slug/{slug}` endpoints alongside ID-based endpoints
 - Frontend uses slugs in query params (e.g. `/documents?doc=maternity-leave-confirmation-a3f2b1`)
@@ -317,7 +317,7 @@ As corrections accumulate, the MCP tools provide richer context, reducing relian
 
 - ES 8.17 runs as a Docker container alongside the existing services
 - MongoDB remains the system of record; ES is the search index
-- `spring-boot-starter-data-elasticsearch` is included in gls-app-assembly
+- `spring-boot-starter-data-elasticsearch` is included in igc-app-assembly
 - Future: ES indexing consumer on RabbitMQ will index documents on each status change
 
 ## External Storage Connectors
@@ -326,7 +326,7 @@ As corrections accumulate, the MCP tools provide richer context, reducing relian
 
 ### Google Drive
 
-- OAuth2 flow: user connects via `/drives` page → authorises GLS to read their Drive
+- OAuth2 flow: user connects via `/drives` page → authorises IGC to read their Drive
 - Tokens stored in `connected_drives` collection
 - File browser: navigate folders, select files, classify individually or entire folders
 - Files stay in Google Drive — content is streamed temporarily for text extraction, then discarded
@@ -360,13 +360,13 @@ Same `storageProvider` abstraction — implement `SharePointDriveService` behind
 ### Why an outbox
 
 - **Crash before publish** → replay: the outbox row is still in Mongo. The relay picks it up next cycle.
-- **Crash after publish but before status update** → at-least-once delivery: the downstream idempotent consumer (`gls-audit-collector`) deduplicates by `eventId`.
+- **Crash after publish but before status update** → at-least-once delivery: the downstream idempotent consumer (`igc-audit-collector`) deduplicates by `eventId`.
 - **Without the outbox** → state change committed but audit not published. Compliance hole.
 
 ### How it runs
 
-- Each service writes to `audit_outbox` via the `gls-platform-audit` shared library. The write is part of the **same Mongo transaction** as the originating state change.
-- A relay component (also in `gls-platform-audit`) polls or subscribes to change streams, publishes to `audit.tier1.{eventType}` (DOMAIN) or `audit.tier2.{eventType}` (SYSTEM) per the envelope's `tier`, then marks the row `PUBLISHED`.
+- Each service writes to `audit_outbox` via the `igc-platform-audit` shared library. The write is part of the **same Mongo transaction** as the originating state change.
+- A relay component (also in `igc-platform-audit`) polls or subscribes to change streams, publishes to `audit.tier1.{eventType}` (DOMAIN) or `audit.tier2.{eventType}` (SYSTEM) per the envelope's `tier`, then marks the row `PUBLISHED`.
 - Failed publishes increment `attempts` and set `nextRetryAt` (exponential backoff). After a cap, the row is marked `FAILED` and surfaced via metrics.
 
 ### Rules
@@ -382,7 +382,7 @@ Same `storageProvider` abstraction — implement `SharePointDriveService` behind
 - `idx_eventId_unique` — uniqueness guard for idempotent re-emission.
 - `idx_createdAt` — retention / cleanup.
 
-See `V002_AuditOutboxIndexes` in `gls-app-assembly`. The `AuditOutboxRecord` POJO that maps the document shape lives in the upcoming `gls-platform-audit` shared library.
+See `V002_AuditOutboxIndexes` in `igc-app-assembly`. The `AuditOutboxRecord` POJO that maps the document shape lives in the upcoming `igc-platform-audit` shared library.
 
 ## Schema Migrations
 
@@ -391,14 +391,14 @@ See `V002_AuditOutboxIndexes` in `gls-app-assembly`. The `AuditOutboxRecord` POJ
 ### Rules
 
 - **Every schema change is a Mongock `@ChangeUnit`.** New collections, new indexes, renamed fields, backfilled values — all of these go through this. No ad-hoc shell scripts; no `@PostConstruct` migrations.
-- Change units live under `co.uk.wolfnotsheep.infrastructure.migrations` in `gls-app-assembly`. Naming convention: `V<numeric-order>_<short-name>` (e.g. `V001_MongockSmoke`, `V002_AddDocumentSlugIndex`).
+- Change units live under `co.uk.wolfnotsheep.infrastructure.migrations` in `igc-app-assembly`. Naming convention: `V<numeric-order>_<short-name>` (e.g. `V001_MongockSmoke`, `V002_AddDocumentSlugIndex`).
 - Each `@ChangeUnit` declares a unique `id` and a numeric `order`. **`id` is immutable once landed** — renaming breaks the `mongockChangeLog` collection's tracking.
 - Provide a `@RollbackExecution` method for any non-trivial change. No-op for additive cases (new indexes, new collections).
 - Mongock's lock coordination handles multi-replica startup safely.
 
 ### How it runs
 
-- On `gls-app-assembly` startup, Mongock scans `co.uk.wolfnotsheep.infrastructure.migrations`, compares declared change units against the `mongockChangeLog` collection, and runs any unrun units in declared order.
+- On `igc-app-assembly` startup, Mongock scans `co.uk.wolfnotsheep.infrastructure.migrations`, compares declared change units against the `mongockChangeLog` collection, and runs any unrun units in declared order.
 - **Failure halts startup loudly.** The fix-forward pattern is: write a new `@ChangeUnit` that corrects the bad state — never edit a landed unit.
 
 ### Disabling Mongock (rare)
@@ -409,33 +409,33 @@ See `V002_AuditOutboxIndexes` in `gls-app-assembly`. The `AuditOutboxRecord` POJ
 
 **Each deployable can be versioned and shipped independently of every other deployable, even though the monorepo coordinates a single source tree.**
 
-A "deployable" is a Spring Boot app that ships as its own container — `gls-app-assembly` (the API), `gls-mcp-server`, `gls-llm-orchestration`, `gls-governance-hub-app`. A "library" is anything consumed by deployables (`gls-platform`, `gls-platform-audit`, `gls-governance`, `gls-document`, etc.).
+A "deployable" is a Spring Boot app that ships as its own container — `igc-app-assembly` (the API), `igc-mcp-server`, `igc-llm-orchestration`, `igc-governance-hub-app`. A "library" is anything consumed by deployables (`igc-platform`, `igc-platform-audit`, `igc-governance`, `igc-document`, etc.).
 
 ### Rules
 
 - Per-deployable version properties live in `backend/bom/pom.xml`:
-  - `gls.api.version` — `gls-app-assembly`
-  - `gls.mcp.version` — `gls-mcp-server`
-  - `gls.orchestrator.version` — `gls-llm-orchestration`
-  - `gls.hub.version` — `gls-governance-hub-app`
-- Every deployable's BOM `<dependency>` entry references **its own** version property — never `${gls.version}` directly.
-- Today every property tracks `${gls.version}`, so behaviour is identical to a single-version setup. The seam exists so a deployable can be bumped without forcing a coordinated release of the others.
-- Libraries continue to share `${gls.version}` — they version together. Splitting a library's version from the rest is a separate decision and requires removing it from the shared default.
-- Never collapse a deployable's property back to `${gls.version}` in service code. The BOM is the single source of truth for which version a deployable resolves to.
+  - `igc.api.version` — `igc-app-assembly`
+  - `igc.mcp.version` — `igc-mcp-server`
+  - `igc.orchestrator.version` — `igc-llm-orchestration`
+  - `igc.hub.version` — `igc-governance-hub-app`
+- Every deployable's BOM `<dependency>` entry references **its own** version property — never `${igc.version}` directly.
+- Today every property tracks `${igc.version}`, so behaviour is identical to a single-version setup. The seam exists so a deployable can be bumped without forcing a coordinated release of the others.
+- Libraries continue to share `${igc.version}` — they version together. Splitting a library's version from the rest is a separate decision and requires removing it from the shared default.
+- Never collapse a deployable's property back to `${igc.version}` in service code. The BOM is the single source of truth for which version a deployable resolves to.
 
 ### When to bump a deployable's version
 
 - The deployable ships as a release candidate (its container image is being tagged for promotion to a non-dev environment).
 - A consumer outside the monorepo pins the deployable's artifact at a specific version (e.g. SDK consumers).
-- A deployable's release cadence has genuinely diverged from the rest — for example, `gls-mcp-server` shipping a hotfix while `gls-app-assembly` stays on the previous minor.
+- A deployable's release cadence has genuinely diverged from the rest — for example, `igc-mcp-server` shipping a hotfix while `igc-app-assembly` stays on the previous minor.
 
-If none of those apply, leave the property at `${gls.version}` and bump the shared default instead — the seam is meant to be unused until needed.
+If none of those apply, leave the property at `${igc.version}` and bump the shared default instead — the seam is meant to be unused until needed.
 
 ## Build & Run
 
 ```bash
 # Local backend
-cd backend && ./mvnw compile -DskipTests -pl gls-app-assembly -am
+cd backend && ./mvnw compile -DskipTests -pl igc-app-assembly -am
 
 # Docker (all services including Cloudflare tunnel)
 docker compose up --build -d

@@ -15,7 +15,7 @@ lifecycle: forward
 
 ## 1. Context
 
-The current pipeline runs a single classification path (LLM via `gls-llm-orchestration`). The roadmap calls for a tiered model strategy:
+The current pipeline runs a single classification path (LLM via `igc-llm-orchestration`). The roadmap calls for a tiered model strategy:
 
 - **BERT** — fine-tuned encoder, fast and free, handles patterns the org has already taught it.
 - **SLM** — Haiku / Llama-7B / qwen-7B, low-cost reasoning over MCP tool context.
@@ -71,7 +71,7 @@ The complete service catalogue and the connections between them. The numbered st
                     └─────────┬───────────────┬───────────┘
                               ▼               ▼
                     ┌──────────────┐  ┌────────────────┐
-                    │   gls-web    │  │    gls-api     │   ① INGEST
+                    │   igc-web    │  │    igc-api     │   ① INGEST
                     │   (Next.js)  │  │  HTTP / admin  │   (Class A)
                     └──────────────┘  └────────┬───────┘
                                                │ enqueue +
@@ -80,9 +80,9 @@ The complete service catalogue and the connections between them. The numbered st
    ╔════════════════════════════════════════════════════════════════════════╗
    ║              RabbitMQ — 3-node cluster, quorum queues                  ║
    ║                                                                        ║
-   ║   gls.documents.{ingested, classified, *.dlq}                          ║
-   ║   gls.pipeline.{llm.jobs, llm.completed, resume, *.dlq}                ║
-   ║   gls.audit.{tier1.domain, tier2.system, tier3.trace, *.dlq}           ║
+   ║   igc.documents.{ingested, classified, *.dlq}                          ║
+   ║   igc.pipeline.{llm.jobs, llm.completed, resume, *.dlq}                ║
+   ║   igc.audit.{tier1.domain, tier2.system, tier3.trace, *.dlq}           ║
    ╚════╤════════════════════════╤══════════════════════════╤═══════════════╝
         │ consume                │ ⑤ classified             │ audit
         ▼                        ▼                          ▼
@@ -113,7 +113,7 @@ The complete service catalogue and the connections between them. The numbered st
 ─── ③ CLASSIFY ───────────────────────────────────────────────────────────
 
    ┌──────────────────────────────────┐
-   │  gls-classifier-router (A)       │ ◀── ROUTER block (cascade policy)
+   │  igc-classifier-router (A)       │ ◀── ROUTER block (cascade policy)
    │  task-agnostic cascade           │      Used for classify AND for the
    │                                  │      ④ scans + metadata extraction
    └─┬────────┬─────────┬─────────────┘
@@ -122,16 +122,16 @@ The complete service catalogue and the connections between them. The numbered st
    │bert ││ slm- ││  llm-      │ ── Anthropic Sonnet/Haiku, Ollama
    │ inf ││ work ││  worker    │   sync entry; async path ──┐
    │ (C) ││ (A)  ││ (A sync,   │                            │
-   └──┬──┘└──┬───┘│  B async)  │                            │ to gls.pipeline.
+   └──┬──┘└──┬───┘│  B async)  │                            │ to igc.pipeline.
       │      │    └─────┬──────┘                            │     llm.jobs
       │      └────┬─────┘                                   │
       │           ▼ MCP tool calls                          │
       │    ┌─────────────────────┐                          │
-      │    │  gls-mcp-server     │── MongoDB (corrections,  │
+      │    │  igc-mcp-server     │── MongoDB (corrections,  │
       │    │   Class A, SSE      │   taxonomy, schemas)     │
       │    └─────────────────────┘                          │
       ▼                                                     │
-   MinIO model artifacts ◀── ONNX ── gls-bert-trainer ──────┘
+   MinIO model artifacts ◀── ONNX ── igc-bert-trainer ──────┘
                                        (Python, E, GPU Job;
                                         kicked off by scheduler)
 
@@ -154,7 +154,7 @@ The complete service catalogue and the connections between them. The numbered st
                           │
                           ▼
    ╔═══════════════════════════════════════════════════════════════════╗
-   ║  Each is a call BACK through gls-classifier-router with a         ║
+   ║  Each is a call BACK through igc-classifier-router with a         ║
    ║  different prompt block — same cascade (BERT→SLM→LLM), same MCP   ║
    ║  context, different task. No new containers per scan type;        ║
    ║  the suitable model tier is selected by ROUTER block per task.    ║
@@ -163,16 +163,16 @@ The complete service catalogue and the connections between them. The numbered st
                           │ extractedMetadata{}
                           ▼
    ┌──────────────────────────────┐
-   │ gls-enforcement-worker (A)   │── retention, sensitivity, access
+   │ igc-enforcement-worker (A)   │── retention, sensitivity, access
    │                              │   controls, legal-hold — driven by
    └──────────────┬───────────────┘   the taxonomy node, not hardcoded
                   │ status = GOVERNANCE_APPLIED
-                  ▼ AMQP gls.documents.classified
+                  ▼ AMQP igc.documents.classified
 ─── ⑤ TIDY UP ────  (consumed by indexing-worker, top of diagram)
 
 ═══════════════ OFFLINE & SUPPORT ══════════════════════════════════════════
    ┌──────────────────────┐         ┌──────────────────────┐
-   │ gls-connectors       │── ① ──▶ │ gls-scheduler        │
+   │ igc-connectors       │── ① ──▶ │ igc-scheduler        │
    │  (Drive, Gmail; D /  │ ingest  │  (singleton; D)      │
    │   sharded by source) │         │  • stale recovery    │
    │  per-source watches  │         │  • retention sweeps  │
@@ -186,8 +186,8 @@ The complete service catalogue and the connections between them. The numbered st
 What the diagram encodes architecturally:
 
 - **Classify before extract.** PII / PHI / PCI scanning and metadata extraction are *taxonomy-scoped* — the category chosen in ③ selects which (if any) of these to run in ④. Marketing and public documents skip the scans entirely; medical records run PHI; HR runs PII; finance runs PCI; many run none.
-- **The cascade is task-agnostic.** `gls-classifier-router` is the model-tier router for *any* prompt-block-driven task — classification, sensitive-data scans, metadata extraction. Different blocks, same cascade. No need for parallel scanner-routers per data class.
-- **Three independent message buses.** `gls.documents.*` (pipeline lifecycle), `gls.pipeline.llm.*` (slow LLM dispatch), `gls.audit.*` (audit fan-out). Failure in one does not block the others.
+- **The cascade is task-agnostic.** `igc-classifier-router` is the model-tier router for *any* prompt-block-driven task — classification, sensitive-data scans, metadata extraction. Different blocks, same cascade. No need for parallel scanner-routers per data class.
+- **Three independent message buses.** `igc.documents.*` (pipeline lifecycle), `igc.pipeline.llm.*` (slow LLM dispatch), `igc.audit.*` (audit fan-out). Failure in one does not block the others.
 - **MCP is read-mostly and downstream.** Tool surface for SLM and LLM, not a participant in orchestration. Caching it well is what keeps the cascade fast — and stage ④ amortises across the cache that ③ already warmed for the same document.
 - **bert-trainer is offline.** No place in the request path. Its only contract with serving is the ONNX artefact in MinIO and the new `BERT_CLASSIFIER` block version — that seam lets training and serving evolve independently.
 - **Audit is its own pipeline.** Outbox-relay-collector pattern from §7.3, completely orthogonal to the document pipeline. Either side can be down without taking the other with it.
@@ -200,50 +200,50 @@ Replica counts and HPA signals are not shown — see *Scaling profile* and *HPA 
 
 | Container | Module(s) it runs | Listens on | Calls |
 |---|---|---|---|
-| `gls-api` | controllers from `gls-app-assembly` | HTTP 8080 | Mongo, Mongo-backed config |
-| `gls-orchestrator` | `PipelineExecutionEngine`, both pipeline consumers | AMQP `gls.documents.ingested`, `gls.pipeline.llm.completed` | extraction-worker, classifier-router, enforcement-worker (REST) |
-| `gls-extraction-*` (family) | NEW — mime-routed parse-only family: `tika`, `ocr`, `audio`, `archive`. PII / PHI / PCI moved out of this stage. | HTTP per family member | MinIO |
-| `gls-classifier-router` | NEW — task-agnostic cascade router. Used for classification AND for taxonomy-driven post-classify scans (PII/PHI/PCI) and metadata extraction — different prompt blocks, same cascade. | HTTP 8091 | bert-inference, slm-worker, llm-worker (REST) |
-| `gls-bert-inference` | NEW — JVM + ONNX Runtime / DJL | HTTP 8092 | MinIO (model artifacts) |
-| `gls-bert-trainer` | NEW — Python, HuggingFace transformers | Triggered by `BertTrainingJobRepository` | Mongo (training samples), MinIO (publishes ONNX) |
-| `gls-slm-worker` | Adapter layer over Anthropic Haiku / Ollama | HTTP 8093 | mcp-server, Anthropic, Ollama |
-| `gls-llm-worker` | existing `gls-llm-orchestration` | AMQP `gls.pipeline.llm.jobs` (kept) + HTTP 8094 (new sync entry) | mcp-server, Anthropic |
-| `gls-mcp-server` | existing `gls-mcp-server` | HTTP 8081 (SSE) | Mongo |
-| `gls-enforcement-worker` | `gls-governance-enforcement` | HTTP 8095 + AMQP `gls.documents.classified` | Mongo |
-| `gls-indexing-worker` | NEW | AMQP `gls.documents.classified` | Elasticsearch |
-| `gls-connectors` | Drive monitor, Gmail polling | scheduled | Google APIs, Mongo, MinIO |
-| `gls-scheduler` | Stale recovery, retention, BERT advisor | scheduled | Mongo, Rabbit |
-| `gls-audit-collector` | NEW — single-writer Tier 1 (chain), horizontal Tier 2 (see §7) | AMQP `gls.audit.tier1.*`, `gls.audit.tier2.*` | Tier 1 store (WORM), Tier 2 store (OpenSearch + S3) |
+| `igc-api` | controllers from `igc-app-assembly` | HTTP 8080 | Mongo, Mongo-backed config |
+| `igc-orchestrator` | `PipelineExecutionEngine`, both pipeline consumers | AMQP `igc.documents.ingested`, `igc.pipeline.llm.completed` | extraction-worker, classifier-router, enforcement-worker (REST) |
+| `igc-extraction-*` (family) | NEW — mime-routed parse-only family: `tika`, `ocr`, `audio`, `archive`. PII / PHI / PCI moved out of this stage. | HTTP per family member | MinIO |
+| `igc-classifier-router` | NEW — task-agnostic cascade router. Used for classification AND for taxonomy-driven post-classify scans (PII/PHI/PCI) and metadata extraction — different prompt blocks, same cascade. | HTTP 8091 | bert-inference, slm-worker, llm-worker (REST) |
+| `igc-bert-inference` | NEW — JVM + ONNX Runtime / DJL | HTTP 8092 | MinIO (model artifacts) |
+| `igc-bert-trainer` | NEW — Python, HuggingFace transformers | Triggered by `BertTrainingJobRepository` | Mongo (training samples), MinIO (publishes ONNX) |
+| `igc-slm-worker` | Adapter layer over Anthropic Haiku / Ollama | HTTP 8093 | mcp-server, Anthropic, Ollama |
+| `igc-llm-worker` | existing `igc-llm-orchestration` | AMQP `igc.pipeline.llm.jobs` (kept) + HTTP 8094 (new sync entry) | mcp-server, Anthropic |
+| `igc-mcp-server` | existing `igc-mcp-server` | HTTP 8081 (SSE) | Mongo |
+| `igc-enforcement-worker` | `igc-governance-enforcement` | HTTP 8095 + AMQP `igc.documents.classified` | Mongo |
+| `igc-indexing-worker` | NEW | AMQP `igc.documents.classified` | Elasticsearch |
+| `igc-connectors` | Drive monitor, Gmail polling | scheduled | Google APIs, Mongo, MinIO |
+| `igc-scheduler` | Stale recovery, retention, BERT advisor | scheduled | Mongo, Rabbit |
+| `igc-audit-collector` | NEW — single-writer Tier 1 (chain), horizontal Tier 2 (see §7) | AMQP `igc.audit.tier1.*`, `igc.audit.tier2.*` | Tier 1 store (WORM), Tier 2 store (OpenSearch + S3) |
 
 ### Scaling profile by class
 
 The roster collapses into five distinct *scaling shapes*. Each class has a different autoscaling signal, a different minimum replica count, and a different failure-mode profile. Picking the right shape per container matters more than picking the right replica count — the count is the consequence, not the cause.
 
 **Class A — Stateless HTTP, horizontal on request load**
-- `gls-api`, `gls-classifier-router`, `gls-slm-worker`, `gls-pii-scanner`, the extraction family (`gls-extraction-tika`, `-ocr`, `-audio`, …), `gls-mcp-server`.
+- `igc-api`, `igc-classifier-router`, `igc-slm-worker`, `igc-pii-scanner`, the extraction family (`igc-extraction-tika`, `-ocr`, `-audio`, …), `igc-mcp-server`.
 - HPA driven by concurrent in-flight requests and CPU. Minimum 2 for HA. Replicas are interchangeable — any replica serves any request.
 - Failure mode: a sick replica is evicted by the readiness probe; load redistributes.
 
 **Class B — Queue-driven, horizontal on queue lag**
-- `gls-orchestrator`, `gls-llm-worker` (async path), `gls-indexing-worker`, `gls-enforcement-worker` (Rabbit mode).
+- `igc-orchestrator`, `igc-llm-worker` (async path), `igc-indexing-worker`, `igc-enforcement-worker` (Rabbit mode).
 - HPA driven by AMQP queue depth, not CPU. Each replica is a *competing consumer* on the same queue.
 - Idempotency on `nodeRunId` is mandatory (§6.11) — two replicas grabbing the same retry message must converge to one outcome.
 - Failure mode: a stuck consumer's prefetched messages return to the queue on connection close; another replica picks them up.
 
 **Class C — Stateful, warm-up bound**
-- `gls-bert-inference`.
+- `igc-bert-inference`.
 - Replicas are *not* immediately interchangeable — each loads a ~500 MB ONNX model into RAM and warms the runtime before serving.
 - HPA on RPS, but with deliberately long cool-down (5–10 min scale-down) to avoid thrashing the warm pool. Memory-bound, not CPU-bound.
 - Rolling reload on new `BERT_CLASSIFIER` block versions (§6.3) — the replica reports `warming` and returns 503 until ready.
 
 **Class D — Singleton with leader election**
-- `gls-scheduler`. Some flows in `gls-connectors` (one watch per shared drive, not one per replica).
+- `igc-scheduler`. Some flows in `igc-connectors` (one watch per shared drive, not one per replica).
 - Run 2+ replicas for HA, but only one acts at a time. ShedLock on Mongo for distributed locks; per-job leases.
 - Cannot scale *throughput* by adding replicas — to scale, **shard the work** (one leader per source, not one leader for all sources), or decompose the singleton into independent jobs each with its own lock key.
 - Failure mode: leader dies → lock expires → another replica takes over within the lease TTL.
 
 **Class E — Batch / on-demand**
-- `gls-bert-trainer`.
+- `igc-bert-trainer`.
 - Spawned as a one-shot Kubernetes Job when a `BertTrainingJob` row appears; pod terminates on completion. Concurrency, not replica count, is the scaling lever — bounded by GPU pool size.
 
 ### Scaled-out shape
@@ -299,30 +299,30 @@ The roster collapses into five distinct *scaling shapes*. Each class has a diffe
 
 | Container | Class | HPA signal | Min | Bounded by |
 |---|---|---|---|---|
-| `gls-api` | A | In-flight requests + CPU | 2 | Mongo connection pool |
-| `gls-orchestrator` | B | `gls.documents.ingested` depth | 2 | Mongo + Rabbit channels |
-| `gls-classifier-router` | A | RPS + CPU | 2 | Downstream tier capacity |
-| `gls-extraction-{tika,ocr,audio,…}` | A | RPS per mime family | 2 each | MinIO bandwidth, GPU (OCR/audio) |
-| `gls-pii-scanner` | A | RPS + CPU | 2 | CPU (regex throughput) |
-| `gls-bert-inference` | C | RPS + CPU, slow cool-down | 2 | Memory per replica × pod count |
-| `gls-bert-trainer` | E | Pending `BertTrainingJob` rows | 0 (on-demand) | GPU pool |
-| `gls-slm-worker` | A + cost gate | RPS + provider quota | 2 | Anthropic Haiku rate limit |
-| `gls-llm-worker` | B + cost gate | `gls.pipeline.llm.jobs` depth + budget | 2 | Anthropic concurrency / £ budget |
-| `gls-mcp-server` | A | RPS + CPU | 2 | Mongo connection pool |
-| `gls-enforcement-worker` | A or B | RPS or queue depth | 2 | Mongo |
-| `gls-indexing-worker` | B | `gls.documents.classified` depth | 2 | Elasticsearch ingest |
-| `gls-scheduler` | D | None — singleton | 2 (1 active) | n/a |
-| `gls-connectors` | D / sharded | Per-source partition + API quota | 2 (HA) | Google / Microsoft API limits |
+| `igc-api` | A | In-flight requests + CPU | 2 | Mongo connection pool |
+| `igc-orchestrator` | B | `igc.documents.ingested` depth | 2 | Mongo + Rabbit channels |
+| `igc-classifier-router` | A | RPS + CPU | 2 | Downstream tier capacity |
+| `igc-extraction-{tika,ocr,audio,…}` | A | RPS per mime family | 2 each | MinIO bandwidth, GPU (OCR/audio) |
+| `igc-pii-scanner` | A | RPS + CPU | 2 | CPU (regex throughput) |
+| `igc-bert-inference` | C | RPS + CPU, slow cool-down | 2 | Memory per replica × pod count |
+| `igc-bert-trainer` | E | Pending `BertTrainingJob` rows | 0 (on-demand) | GPU pool |
+| `igc-slm-worker` | A + cost gate | RPS + provider quota | 2 | Anthropic Haiku rate limit |
+| `igc-llm-worker` | B + cost gate | `igc.pipeline.llm.jobs` depth + budget | 2 | Anthropic concurrency / £ budget |
+| `igc-mcp-server` | A | RPS + CPU | 2 | Mongo connection pool |
+| `igc-enforcement-worker` | A or B | RPS or queue depth | 2 | Mongo |
+| `igc-indexing-worker` | B | `igc.documents.classified` depth | 2 | Elasticsearch ingest |
+| `igc-scheduler` | D | None — singleton | 2 (1 active) | n/a |
+| `igc-connectors` | D / sharded | Per-source partition + API quota | 2 (HA) | Google / Microsoft API limits |
 
 ### Cross-cutting scaling constraints
 
 Replica count does not help when the bottleneck is upstream of the pod fleet. Six constraints to pin down before any HPA bounds get committed.
 
-- **Multiplicative resource pools.** Every replica claims Mongo connections, Rabbit channels, MinIO multipart slots, ES bulk indexers. The fleet sum is what matters. Scaling `gls-orchestrator` from 4 → 40 replicas with a 50-connection-per-replica pool means 2,000 Mongo connections — well past most ceilings. **Rule:** the HPA upper bound is itself a sizing decision; per-replica pools must be sized as `ceiling ÷ max replicas`, not in isolation.
-- **Vendor API limits trump replica count.** `gls-llm-worker` and `gls-slm-worker` are bound by Anthropic concurrency and rate limits, not their own replicas. Scaling past the quota produces 429s, not throughput. Two controls needed: (a) HPA upper bound matches the quota; (b) an in-process semaphore caps in-flight calls per replica so a burst doesn't trip rate limits before the autoscaler reacts.
-- **Cost-bound tiers need a budget gate, not a replica gate.** Autoscaling on queue depth alone will happily empty a 100k-document reclassification backlog at peak Anthropic rates. A daily / per-job spending cap belongs on `gls-llm-worker` and on `gls-classifier-router`'s escalation logic. Same fail-safe spirit as the §6.5 outbox.
-- **Cold-start hurts BERT.** Aggressive scale-down on `gls-bert-inference` drops warm replicas; the next spike hits cold ones with full model-load + JIT cost. Scale-down cool-down measured in *minutes*. Optionally pre-warm replicas with a synthetic `/v1/infer` call in the readiness probe so the ONNX session is JIT-compiled before live traffic lands.
-- **Singletons cannot be scaled out.** `gls-scheduler`, per-drive Drive watches, and per-mailbox Gmail polls are single-leader by nature. Parallelism comes from sharding the *work* (one leader per source) or decomposing the singleton into independent jobs with separate lock keys — not from adding replicas.
+- **Multiplicative resource pools.** Every replica claims Mongo connections, Rabbit channels, MinIO multipart slots, ES bulk indexers. The fleet sum is what matters. Scaling `igc-orchestrator` from 4 → 40 replicas with a 50-connection-per-replica pool means 2,000 Mongo connections — well past most ceilings. **Rule:** the HPA upper bound is itself a sizing decision; per-replica pools must be sized as `ceiling ÷ max replicas`, not in isolation.
+- **Vendor API limits trump replica count.** `igc-llm-worker` and `igc-slm-worker` are bound by Anthropic concurrency and rate limits, not their own replicas. Scaling past the quota produces 429s, not throughput. Two controls needed: (a) HPA upper bound matches the quota; (b) an in-process semaphore caps in-flight calls per replica so a burst doesn't trip rate limits before the autoscaler reacts.
+- **Cost-bound tiers need a budget gate, not a replica gate.** Autoscaling on queue depth alone will happily empty a 100k-document reclassification backlog at peak Anthropic rates. A daily / per-job spending cap belongs on `igc-llm-worker` and on `igc-classifier-router`'s escalation logic. Same fail-safe spirit as the §6.5 outbox.
+- **Cold-start hurts BERT.** Aggressive scale-down on `igc-bert-inference` drops warm replicas; the next spike hits cold ones with full model-load + JIT cost. Scale-down cool-down measured in *minutes*. Optionally pre-warm replicas with a synthetic `/v1/infer` call in the readiness probe so the ONNX session is JIT-compiled before live traffic lands.
+- **Singletons cannot be scaled out.** `igc-scheduler`, per-drive Drive watches, and per-mailbox Gmail polls are single-leader by nature. Parallelism comes from sharding the *work* (one leader per source) or decomposing the singleton into independent jobs with separate lock keys — not from adding replicas.
 - **RabbitMQ is a tier, not a given.** A single Rabbit node is the choke point at this fleet size. Entry-level shape: 3-node cluster with quorum queues, HA policy on every queue, dedicated channels-per-replica budget. Same multiplicative trap as Mongo — replicas × channels can exhaust the broker.
 
 ### Honest health probes are the contract
@@ -332,7 +332,7 @@ Two probes per container, doing different jobs:
 - **Liveness** — process alive. Restart on failure.
 - **Readiness** — *and* downstream dependencies usable: Mongo reachable, Rabbit channel open, model loaded and warm, vendor API circuit closed. Failure pulls the replica from the load balancer without restarting it.
 
-Lie-by-omission readiness (replica returns 200 while its model is still loading, or while its Rabbit connection is broken) breaks every other safety mechanism in this document. The classifier-router's `fallbackOnTierUnavailable` policy (§6.2) only works because `gls-bert-inference` honestly returns 503 during warm-up rather than 200 with garbage.
+Lie-by-omission readiness (replica returns 200 while its model is still loading, or while its Rabbit connection is broken) breaks every other safety mechanism in this document. The classifier-router's `fallbackOnTierUnavailable` policy (§6.2) only works because `igc-bert-inference` honestly returns 503 during warm-up rather than 200 with garbage.
 
 ---
 
@@ -408,7 +408,7 @@ POST /v1/classify
 { "text": "...", "promptBlockId": "haiku-classify-v7", "promptVersion": 7,
   "bertHints": { "top": ["HR > Maternity","HR > Parental"] },
   "model": "claude-haiku-4-5" | "ollama:qwen2.5:7b",
-  "mcpEndpoint": "http://gls-mcp-server:8081",
+  "mcpEndpoint": "http://igc-mcp-server:8081",
   "timeoutMs": 8000,
   "documentId": "...", "nodeRunId": "..." }
 → 200
@@ -430,7 +430,7 @@ POST /v1/classify
 → 202 { "jobId": "..." }
 ```
 
-Completion arrives as `LlmJobCompletedEvent` on `gls.pipeline.llm.completed`. The orchestrator's existing `PipelineResumeConsumer` resumes the pipeline run.
+Completion arrives as `LlmJobCompletedEvent` on `igc.pipeline.llm.completed`. The orchestrator's existing `PipelineResumeConsumer` resumes the pipeline run.
 
 ### 4.6 SLM / LLM → MCP server
 
@@ -502,8 +502,8 @@ The document's journey is five conceptual stages. Implementation detail — whic
 
  — at every step —
     audit_outbox is committed in the same Mongo transaction as state.
-    outbox-relay publishes to gls.audit.{tier1.domain | tier2.system}.
-    gls-audit-collector  drains, hash-chains Tier 1 → WORM, fans Tier 2 → OpenSearch.
+    outbox-relay publishes to igc.audit.{tier1.domain | tier2.system}.
+    igc-audit-collector  drains, hash-chains Tier 1 → WORM, fans Tier 2 → OpenSearch.
     traceparent is propagated end-to-end; otel-collector receives spans.
 ```
 
@@ -567,7 +567,7 @@ UPLOADED → PROCESSING → PROCESSED → CLASSIFYING → CLASSIFIED → GOVERNA
 
 | Failure | Behaviour |
 |---|---|
-| Anthropic 5xx / circuit breaker open | Job consumed but fails. `LlmJobFailedEvent` emitted on `gls.pipeline.llm.completed` with `status=FAILED`. Orchestrator marks `CLASSIFICATION_FAILED, lastErrorStage=LLM`. Retryable. |
+| Anthropic 5xx / circuit breaker open | Job consumed but fails. `LlmJobFailedEvent` emitted on `igc.pipeline.llm.completed` with `status=FAILED`. Orchestrator marks `CLASSIFICATION_FAILED, lastErrorStage=LLM`. Retryable. |
 | Timeout (300 s default) | Same as 5xx, with `lastError = "LLM_TIMEOUT"`. |
 | MCP server unreachable, `save_classification` cannot run | LLM writes result to a **classification outbox** collection (`classification_outbox`); a small reconciler in the orchestrator drains the outbox once MCP is back. Prevents the "classified but never persisted" footgun. |
 | LLM returns empty / malformed JSON | Existing retry-with-stricter-prompt logic. After 2 retries → `CLASSIFICATION_FAILED` with `lastError = "LLM_NO_RESULT"`. |
@@ -676,14 +676,14 @@ The right shape is the **transactional outbox** at every producer plus a **singl
             │              consumer downstream)
             ▼
  ╔════════════════════════════════════════════════╗
- ║         RabbitMQ — gls.audit  exchange         ║
+ ║         RabbitMQ — igc.audit  exchange         ║
  ║                                                ║
- ║   audit.tier1.domain  ──▶  [gls-audit-collector] ──▶  Tier 1 WORM store
+ ║   audit.tier1.domain  ──▶  [igc-audit-collector] ──▶  Tier 1 WORM store
  ║                              (Class D singleton,        append-only,
  ║                               ShedLock, chain integrity) hash-chained,
  ║                                                          7+ years
  ║
- ║   audit.tier2.system  ──▶  [gls-audit-collector] ──▶  OpenSearch
+ ║   audit.tier2.system  ──▶  [igc-audit-collector] ──▶  OpenSearch
  ║                              (Class B horizontal,       (90-day hot)
  ║                               competing consumers)      + S3 cold
  ║
@@ -695,7 +695,7 @@ Two patterns earn their complexity here:
 
 - **Outbox pattern at each producer.** The state change and the audit event share one Mongo transaction (same document, or a `_pendingEvents` array on the document). A relay drains the outbox and publishes to Rabbit; on crash, replay is safe because the outbox state survives. This is the only way to guarantee both "no state change without audit event" (the outbox is committed with state) and "no audit event without state change" (because the outbox row never appears unless the state change committed). 2PC is not on the table.
 
-- **Single writer per Tier 1.** `gls-audit-collector` is the only writer to the Tier 1 store. Parallel writers cannot maintain a coherent hash chain. Two replicas with leader election (Class D — singleton, ShedLock); the non-leader stays warm. Tier 2 has no chain, so the same collector binary scales horizontally (Class B) for that tier — two roles in one container.
+- **Single writer per Tier 1.** `igc-audit-collector` is the only writer to the Tier 1 store. Parallel writers cannot maintain a coherent hash chain. Two replicas with leader election (Class D — singleton, ShedLock); the non-leader stays warm. Tier 2 has no chain, so the same collector binary scales horizontally (Class B) for that tier — two roles in one container.
 
 ### 7.4 Common envelope
 
@@ -714,7 +714,7 @@ Every audit event from every container shares one envelope. Without this, cross-
   "traceparent":     "00-4bf92f3577b34da6...-01",
   "actor": {
     "type":     "SYSTEM",                     // SYSTEM | USER | CONNECTOR
-    "service":  "gls-classifier-router",
+    "service":  "igc-classifier-router",
     "version":  "1.4.2",
     "instance": "pod-abc123"
   },
@@ -738,13 +738,13 @@ Every audit event from every container shares one envelope. Without this, cross-
 
 A user override carries `actor.type=USER`, `actor.id=user_xyz`, `action=OVERRIDE_CATEGORY`, with original and corrected values in `details`. Same envelope, different payload.
 
-### 7.5 New container — `gls-audit-collector`
+### 7.5 New container — `igc-audit-collector`
 
 A new entry on the §3 roster, dual-role:
 
 | Property | Tier 1 mode | Tier 2 mode |
 |---|---|---|
-| **Module** | NEW (`gls-audit`) | same binary |
+| **Module** | NEW (`igc-audit`) | same binary |
 | **Listens on** | AMQP `audit.tier1.domain` | AMQP `audit.tier2.system` |
 | **Writes to** | Tier 1 store (WORM / S3 Object Lock / Mongo append-only) | Tier 2 store (OpenSearch + S3 cold) |
 | **Scaling class** | D — singleton with leader election (chain integrity) | B — competing consumers, horizontal |
@@ -752,7 +752,7 @@ A new entry on the §3 roster, dual-role:
 | **HPA signal** | n/a | `audit.tier2.system` queue depth |
 | **Failure mode** | Lock expiry → standby promotes; messages return to queue | Stuck consumer's prefetch returns; another replica picks up |
 
-Existing containers each gain a small audit-relay component. JVM services share a `gls-platform-audit` library (single source of truth for the envelope, outbox writer, retry/backoff). Python services (`gls-bert-trainer`, OCR if Python) consume an equivalent module published the same way.
+Existing containers each gain a small audit-relay component. JVM services share a `igc-platform-audit` library (single source of truth for the envelope, outbox writer, retry/backoff). Python services (`igc-bert-trainer`, OCR if Python) consume an equivalent module published the same way.
 
 ### 7.6 What gets audited at which tier
 
@@ -790,7 +790,7 @@ Every container that writes audit events must:
 
 ### 7.8 Open decisions
 
-These will bite if not settled before `gls-audit-collector` is built. Mirrored in §10.
+These will bite if not settled before `igc-audit-collector` is built. Mirrored in §10.
 
 1. **Tier 1 backend.** External WORM (S3 Object Lock + Athena, or managed audit service) vs in-Mongo with role-based deny. Recommendation: external — for a governance product, infrastructure-enforced immutability is a stronger claim than process-enforced. Trade-off is an extra dependency and a separate query surface.
 
@@ -825,8 +825,8 @@ Trade-off: a small amount of duplicate MCP load when both SLM and LLM run for th
 
 Adopted: a two-container split.
 
-- **`gls-bert-trainer`** — Python, FastAPI optional, HuggingFace `transformers` + PyTorch. Triggered by `BertTrainingJobRepository` jobs. Reads training samples from Mongo, fine-tunes, **exports to ONNX**, publishes the artifact to MinIO under a versioned key (e.g. `bert-models/uk-hr-bert/v2.onnx`), then writes a new `BERT_CLASSIFIER` block version pointing at it.
-- **`gls-bert-inference`** — JVM (Spring Boot) running ONNX Runtime via [DJL](https://djl.ai/). Loads ONNX artifact from MinIO at startup or on `/v1/models/reload`. No Python in the request path.
+- **`igc-bert-trainer`** — Python, FastAPI optional, HuggingFace `transformers` + PyTorch. Triggered by `BertTrainingJobRepository` jobs. Reads training samples from Mongo, fine-tunes, **exports to ONNX**, publishes the artifact to MinIO under a versioned key (e.g. `bert-models/uk-hr-bert/v2.onnx`), then writes a new `BERT_CLASSIFIER` block version pointing at it.
+- **`igc-bert-inference`** — JVM (Spring Boot) running ONNX Runtime via [DJL](https://djl.ai/). Loads ONNX artifact from MinIO at startup or on `/v1/models/reload`. No Python in the request path.
 
 Rationale:
 
@@ -845,25 +845,25 @@ Ordered by dependency and value.
 
 ### Phase A — Carve out the obvious wins (low risk)
 
-1. **Extract `gls-extraction-worker`** as its own Maven app + Docker image.
+1. **Extract `igc-extraction-worker`** as its own Maven app + Docker image.
    *Biggest blast-radius reduction*: a 200 MB PDF can no longer OOM the orchestrator. Smallest schema/contract surface.
-2. **Stand up `gls-indexing-worker`** (greenfield) consuming `gls.documents.classified` and writing to Elasticsearch. Independent SLO from classification.
+2. **Stand up `igc-indexing-worker`** (greenfield) consuming `igc.documents.classified` and writing to Elasticsearch. Independent SLO from classification.
 
 ### Phase B — Introduce the router and the multi-tier shape
 
-3. **Define the OpenAPI spec for `gls-classifier-router`** (the contracts in §4). Mock implementation first that just proxies straight to the existing LLM worker — proves the orchestrator integration end-to-end before any model work.
+3. **Define the OpenAPI spec for `igc-classifier-router`** (the contracts in §4). Mock implementation first that just proxies straight to the existing LLM worker — proves the orchestrator integration end-to-end before any model work.
 4. **Define the `ROUTER` block content schema** (§2 example) with admin UI + validation. Seed with conservative defaults (`bertAccept=1.01` everywhere — disabled).
 5. **Cutover orchestrator** to call `router /v1/classify` instead of dispatching directly to LLM. LLM-only path under the hood; no behaviour change for users.
 
 ### Phase C — Add BERT
 
-6. **Build `gls-bert-trainer`** (Python). First job: train the existing top-3 categories. Publish ONNX to MinIO + write `BERT_CLASSIFIER` block.
-7. **Build `gls-bert-inference`** (JVM/DJL). Wire `/v1/models/reload` to the block-version observer.
+6. **Build `igc-bert-trainer`** (Python). First job: train the existing top-3 categories. Publish ONNX to MinIO + write `BERT_CLASSIFIER` block.
+7. **Build `igc-bert-inference`** (JVM/DJL). Wire `/v1/models/reload` to the block-version observer.
 8. **Enable BERT for the categories with most corrections**, one at a time, by raising `bertAccept` from 1.01 to 0.92. Watch escalation rate and accuracy.
 
 ### Phase D — Add SLM tier
 
-9. **Build `gls-slm-worker`** with two backends: Anthropic Haiku and Ollama. Same OpenAPI as LLM worker. Make MCP integration mandatory.
+9. **Build `igc-slm-worker`** with two backends: Anthropic Haiku and Ollama. Same OpenAPI as LLM worker. Make MCP integration mandatory.
 10. **Tune `slmAcceptThreshold`** per category against held-out evaluation set.
 
 ### Phase E — Operational hardening
@@ -871,14 +871,14 @@ Ordered by dependency and value.
 11. **Per-tier observability**: tier-of-decision histogram, escalation rate, cost-per-document, p50/p95/p99 latency by tier, MCP availability impact on confidence.
 12. **Cost guardrails**: spend cap on LLM tier (org-wide, optionally per business unit / department); auto-degrade to SLM-only when exceeded.
 13. **`classification_outbox` reconciler** for the MCP-down case (§6.5).
-14. **Singleton scheduling** for `gls-scheduler` and `gls-connectors` (ShedLock on Mongo).
-15. **Change-driven cache refresh** (Decision 30): `gls.config.changed` fanout exchange. Every write to a governance entity (taxonomy, blocks, schemas, retention rules, PII / sensitivity / storage / trait definitions, governance policies, AppConfig) fires an event with the changed entity IDs; every replica subscribes and invalidates its in-memory cache granularly. Hub `PackImportService` MUST fire the same event after a pack import so hub-driven updates propagate identically to local writes. Replaces the existing MCP Caffeine TTL cache for governance reference data.
+14. **Singleton scheduling** for `igc-scheduler` and `igc-connectors` (ShedLock on Mongo).
+15. **Change-driven cache refresh** (Decision 30): `igc.config.changed` fanout exchange. Every write to a governance entity (taxonomy, blocks, schemas, retention rules, PII / sensitivity / storage / trait definitions, governance policies, AppConfig) fires an event with the changed entity IDs; every replica subscribes and invalidates its in-memory cache granularly. Hub `PackImportService` MUST fire the same event after a pack import so hub-driven updates propagate identically to local writes. Replaces the existing MCP Caffeine TTL cache for governance reference data.
 16. **Readiness vs liveness** split in every container's actuator config.
 
 ### Phase F — Enforcement and connector splits (deferred)
 
-17. Carve out `gls-enforcement-worker`. Lower urgency — current load is modest.
-18. Carve out `gls-connectors`. Worth doing once mailbox/folder count grows past current scale.
+17. Carve out `igc-enforcement-worker`. Lower urgency — current load is modest.
+18. Carve out `igc-connectors`. Worth doing once mailbox/folder count grows past current scale.
 
 ---
 
@@ -887,8 +887,8 @@ Ordered by dependency and value.
 1. **Block-version pinning vs latest** — should a `pipelineRun` pin every block version at dispatch time (full reproducibility, but stale runs drift from current best practice), or always use `activeVersion`? Recommendation: pin for replays, use active for fresh runs.
 2. **Escalation cost ceiling** — at what point does the router refuse to escalate to LLM and instead route to human review? Org-wide cap, per top-level category, or per business unit?
 3. **Confidence calibration** — BERT, SLM, and LLM produce confidence scores on different scales. Need a calibration layer or per-tier thresholds (currently the latter).
-4. **BERT model specialisation** — one general model across all categories, or domain-specialised models (HR-bert, Legal-bert, Finance-bert) loaded by `gls-bert-inference` and selected per document? Affects training cost, cold-start time, and warm-pool sizing.
-5. **GPU sizing for `gls-bert-inference`** — CPU is sufficient for ModernBERT-base at expected QPS, but if we move to larger encoders or batch real-time inference, GPU pool becomes a separate concern.
+4. **BERT model specialisation** — one general model across all categories, or domain-specialised models (HR-bert, Legal-bert, Finance-bert) loaded by `igc-bert-inference` and selected per document? Affects training cost, cold-start time, and warm-pool sizing.
+5. **GPU sizing for `igc-bert-inference`** — CPU is sufficient for ModernBERT-base at expected QPS, but if we move to larger encoders or batch real-time inference, GPU pool becomes a separate concern.
 
 **Audit and event capture** (mirrored from §7.8 — same wording is canonical there)
 
@@ -903,7 +903,7 @@ Ordered by dependency and value.
 
 ## 11. Classifier-Router OpenAPI — design considerations before drafting
 
-The OpenAPI spec for `gls-classifier-router` is small but it locks in shape decisions that propagate to every other worker (extraction, BERT, SLM, LLM, enforcement, indexing). The same envelope, error model, idempotency rules and trace propagation should be reused everywhere — otherwise the orchestrator becomes a translation layer.
+The OpenAPI spec for `igc-classifier-router` is small but it locks in shape decisions that propagate to every other worker (extraction, BERT, SLM, LLM, enforcement, indexing). The same envelope, error model, idempotency rules and trace propagation should be reused everywhere — otherwise the orchestrator becomes a translation layer.
 
 The decisions below are split into:
 
@@ -919,7 +919,7 @@ The decisions below are split into:
 Three viable patterns for the `/v1/classify` response:
 
 1. **Single endpoint, status-code switch** — 200 means BERT/SLM accepted, 202 means escalated to LLM with callback via Rabbit.
-2. **`Prefer: respond-async` header** — caller declares what it can tolerate; useful when `gls-api` calls the router for ad-hoc reclassification (no Rabbit consumer to drain).
+2. **`Prefer: respond-async` header** — caller declares what it can tolerate; useful when `igc-api` calls the router for ad-hoc reclassification (no Rabbit consumer to drain).
 3. **Two endpoints** (`/classify/sync`, `/classify/async`) — cleanest spec; two SDK methods.
 
 **Recommendation:** option 1 with optional `Prefer` header. Same surface for both call sites; orchestrator's HTTP client must accept both response shapes.
@@ -935,7 +935,7 @@ Caller passes blocks as `{ id, version }` (pinned) or `{ id }` (router resolves 
 
 #### A3. Tenancy — **DECIDED: not applicable**
 
-GLS is single-tenant (one organisation per deployment). No `tenantId` in the contract, no tenant-aware routing in the router, no tenant claim in auth tokens. Internal scoping (department, business unit, content domain) is a separate concern handled inside the application's authorisation model — not at the inter-service contract surface.
+IGC is single-tenant (one organisation per deployment). No `tenantId` in the contract, no tenant-aware routing in the router, no tenant claim in auth tokens. Internal scoping (department, business unit, content domain) is a separate concern handled inside the application's authorisation model — not at the inter-service contract surface.
 
 If a future deployment ever needed multi-tenancy, it would be a major version bump on every contract; defer the design entirely until that requirement actually exists.
 
@@ -954,7 +954,7 @@ If a future deployment ever needed multi-tenancy, it would be a major version bu
 RFC 7807 `application/problem+json`:
 
 ```json
-{ "type": "https://gls.example/errors/slm-rate-limited",
+{ "type": "https://igc.example/errors/slm-rate-limited",
   "title": "SLM tier rate-limited",
   "status": 503,
   "code": "SLM_RATE_LIMITED",
@@ -965,7 +965,7 @@ RFC 7807 `application/problem+json`:
              { "tier": "SLM",  "decision": "RATE_LIMITED" } ] }
 ```
 
-**Recommendation:** RFC 7807 across **every** worker (extraction, BERT, SLM, LLM, enforcement, indexing), not just the router. Otherwise the orchestrator translates per-worker shapes — and it shouldn't. Add the GLS-specific fields (`code`, `lastErrorStage`, `retryable`, `retryAfterMs`, `trace`) as extensions.
+**Recommendation:** RFC 7807 across **every** worker (extraction, BERT, SLM, LLM, enforcement, indexing), not just the router. Otherwise the orchestrator translates per-worker shapes — and it shouldn't. Add the IGC-specific fields (`code`, `lastErrorStage`, `retryable`, `retryAfterMs`, `trace`) as extensions.
 
 #### A6. Auth between containers
 
@@ -1045,7 +1045,7 @@ Four concrete answers unlock the rest. Once these are agreed, a single drafting 
 
 A3 (tenancy) is decided — single-tenant, not in the contract. A4 (idempotency TTL) and the 11.B conventions can take their recommended defaults unless the morning conversation surfaces a reason to change them.
 
-**Then** — with those five answered — draft `gls-classifier-router/openapi.yaml` covering:
+**Then** — with those five answered — draft `igc-classifier-router/openapi.yaml` covering:
 
 - `POST /v1/classify` (sync + async)
 - `GET /v1/capabilities`
@@ -1053,7 +1053,7 @@ A3 (tenancy) is decided — single-tenant, not in the contract. A4 (idempotency 
 - The shared error schema
 - The shared tenancy / auth scheme
 
-Once the router spec is committed, the same shape gets cloned (with endpoint-specific request/response schemas) for `gls-extraction-worker`, `gls-bert-inference`, `gls-slm-worker`, `gls-llm-worker`, `gls-enforcement-worker`, `gls-indexing-worker`.
+Once the router spec is committed, the same shape gets cloned (with endpoint-specific request/response schemas) for `igc-extraction-worker`, `igc-bert-inference`, `igc-slm-worker`, `igc-llm-worker`, `igc-enforcement-worker`, `igc-indexing-worker`.
 
 ---
 
@@ -1064,11 +1064,11 @@ Acronyms and short-form terms used in this document. Definitions favour *how the
 | Term | Stands for | Meaning in this doc |
 |---|---|---|
 | **ACK** | Acknowledgement | RabbitMQ confirmation that a consumer has successfully processed a message; until ACK, the broker will redeliver. |
-| **AMQP** | Advanced Message Queuing Protocol | The wire protocol RabbitMQ speaks. "AMQP `gls.documents.ingested`" = a queue on the RabbitMQ cluster. |
+| **AMQP** | Advanced Message Queuing Protocol | The wire protocol RabbitMQ speaks. "AMQP `igc.documents.ingested`" = a queue on the RabbitMQ cluster. |
 | **API** | Application Programming Interface | A service's public surface — REST/HTTP here unless stated otherwise. |
 | **AZ** | Availability Zone | A failure domain within a cloud region; multi-AZ = the cluster survives one zone failing. |
 | **BERT** | Bidirectional Encoder Representations from Transformers | The encoder-only model family used for fast, cheap, first-pass classification. ~500 MB ONNX artefact, 20–80 ms inference. |
-| **BOM** | Bill of Materials | A Maven POM that pins a coherent set of dependency versions; `backend/bom/` is GLS's. |
+| **BOM** | Bill of Materials | A Maven POM that pins a coherent set of dependency versions; `backend/bom/` is IGC's. |
 | **CI** | Continuous Integration | The automated build/test pipeline (GitHub Actions in this repo). |
 | **CPU** | Central Processing Unit | Used here to distinguish from GPU-bound workloads. |
 | **DJL** | Deep Java Library | JVM-native ML inference framework; runs ONNX models without leaving the JVM. |
@@ -1082,25 +1082,25 @@ Acronyms and short-form terms used in this document. Definitions favour *how the
 | **IAM** | Identity and Access Management | The permission model for a cloud account or service mesh. |
 | **JIT** | Just-In-Time | Runtime compilation (e.g. ONNX session warm-up, JVM hotspot) — first request after start is slower. |
 | **JSON** | JavaScript Object Notation | Wire format for REST bodies and the canonical Mongo document shape. |
-| **JVM** | Java Virtual Machine | The runtime for every Spring Boot container in this fleet (vs Python for `gls-bert-trainer` and `gls-extraction-ocr`). |
+| **JVM** | Java Virtual Machine | The runtime for every Spring Boot container in this fleet (vs Python for `igc-bert-trainer` and `igc-extraction-ocr`). |
 | **JWT** | JSON Web Token | A signed token carrying claims (e.g. service identity, scopes); proposed as the inter-container auth mechanism (§11.A.6). |
 | **KEDA** | Kubernetes Event-Driven Autoscaler | An HPA extension that scales on external signals like RabbitMQ queue depth — the right autoscaler for Class B containers. |
 | **LLM** | Large Language Model | The expensive, deep-reasoning tier (Claude Sonnet/Opus). 5–30 s, async via RabbitMQ. |
-| **MCP** | Model Context Protocol | Anthropic's tool-calling protocol; `gls-mcp-server` exposes governance tools (`get_correction_history`, `get_metadata_schemas`, …) to SLM/LLM workers. |
+| **MCP** | Model Context Protocol | Anthropic's tool-calling protocol; `igc-mcp-server` exposes governance tools (`get_correction_history`, `get_metadata_schemas`, …) to SLM/LLM workers. |
 | **mTLS** | mutual TLS | Both ends of a connection authenticate with certificates; alternative to JWT auth, typically delivered by a service mesh. |
-| **OCR** | Optical Character Recognition | Extracting text from images / scanned PDFs. Owned by `gls-extraction-ocr`. |
-| **ONNX** | Open Neural Network Exchange | Portable ML model format; the contract between Python `gls-bert-trainer` and JVM `gls-bert-inference`. |
+| **OCR** | Optical Character Recognition | Extracting text from images / scanned PDFs. Owned by `igc-extraction-ocr`. |
+| **ONNX** | Open Neural Network Exchange | Portable ML model format; the contract between Python `igc-bert-trainer` and JVM `igc-bert-inference`. |
 | **OOM** | Out Of Memory | A process death from heap exhaustion; the §6.1 failure mode for huge PDFs hitting Tika. |
-| **PII** | Personally Identifiable Information | Data covered by privacy regulation (NI numbers, names, addresses, …); detected by `gls-pii-scanner`. |
+| **PII** | Personally Identifiable Information | Data covered by privacy regulation (NI numbers, names, addresses, …); detected by `igc-pii-scanner`. |
 | **QPS** | Queries Per Second | Equivalent to RPS for read-heavy services. |
-| **RAM** | Random-Access Memory | Where BERT models live once loaded; sizing constraint for `gls-bert-inference`. |
+| **RAM** | Random-Access Memory | Where BERT models live once loaded; sizing constraint for `igc-bert-inference`. |
 | **REST** | REpresentational State Transfer | HTTP-based synchronous API style; the inter-container contract within a pipeline node. |
 | **RFC** | Request For Comments | IETF standards document. RFC 7807 = Problem Details for HTTP APIs (the error envelope, §11.A.5). |
 | **RPS** | Requests Per Second | Throughput metric used as an HPA signal for Class A containers. |
 | **SDK** | Software Development Kit | Generated client library (per service contract) that consumers import to call that service. |
 | **SLM** | Small Language Model | The mid-tier (Haiku, Llama-7B, qwen-7B). 1–3 s, low cost, MCP-aware. |
 | **SLO** | Service Level Objective | Target reliability metric (e.g. p95 classification latency); future operational concern (§9 Phase E). |
-| **SSE** | Server-Sent Events | One-way HTTP streaming; `gls-mcp-server` exposes its tool surface over SSE. |
+| **SSE** | Server-Sent Events | One-way HTTP streaming; `igc-mcp-server` exposes its tool surface over SSE. |
 | **TLS** | Transport Layer Security | Encryption of network connections; precondition for mTLS. |
 | **TTL** | Time To Live | An expiry on a cached value or a distributed lock (e.g. ShedLock leases, idempotency cache). |
 | **YAML** | YAML Ain't Markup Language | The serialisation format for OpenAPI/AsyncAPI specs and Kubernetes manifests. |

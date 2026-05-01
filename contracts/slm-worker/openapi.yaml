@@ -11,13 +11,13 @@ info:
     Two pluggable backends:
 
     - **Anthropic Haiku** (cloud) — selected via
-      `gls.slm.worker.backend=anthropic`. Requires `ANTHROPIC_API_KEY`.
-    - **Ollama** (local) — selected via `gls.slm.worker.backend=ollama`.
+      `igc.slm.worker.backend=anthropic`. Requires `ANTHROPIC_API_KEY`.
+    - **Ollama** (local) — selected via `igc.slm.worker.backend=ollama`.
       A local model name is configured per replica (e.g. `llama3.1:8b`).
 
     Phase 1.5 first cut: contract + JVM module + a stub backend that
     returns `SLM_NOT_CONFIGURED` 503 until either of the above is
-    wired. Cascade wire-in (`gls-classifier-router`'s SLM tier) and
+    wired. Cascade wire-in (`igc-classifier-router`'s SLM tier) and
     real backends ship as separate Phase 1.5 follow-ups.
 
     **Conventions referenced from `_shared/`:**
@@ -28,7 +28,7 @@ info:
     - `Capabilities` — CSV #21.
 
 servers:
-  - url: http://gls-slm-worker:8080
+  - url: http://igc-slm-worker:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8095
     description: Local dev (override).

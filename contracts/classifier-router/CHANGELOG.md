@@ -20,7 +20,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `openapi.yaml` — initial OpenAPI 3.1.1 declaration of `gls-classifier-router`. Three operations:
+- `openapi.yaml` — initial OpenAPI 3.1.1 declaration of `igc-classifier-router`. Three operations:
   - `POST /v1/classify` — task-agnostic cascade dispatch. Idempotent on `nodeRunId` per CSV #16. Block coordinates per CSV #14 (version absent = active). Phase 1.2 first cut returns `tierOfDecision=MOCK` until BERT / SLM / LLM are wired in 1.4–1.6.
   - `GET /v1/capabilities` — per CSV #21.
   - `GET /actuator/health` — liveness + readiness.

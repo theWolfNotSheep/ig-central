@@ -52,8 +52,8 @@ IG Central (tenant)                          Hub (marketplace)
 **UI:** Collapsible "AI Taxonomy Gap Analysis" panel at the top of the Taxonomy tab. Each suggestion has an "Add to Taxonomy" button that pre-fills the category form.
 
 **Files:**
-- `backend/gls-app-assembly/.../services/ai/TaxonomyGapService.java`
-- `backend/gls-app-assembly/.../services/ai/TaxonomyGapReport.java`
+- `backend/igc-app-assembly/.../services/ai/TaxonomyGapService.java`
+- `backend/igc-app-assembly/.../services/ai/TaxonomyGapReport.java`
 - `web/src/components/taxonomy-gap-panel.tsx`
 
 ---
@@ -85,8 +85,8 @@ IG Central (tenant)                          Hub (marketplace)
 **UI:** "Generate from Documents" button opens a modal with category picker, sample size slider, and field selection. Admin reviews and deselects irrelevant fields before creating the schema.
 
 **Files:**
-- `backend/gls-app-assembly/.../services/ai/BulkSchemaGenerationService.java`
-- `backend/gls-app-assembly/.../services/ai/BulkSchemaResult.java`
+- `backend/igc-app-assembly/.../services/ai/BulkSchemaGenerationService.java`
+- `backend/igc-app-assembly/.../services/ai/BulkSchemaResult.java`
 - `web/src/components/bulk-schema-modal.tsx`
 
 ---
@@ -123,9 +123,9 @@ hub:
 - **AI Generate Button** — per-tab sparkle button on Taxonomy, Metadata, Retention, Sensitivity, Policies tabs. Generates additional items for that component type.
 
 **Files:**
-- `backend/gls-governance-hub-app/.../services/HubLlmService.java`
-- `backend/gls-governance-hub-app/.../controllers/AiAssistantController.java`
-- `backend/gls-governance-hub/.../models/HubAiUsageLog.java`
+- `backend/igc-governance-hub-app/.../services/HubLlmService.java`
+- `backend/igc-governance-hub-app/.../controllers/AiAssistantController.java`
+- `backend/igc-governance-hub/.../models/HubAiUsageLog.java`
 - `web-hub/app/packs/[id]/_components/AiAssistantPanel.tsx`
 - `web-hub/app/packs/[id]/_components/AiGenerateButton.tsx`
 
@@ -164,10 +164,10 @@ Central admin clicks "Share Feedback" for an installed pack
 - Only statistical patterns: correction counts, category pairs, confidence averages
 
 **Files:**
-- `backend/gls-app-assembly/.../services/PackFeedbackService.java`
-- `backend/gls-app-assembly/.../services/ai/PackFeedbackSummary.java`
-- `backend/gls-governance-hub/.../models/PackFeedback.java`
-- `backend/gls-governance-hub-app/.../controllers/PackFeedbackController.java`
+- `backend/igc-app-assembly/.../services/PackFeedbackService.java`
+- `backend/igc-app-assembly/.../services/ai/PackFeedbackSummary.java`
+- `backend/igc-governance-hub/.../models/PackFeedback.java`
+- `backend/igc-governance-hub-app/.../controllers/PackFeedbackController.java`
 
 ---
 
@@ -189,7 +189,7 @@ The `PackFeedbackController.getFeedback()` endpoint returns all feedback for a p
 ### AiService (Central)
 Reusable LLM call service extracted from `GovernanceAdminController`. Supports Anthropic and Ollama with automatic `AiUsageLog` logging.
 
-**File:** `backend/gls-app-assembly/.../services/ai/AiService.java`
+**File:** `backend/igc-app-assembly/.../services/ai/AiService.java`
 
 ```java
 @Service

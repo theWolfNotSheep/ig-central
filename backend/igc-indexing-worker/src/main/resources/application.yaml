@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: igc-indexing-worker
+
+  data:
+    mongodb:
+      uri: ${SPRING_DATA_MONGODB_URI:mongodb://root:${MONGO_PASSWORD:example}@localhost:27017/${MONGO_DB_NAME:governance_led_storage_main}?authSource=admin}
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+
+  elasticsearch:
+    uris: ${SPRING_ELASTICSEARCH_URIS:http://localhost:9200}
+
+server:
+  port: ${IGC_INDEXING_WORKER_PORT:8098}
+
+igc:
+  indexing:
+    worker:
+      jobs:
+        ttl: ${IGC_INDEXING_JOBS_TTL:PT24H}
+      async:
+        core-size: ${IGC_INDEXING_ASYNC_CORE:2}
+        max-size: ${IGC_INDEXING_ASYNC_MAX:4}
+        queue-capacity: ${IGC_INDEXING_ASYNC_QUEUE:8}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+
+logging:
+  level:
+    co.uk.wolfnotsheep: INFO

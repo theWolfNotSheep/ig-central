@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gls.local/contracts/blocks/prompt.schema.json",
+  "$id": "https://igc.local/contracts/blocks/prompt.schema.json",
   "title": "PROMPT block content",
   "description": "Carries the system prompt + user-prompt template + optional model config that the SLM / LLM workers execute. The `kind` discriminator groups prompts by purpose so the engine and admin UI can pick the right block at the right pipeline stage. Per architecture §3 — block library is the source of truth.",
   "type": "object",

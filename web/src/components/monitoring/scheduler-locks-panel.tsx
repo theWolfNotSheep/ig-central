@@ -12,7 +12,7 @@ import api from "@/lib/axios/axios.client";
  * the lock, until when, plus a derived `active` flag (lockUntil > now).
  *
  * Useful for operators to see at a glance which replica is currently
- * leader for `audit-tier1-leader`, `gls-audit-outbox-relay`,
+ * leader for `audit-tier1-leader`, `igc-audit-outbox-relay`,
  * `stale-pipeline-recovery`, `index-reconciliation`, etc.
  */
 

@@ -9,9 +9,9 @@ info:
     Synchronous archive unpacking. Pulls bytes from MinIO, walks the
     archive one level deep, lands each direct child as a fresh MinIO
     object, and returns the list of child `documentRef`s. The caller
-    (orchestrator / `gls-app-assembly`) creates the child
+    (orchestrator / `igc-app-assembly`) creates the child
     `DocumentModel` rows and publishes the per-child
-    `gls.documents.ingested` events — recursion through nested archives
+    `igc.documents.ingested` events — recursion through nested archives
     happens through the normal pipeline routing (a `.zip` containing
     `.mbox` re-routes the `.mbox` back through this service on its own
     request, with its own `nodeRunId`). Decision: CSV #43.
@@ -31,7 +31,7 @@ info:
     - `application/vnd.ms-outlook` (`.pst`)
 
 servers:
-  - url: http://gls-extraction-archive:8080
+  - url: http://igc-extraction-archive:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8090
     description: Local dev (override).
@@ -262,7 +262,7 @@ components:
         A single child landed by the archive walk. `documentRef` points
         at the freshly written MinIO object; the caller is expected to
         promote this into a `DocumentModel` row and publish the
-        corresponding `gls.documents.ingested` event.
+        corresponding `igc.documents.ingested` event.
       properties:
         documentRef:
           type: object

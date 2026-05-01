@@ -30,7 +30,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Initial REST contract for `gls-audit-collector` — Phase 1.12 PR1.
+- Initial REST contract for `igc-audit-collector` — Phase 1.12 PR1.
   The async consumer side of the collector is declared in
   `contracts/audit/asyncapi.yaml` (channels `audit.tier1.{eventType}`
   and `audit.tier2.{eventType}`); this OpenAPI document covers the

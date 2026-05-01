@@ -30,7 +30,7 @@ info:
       `audio/flac`, `audio/ogg`, `audio/webm`.
 
 servers:
-  - url: http://gls-extraction-audio:8080
+  - url: http://igc-extraction-audio:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8092
     description: Local dev (override).
@@ -124,7 +124,7 @@ paths:
         '503':
           description: |
             Transcription provider is not configured (no
-            `OPENAI_API_KEY` set on this build, or `gls.extraction.audio.provider`
+            `OPENAI_API_KEY` set on this build, or `igc.extraction.audio.provider`
             is `none`). Returned with `code=AUDIO_NOT_CONFIGURED`.
           content:
             application/problem+json:

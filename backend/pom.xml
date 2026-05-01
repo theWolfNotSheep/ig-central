@@ -11,10 +11,10 @@
     </parent>
 
     <groupId>co.uk.wolfnotsheep</groupId>
-    <artifactId>gls-parent</artifactId>
+    <artifactId>igc-parent</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
-    <name>GLS Parent</name>
+    <name>IGC Parent</name>
     <description>Parent POM for Governance-Led Storage multi-module monorepo</description>
 
     <properties>
@@ -29,29 +29,29 @@
 
     <modules>
         <module>bom</module>
-        <module>gls-platform</module>
-        <module>gls-governance</module>
-        <module>gls-document</module>
-        <module>gls-document-processing</module>
-        <module>gls-mcp-server</module>
-        <module>gls-llm-orchestration</module>
-        <module>gls-governance-enforcement</module>
-        <module>gls-app-assembly</module>
-        <module>gls-governance-hub</module>
-        <module>gls-governance-hub-app</module>
+        <module>igc-platform</module>
+        <module>igc-governance</module>
+        <module>igc-document</module>
+        <module>igc-document-processing</module>
+        <module>igc-mcp-server</module>
+        <module>igc-llm-orchestration</module>
+        <module>igc-governance-enforcement</module>
+        <module>igc-app-assembly</module>
+        <module>igc-governance-hub</module>
+        <module>igc-governance-hub-app</module>
         <module>contracts-smoke</module>
-        <module>gls-platform-audit</module>
-        <module>gls-platform-config</module>
-        <module>gls-extraction-tika</module>
-        <module>gls-extraction-archive</module>
-        <module>gls-extraction-ocr</module>
-        <module>gls-extraction-audio</module>
-        <module>gls-classifier-router</module>
-        <module>gls-bert-inference</module>
-        <module>gls-slm-worker</module>
-        <module>gls-llm-worker</module>
-        <module>gls-indexing-worker</module>
-        <module>gls-audit-collector</module>
+        <module>igc-platform-audit</module>
+        <module>igc-platform-config</module>
+        <module>igc-extraction-tika</module>
+        <module>igc-extraction-archive</module>
+        <module>igc-extraction-ocr</module>
+        <module>igc-extraction-audio</module>
+        <module>igc-classifier-router</module>
+        <module>igc-bert-inference</module>
+        <module>igc-slm-worker</module>
+        <module>igc-llm-worker</module>
+        <module>igc-indexing-worker</module>
+        <module>igc-audit-collector</module>
     </modules>
 
     <dependencyManagement>
@@ -61,7 +61,7 @@
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep</groupId>
-                <artifactId>gls-bom</artifactId>
+                <artifactId>igc-bom</artifactId>
                 <version>0.0.1-SNAPSHOT</version>
                 <type>pom</type>
                 <scope>import</scope>

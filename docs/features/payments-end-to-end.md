@@ -9,7 +9,7 @@ A staged plan for taking IG Central from "signup creates an empty user" to "self
 **What exists:**
 - `SignupController` at `/api/auth/public/signup` — creates a user with an encoded password, no email verification, account immediately enabled
 - `OAuth2LoginSuccessHandler` — auto-provisions Google users
-- `Product`, `Subscription`, `Role`, `Feature` models in `gls-platform/src/main/java/co/uk/wolfnotsheep/platform/products/`
+- `Product`, `Subscription`, `Role`, `Feature` models in `igc-platform/src/main/java/co/uk/wolfnotsheep/platform/products/`
 - `Product.monthlyPriceInPence` and `annualPriceInPence` fields (unused)
 - `Subscription.status` supports `"ACTIVE"`, `"TRIAL"` (no `endDate` enforcement)
 - `RolePermissionSyncService.getNewUserDefaults()` — returns roles where `defaultForNewUsers = true`
@@ -64,10 +64,10 @@ Product.roleIds + featureIds → User.permissions (via SubscriptionPermissionSyn
 - Add a dashboard banner if `user.permissions.size() == 0` so you notice if signup ever drops permissions
 
 **Files to touch:**
-- `backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/controllers/SignupController.java`
-- `backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/configs/OAuth2LoginSuccessHandler.java`
-- `backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/products/services/RolePermissionSyncService.java` (verify `syncForUser()` exists)
-- `backend/gls-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/bootstrap/PermissionDataSeeder.java` (add STANDARD_USER role with defaults)
+- `backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/controllers/SignupController.java`
+- `backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/configs/OAuth2LoginSuccessHandler.java`
+- `backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/products/services/RolePermissionSyncService.java` (verify `syncForUser()` exists)
+- `backend/igc-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/bootstrap/PermissionDataSeeder.java` (add STANDARD_USER role with defaults)
 
 ### 🤖 Prompt — Phase 1
 
@@ -78,11 +78,11 @@ everything they try.
 
 Tasks:
 
-1. Read backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/controllers/SignupController.java
-   and backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/configs/OAuth2LoginSuccessHandler.java
+1. Read backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/controllers/SignupController.java
+   and backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/configs/OAuth2LoginSuccessHandler.java
    and identify where the user is saved.
 
-2. Read backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/products/services/RolePermissionSyncService.java
+2. Read backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/products/services/RolePermissionSyncService.java
    to find the existing method that applies default roles. There's `getNewUserDefaults()`
    that returns the roles+permissions to apply, and likely a `syncForUser(userId)` method
    that does it directly. Use whichever fits cleanly.
@@ -91,7 +91,7 @@ Tasks:
    the sync service to apply default roles. Reload the user from the repo before
    responding so the JWT/session reflects the new permissions.
 
-4. Read backend/gls-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/bootstrap/PermissionDataSeeder.java
+4. Read backend/igc-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/bootstrap/PermissionDataSeeder.java
    and check whether a STANDARD_USER role exists with `defaultForNewUsers = true` and
    sensible feature keys (DOCUMENT_READ, DOCUMENT_CREATE, DOCUMENT_DOWNLOAD, SEARCH_USE,
    TAXONOMY_READ at minimum). If not, add it. Run idempotently — only create if missing.
@@ -102,7 +102,7 @@ Tasks:
    surfaces the problem if the sync ever drops a user.
 
 Verify:
-- Compile: `cd backend && ./mvnw compile -DskipTests -pl gls-app-assembly -am`
+- Compile: `cd backend && ./mvnw compile -DskipTests -pl igc-app-assembly -am`
 - Frontend: `cd web && npx tsc --noEmit`
 - Wipe and re-seed the platform mongo, sign up a new user via /api/auth/public/signup,
   check the user document has roles + permissions populated
@@ -127,20 +127,20 @@ Verify:
 - Add a dashboard banner showing trial countdown / expired state
 
 **Files to touch:**
-- `backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/products/models/Product.java`
-- `backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/products/models/Subscription.java` (verify `endDate` field exists; add if not)
-- `backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/controllers/SignupController.java`
-- `backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/configs/OAuth2LoginSuccessHandler.java`
-- `backend/gls-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/bootstrap/PermissionDataSeeder.java` (seed Starter product)
-- New: `backend/gls-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/services/SubscriptionExpiryJob.java`
-- `backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/controllers/MeController.java`
+- `backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/products/models/Product.java`
+- `backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/products/models/Subscription.java` (verify `endDate` field exists; add if not)
+- `backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/controllers/SignupController.java`
+- `backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/configs/OAuth2LoginSuccessHandler.java`
+- `backend/igc-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/bootstrap/PermissionDataSeeder.java` (seed Starter product)
+- New: `backend/igc-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/services/SubscriptionExpiryJob.java`
+- `backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/controllers/MeController.java`
 - `web/src/app/(protected)/dashboard/page.tsx`
 
 ### 🤖 Prompt — Phase 2
 
 ```
 This Spring Boot + Next.js app has Product and Subscription models in
-backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/products/. Phase 1 of a
+backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/products/. Phase 1 of a
 broader payments work has already been completed (signup applies default roles via
 RolePermissionSyncService). Now I need to add trial subscriptions.
 
@@ -221,8 +221,8 @@ Verify:
 - On user profile page (`/admin/users/[id]`), add a **Subscriptions** card showing user's subs + assign/cancel buttons
 
 **Files to create:**
-- `backend/gls-app-assembly/.../controllers/admin/ProductAdminController.java`
-- `backend/gls-app-assembly/.../controllers/admin/SubscriptionAdminController.java`
+- `backend/igc-app-assembly/.../controllers/admin/ProductAdminController.java`
+- `backend/igc-app-assembly/.../controllers/admin/SubscriptionAdminController.java`
 - `web/src/app/(protected)/admin/products/page.tsx`
 - `web/src/app/(protected)/admin/subscriptions/page.tsx`
 
@@ -233,7 +233,7 @@ Verify:
 
 ```
 This Spring Boot + Next.js app has Product, Subscription, Role, Feature models in
-backend/gls-platform/.../products/. Phases 1-2 are done (default roles on signup,
+backend/igc-platform/.../products/. Phases 1-2 are done (default roles on signup,
 auto-trial subscription).
 
 I need full admin UI for Products and Subscriptions so ops can manage them without
@@ -248,7 +248,7 @@ Tasks:
      trialDays, defaultForNewSignups, roleIds, featureIds, status
    - PUT /{id} (update)
    - DELETE /{id} — block if any active subscriptions reference it
-   Place in backend/gls-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/controllers/admin/
+   Place in backend/igc-app-assembly/src/main/java/co/uk/wolfnotsheep/infrastructure/controllers/admin/
 
 2. Backend — SubscriptionAdminController at /api/admin/subscriptions:
    - GET ?userId=&productId=&status= (list with filters)
@@ -317,17 +317,17 @@ Verify:
 - Add `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET` to `.env`
 
 **Files to create:**
-- `backend/gls-platform/.../products/services/StripeService.java`
-- `backend/gls-app-assembly/.../controllers/BillingController.java`
-- `backend/gls-app-assembly/.../controllers/StripeWebhookController.java`
+- `backend/igc-platform/.../products/services/StripeService.java`
+- `backend/igc-app-assembly/.../controllers/BillingController.java`
+- `backend/igc-app-assembly/.../controllers/StripeWebhookController.java`
 - `web/src/app/(protected)/billing/page.tsx`
 - `web/src/app/(protected)/billing/plans/page.tsx`
 
 **Files to modify:**
-- `backend/gls-platform/.../products/models/Product.java`
-- `backend/gls-platform/.../products/models/Subscription.java`
-- `backend/gls-platform/.../identity/models/UserModel.java`
-- `backend/gls-app-assembly/pom.xml` — add `com.stripe:stripe-java`
+- `backend/igc-platform/.../products/models/Product.java`
+- `backend/igc-platform/.../products/models/Subscription.java`
+- `backend/igc-platform/.../identity/models/UserModel.java`
+- `backend/igc-app-assembly/pom.xml` — add `com.stripe:stripe-java`
 - `.env.example` and docker-compose.yml — Stripe env vars
 - `nginx/conf.d/default.conf` — exclude `/api/webhooks/stripe` from CSRF (raw body for signature verification)
 
@@ -349,20 +349,20 @@ Setup first:
 
 Tasks:
 
-1. Add com.stripe:stripe-java (latest stable) to backend/gls-app-assembly/pom.xml.
-   Run `./mvnw compile -DskipTests -pl gls-app-assembly -am` to verify.
+1. Add com.stripe:stripe-java (latest stable) to backend/igc-app-assembly/pom.xml.
+   Run `./mvnw compile -DskipTests -pl igc-app-assembly -am` to verify.
 
 2. Extend models:
    - Product: add stripePriceIdMonthly (String), stripePriceIdAnnual (String).
-     File: backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/products/models/Product.java
+     File: backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/products/models/Product.java
    - Subscription: add stripeSubscriptionId (String), stripeStatus (String — Stripe's
      own status string like "active", "trialing", "past_due", "canceled" — kept for
      reference; our local `status` enum stays the source of truth).
-     File: backend/gls-platform/.../products/models/Subscription.java
+     File: backend/igc-platform/.../products/models/Subscription.java
    - UserModel: add stripeCustomerId (String).
-     File: backend/gls-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/models/UserModel.java
+     File: backend/igc-platform/src/main/java/co/uk/wolfnotsheep/platform/identity/models/UserModel.java
 
-3. Create StripeService at backend/gls-platform/.../products/services/StripeService.java:
+3. Create StripeService at backend/igc-platform/.../products/services/StripeService.java:
    - Inject StripeKey via @Value("${stripe.secret-key}")
    - getOrCreateCustomer(userId, email, name) → returns stripeCustomerId, persists on
      UserModel
@@ -373,7 +373,7 @@ Tasks:
    - createPortalSession(userId, returnUrl) → returns Stripe Portal URL
    - handleWebhookEvent(payload, signature) → delegates to handlers per event type
 
-4. Create BillingController at backend/gls-app-assembly/.../controllers/BillingController.java:
+4. Create BillingController at backend/igc-app-assembly/.../controllers/BillingController.java:
    - GET /api/billing/plans → returns list of active Products with prices and
      stripePriceId IDs (no secrets). Public to authenticated users.
    - POST /api/billing/checkout-session → body: { productId, interval: "MONTHLY"|"ANNUAL" },
@@ -382,7 +382,7 @@ Tasks:
    - POST /api/billing/portal-session → returns { url } from
      StripeService.createPortalSession.
 
-5. Create StripeWebhookController at backend/gls-app-assembly/.../controllers/StripeWebhookController.java:
+5. Create StripeWebhookController at backend/igc-app-assembly/.../controllers/StripeWebhookController.java:
    - POST /api/webhooks/stripe — accepts raw body + Stripe-Signature header
    - Verifies signature with stripe.webhook-secret
    - Handles events:
@@ -404,7 +404,7 @@ Tasks:
    (default behavior is fine but worth a check). No special routing needed.
 
 7. Update Spring security to exclude /api/webhooks/stripe from CSRF. Find
-   DefaultSecurityConfig.java in gls-platform and add:
+   DefaultSecurityConfig.java in igc-platform and add:
      .csrf(csrf -> csrf.ignoringRequestMatchers("/api/webhooks/stripe"))
    And under authorizeHttpRequests:
      .requestMatchers("/api/webhooks/stripe").permitAll()
@@ -470,9 +470,9 @@ Out of scope for this phase (will come later):
 - Password reset emails (admin-triggered or self-serve forgot-password)
 
 **Files to create:**
-- `backend/gls-platform/.../identity/services/EmailService.java`
-- `backend/gls-platform/.../identity/services/PostmarkEmailService.java` (or chosen provider)
-- `backend/gls-platform/.../identity/controllers/EmailVerificationController.java`
+- `backend/igc-platform/.../identity/services/EmailService.java`
+- `backend/igc-platform/.../identity/services/PostmarkEmailService.java` (or chosen provider)
+- `backend/igc-platform/.../identity/controllers/EmailVerificationController.java`
 - Email templates (Java text or external HTML files)
 
 ### 🤖 Prompt — Phase 5
@@ -492,12 +492,12 @@ Setup first:
 
 Tasks:
 
-1. Extend UserModel (backend/gls-platform/.../identity/models/UserModel.java):
+1. Extend UserModel (backend/igc-platform/.../identity/models/UserModel.java):
    - boolean emailVerified (default false)
    - @Indexed(sparse=true) String emailVerificationToken
    - Instant emailVerificationTokenExpiresAt
 
-2. Create EmailService interface (backend/gls-platform/.../identity/services/EmailService.java)
+2. Create EmailService interface (backend/igc-platform/.../identity/services/EmailService.java)
    with methods:
    - sendVerificationEmail(toEmail, token, displayName)
    - sendWelcomeEmail(toEmail, displayName)
@@ -520,7 +520,7 @@ Tasks:
      Recommendation: apply roles + trial NOW so the user is fully set up by the
      time they verify; just block login until verified.
 
-5. Add EmailVerificationController (backend/gls-platform/.../identity/controllers/):
+5. Add EmailVerificationController (backend/igc-platform/.../identity/controllers/):
    - GET /api/auth/public/verify-email?token=... → look up user, check token not
      expired, set emailVerified=true, clear token. Send welcome email. Redirect to
      /login?verified=true (frontend shows success banner).
@@ -589,9 +589,9 @@ Verify:
 - Add a `Subscription.lastSyncedAt` field to detect drift
 
 **Files to touch:**
-- `backend/gls-platform/.../identity/controllers/AuthController.java` (post-login hook)
-- `backend/gls-platform/.../products/services/SubscriptionPermissionSyncService.java`
-- `backend/gls-app-assembly/.../services/AuditService.java` (if exists, add subscription events)
+- `backend/igc-platform/.../identity/controllers/AuthController.java` (post-login hook)
+- `backend/igc-platform/.../products/services/SubscriptionPermissionSyncService.java`
+- `backend/igc-app-assembly/.../services/AuditService.java` (if exists, add subscription events)
 
 ### 🤖 Prompt — Phase 6
 
@@ -605,7 +605,7 @@ after their subscription is cancelled.
 Tasks:
 
 1. On every successful login (find AuthController.login or the equivalent in
-   gls-platform/.../identity/), call SubscriptionPermissionSyncService
+   igc-platform/.../identity/), call SubscriptionPermissionSyncService
    .syncPermissionsForUser(userId) before returning the JWT response. This is the
    primary safety net — a freshly-issued token always reflects the latest
    subscription state.
@@ -619,7 +619,7 @@ Tasks:
 
 4. Audit subscription state changes:
    - Find existing AuditService / audit-events code (search for "audit" in
-     backend/gls-app-assembly)
+     backend/igc-app-assembly)
    - Emit audit events on: subscription created, status changed, cancelled.
      Source = "Stripe webhook" / "Admin UI" / "Trial expiry job" / "Drift check".
 
@@ -657,24 +657,24 @@ Verify:
 
 | Concept | Location |
 |---|---|
-| Signup endpoint | `backend/gls-platform/.../identity/controllers/SignupController.java` |
-| OAuth callback | `backend/gls-platform/.../identity/configs/OAuth2LoginSuccessHandler.java` |
-| User model | `backend/gls-platform/.../identity/models/UserModel.java` |
-| Login endpoint | `backend/gls-platform/.../identity/controllers/AuthController.java` |
-| `/me` endpoint | `backend/gls-platform/.../identity/controllers/MeController.java` |
-| Product / Subscription / Role / Feature models | `backend/gls-platform/.../products/models/` |
-| Role permission sync | `backend/gls-platform/.../products/services/RolePermissionSyncService.java` |
-| Subscription permission sync | `backend/gls-platform/.../products/services/SubscriptionPermissionSyncService.java` |
-| Permission seeder | `backend/gls-app-assembly/.../bootstrap/PermissionDataSeeder.java` |
-| Admin user controller | `backend/gls-app-assembly/.../controllers/admin/AdminUserController.java` |
-| Security config | `backend/gls-platform/.../identity/configs/DefaultSecurityConfig.java` |
-| Admin role provider | `backend/gls-app-assembly/.../config/DefaultAdminRoleProvider.java` |
+| Signup endpoint | `backend/igc-platform/.../identity/controllers/SignupController.java` |
+| OAuth callback | `backend/igc-platform/.../identity/configs/OAuth2LoginSuccessHandler.java` |
+| User model | `backend/igc-platform/.../identity/models/UserModel.java` |
+| Login endpoint | `backend/igc-platform/.../identity/controllers/AuthController.java` |
+| `/me` endpoint | `backend/igc-platform/.../identity/controllers/MeController.java` |
+| Product / Subscription / Role / Feature models | `backend/igc-platform/.../products/models/` |
+| Role permission sync | `backend/igc-platform/.../products/services/RolePermissionSyncService.java` |
+| Subscription permission sync | `backend/igc-platform/.../products/services/SubscriptionPermissionSyncService.java` |
+| Permission seeder | `backend/igc-app-assembly/.../bootstrap/PermissionDataSeeder.java` |
+| Admin user controller | `backend/igc-app-assembly/.../controllers/admin/AdminUserController.java` |
+| Security config | `backend/igc-platform/.../identity/configs/DefaultSecurityConfig.java` |
+| Admin role provider | `backend/igc-app-assembly/.../config/DefaultAdminRoleProvider.java` |
 | Frontend login page | `web/src/app/(auth)/login/page.tsx` |
 | Frontend dashboard | `web/src/app/(protected)/dashboard/page.tsx` |
 | Frontend admin users | `web/src/app/(protected)/admin/users/page.tsx` |
 | Frontend user profile | `web/src/app/(protected)/admin/users/[id]/page.tsx` |
 | Auth context | `web/src/contexts/auth-context.tsx` |
-| Build platform: | `cd backend && ./mvnw compile -DskipTests -pl gls-app-assembly -am` |
+| Build platform: | `cd backend && ./mvnw compile -DskipTests -pl igc-app-assembly -am` |
 | TypeScript check: | `cd web && npx tsc --noEmit` |
 | Restart api: | `docker compose up --build -d api web` |
 

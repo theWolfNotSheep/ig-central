@@ -1,11 +1,11 @@
 # `contracts/llm-worker/`
 
-OpenAPI 3.1.1 contract for the `gls-llm-worker` service — the **LLM**
-tier of the cascade router. Same shape as `gls-slm-worker` so the
+OpenAPI 3.1.1 contract for the `igc-llm-worker` service — the **LLM**
+tier of the cascade router. Same shape as `igc-slm-worker` so the
 router dispatches to either tier through identical client code.
 
 Phase 1.6 PR1 ships the contract + JVM module + stub backend. PR2
-lifts the existing `gls-llm-orchestration` Anthropic + MCP
+lifts the existing `igc-llm-orchestration` Anthropic + MCP
 integration into the new shape and retires the legacy Rabbit-based
 dispatch.
 

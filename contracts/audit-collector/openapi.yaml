@@ -6,7 +6,7 @@ info:
     name: ig-central engineering
     url: https://github.com/theWolfNotSheep/ig-central
   description: |
-    REST query + admin surface for `gls-audit-collector`. The write
+    REST query + admin surface for `igc-audit-collector`. The write
     path is exclusively async (consumes `audit.tier1.*` and
     `audit.tier2.*` from RabbitMQ — see
     `contracts/audit/asyncapi.yaml`). This document covers the read
@@ -15,7 +15,7 @@ info:
     **Phase 1.12 first cut.** PR1 ships the contract; PR2 builds the
     greenfield collector module against it; PR3 / PR4 wire the real
     Tier 2 / Tier 1 backends; PR5+ migrates existing services from
-    the legacy `AuditEventRepository` to emit via `gls-platform-audit`.
+    the legacy `AuditEventRepository` to emit via `igc-platform-audit`.
 
     **Conventions referenced from `_shared/`:**
     - Error envelope (RFC 7807 + extensions) — CSV #17.
@@ -24,7 +24,7 @@ info:
     - `Capabilities` shape — CSV #21.
 
 servers:
-  - url: http://gls-audit-collector:8080
+  - url: http://igc-audit-collector:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8099
     description: Local dev (override).
@@ -78,7 +78,7 @@ paths:
           schema:
             type: string
             maxLength: 64
-            description: Filter by `actor.service` (e.g. `gls-classifier-router`).
+            description: Filter by `actor.service` (e.g. `igc-classifier-router`).
         - name: from
           in: query
           schema:

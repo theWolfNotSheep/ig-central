@@ -7,8 +7,8 @@ info:
     url: https://github.com/theWolfNotSheep/ig-central
   description: |
     Post-classification enforcement stage (architecture §3 / §11.A).
-    Today the logic lives in the `gls-governance-enforcement` Spring
-    Boot module dependency on `gls-app-assembly`; Phase 1.10 splits
+    Today the logic lives in the `igc-governance-enforcement` Spring
+    Boot module dependency on `igc-app-assembly`; Phase 1.10 splits
     it out into a standalone deployable so the orchestrator calls it
     over HTTP rather than invoking the in-process `EnforcementService`.
 
@@ -24,7 +24,7 @@ info:
     - `Capabilities` shape — CSV #21.
 
 servers:
-  - url: http://gls-enforcement-worker:8080
+  - url: http://igc-enforcement-worker:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8097
     description: Local dev (override).

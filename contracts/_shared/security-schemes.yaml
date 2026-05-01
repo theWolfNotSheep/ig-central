@@ -24,7 +24,7 @@ components:
         Required claims:
 
         - `iss` — issuer URI (the identity service).
-        - `sub` — service identity (e.g. `service:gls-orchestrator`).
+        - `sub` — service identity (e.g. `service:igc-orchestrator`).
         - `aud` — target service identifier.
         - `exp`, `iat`, `nbf` — standard time claims.
         - `scope` — space-separated scopes naming permitted operations

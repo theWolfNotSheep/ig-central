@@ -5,7 +5,7 @@ lifecycle: forward
 
 # `contracts/extraction-ocr/`
 
-OpenAPI 3.1.1 spec for `gls-extraction-ocr` — Phase 1.1 OCR service. Synchronous Tesseract-based OCR over images and image-only PDFs. Cloned from the `gls-extraction-tika` reference pattern (Phase 0.5).
+OpenAPI 3.1.1 spec for `igc-extraction-ocr` — Phase 1.1 OCR service. Synchronous Tesseract-based OCR over images and image-only PDFs. Cloned from the `igc-extraction-tika` reference pattern (Phase 0.5).
 
 ## Operations
 
@@ -17,7 +17,7 @@ OpenAPI 3.1.1 spec for `gls-extraction-ocr` — Phase 1.1 OCR service. Synchrono
 
 ## Engine choice
 
-Tesseract via `net.sourceforge.tess4j:tess4j` 5.13.0 — see CSV #45. Local OCR rather than managed (Document AI / Textract) keeps the v2 stack on-prem-friendly per CSV #38, avoids per-page cost, and keeps document bytes inside the container fleet for compliance. The contract surface is engine-agnostic, so a future managed-OCR variant (`gls-extraction-ocr-cloud`) can ship behind the same operations.
+Tesseract via `net.sourceforge.tess4j:tess4j` 5.13.0 — see CSV #45. Local OCR rather than managed (Document AI / Textract) keeps the v2 stack on-prem-friendly per CSV #38, avoids per-page cost, and keeps document bytes inside the container fleet for compliance. The contract surface is engine-agnostic, so a future managed-OCR variant (`igc-extraction-ocr-cloud`) can ship behind the same operations.
 
 ## Cross-references
 

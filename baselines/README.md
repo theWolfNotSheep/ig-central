@@ -63,7 +63,7 @@ Out-of-cycle captures are welcome — append a row, set the `phase` column to wh
 
 ## Metric sources
 
-- **Spring Boot actuator + Micrometer Prometheus** — already wired. The api exposes `/actuator/prometheus` in the `docker` profile (see `gls-app-assembly/src/main/resources/application-docker.yaml`). Prometheus container scrapes it per `monitoring/prometheus.yml`.
+- **Spring Boot actuator + Micrometer Prometheus** — already wired. The api exposes `/actuator/prometheus` in the `docker` profile (see `igc-app-assembly/src/main/resources/application-docker.yaml`). Prometheus container scrapes it per `monitoring/prometheus.yml`.
 - **Mongo `audit_outbox` row counts** — give us classification success / failure tallies via `outcome` aggregation.
 - **MCP server actuator** — exposed at `/actuator/prometheus` in docker profile (same pattern as api).
 - **Mongo profiler** — enable temporarily during a capture window to measure per-doc query counts.

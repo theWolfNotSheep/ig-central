@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gls.local/contracts/blocks/router.schema.json",
+  "$id": "https://igc.local/contracts/blocks/router.schema.json",
   "title": "ROUTER block content",
   "description": "Cascade policy carried by a `ROUTER` PipelineBlock. The classifier-router reads this block to decide which tier (BERT → SLM → LLM) handles each request and at what threshold. Per architecture §3 / §8.1 and CSV #2.",
   "type": "object",

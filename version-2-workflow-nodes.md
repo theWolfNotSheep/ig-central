@@ -71,8 +71,8 @@ The document's journey is five conceptual stages. Implementation detail — whic
 
  — at every step —
     audit_outbox is committed in the same Mongo transaction as state.
-    outbox-relay publishes to gls.audit.{tier1.domain | tier2.system}.
-    gls-audit-collector  drains, hash-chains Tier 1 → WORM, fans Tier 2 → OpenSearch.
+    outbox-relay publishes to igc.audit.{tier1.domain | tier2.system}.
+    igc-audit-collector  drains, hash-chains Tier 1 → WORM, fans Tier 2 → OpenSearch.
     traceparent is propagated end-to-end; otel-collector receives spans.
 ```
 
@@ -227,7 +227,7 @@ When a question is resolved, it should be promoted to a row in `version-2-decisi
 
 - **Q9. Synchronous vs async caller feedback.** *(parked)* Direct uploads could block on CHECK and return a 4xx with reasons; bulk and connector pulls cannot. Pick one model or support both?
 - **Q10. Hash-while-streaming or hash-after-write.** *(parked)* One-pass streaming digest into MinIO, or two-phase write-then-hash?
-- **Q11. INGEST as own deployable.** *(parked)* Own `gls-ingest` module for independent scaling, or a controller on `gls-app-assembly` for Phase 1?
+- **Q11. INGEST as own deployable.** *(parked)* Own `igc-ingest` module for independent scaling, or a controller on `igc-app-assembly` for Phase 1?
 - **Q12. Ingest contract count.** Single ingest contract serving direct upload + single connector pull + bulk connector pull, or distinct entry paths per cardinality?
 - **Q13. Connector pulls without a clean owner.** *(parked)* Shared inboxes, group folders. Refuse, fall back to actor, or stamp a synthetic owner?
 - **Q14. Idempotency on duplicate ingest submission.** Client retries POST on a network blip — what's the contract? Idempotency key on the request, or hash-based dedup at INGEST?

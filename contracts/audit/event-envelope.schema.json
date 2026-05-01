@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gls.local/contracts/audit/event-envelope.schema.json",
+  "$id": "https://igc.local/contracts/audit/event-envelope.schema.json",
   "title": "ig-central — Audit Event Envelope",
   "description": "Common envelope for every audit event written by every container. Single contract for cross-tier correlation and chain integrity. Per `version-2-architecture.md` §7.4 and CSV #4 / #6 / #7. Used by `audit.tier1.{eventType}` (DOMAIN) and `audit.tier2.{eventType}` (SYSTEM) channels declared in `contracts/audit/asyncapi.yaml`.",
   "type": "object",
@@ -89,8 +89,8 @@
         },
         "service": {
           "type": "string",
-          "description": "Service identifier (e.g. `gls-classifier-router`, `gls-app-assembly`).",
-          "examples": ["gls-classifier-router", "gls-app-assembly", "gls-extraction-tika"]
+          "description": "Service identifier (e.g. `igc-classifier-router`, `igc-app-assembly`).",
+          "examples": ["igc-classifier-router", "igc-app-assembly", "igc-extraction-tika"]
         },
         "version": {
           "type": "string",
