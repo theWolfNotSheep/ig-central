@@ -4957,3 +4957,34 @@ This PR adds a `PackImportHistory` collection (chronological log, append-only by
 **Phase 3 status:** §3.1 / §3.2 / §3.3 / §3.4 / §3.5 / §3.6 complete. §3.8 mostly complete (cross-service metrics deferred — needs HTTP probe layer). §3.9 effectively complete (browse + diff + selective import + history + re-import shipped; auto-rollback deferred).
 
 **Next:** Phase 3 is now feature-complete modulo the small deferred items (cross-service metrics / redaction / category-trait-scope picker / version-diff views). The remaining work is polish + the larger architectural deferrals (Tier 3 trace, async export jobs, pack auto-rollback). Phase 3 close-out / migration to Phase 4 planning is the next call.
+
+## 2026-05-01 — Phase 3 PR13 — Trait category-scope picker
+
+**Done:** §3.4 deferred follow-up — UI for the trait `applicableCategoryIds` field that PR8 noted as missing. The model and REST already supported scoping a trait to specific taxonomy categories (`TraitDefinition.applicableCategoryIds`, CSV #33: empty list = global, non-empty = scoped). What was missing was operator-facing UI; until this PR, scoping required editing Mongo directly.
+
+Frontend-only change. Mirrors the metadata-schemas panel's "Linked Categories" pattern: load categories alongside traits, add a `toggleCategory` handler, render a scrollable button-pill list in the trait edit form. Each trait card now shows either `global` (gray pill, when the list is empty) or the category name (single category) / "N categories" (when scoped to multiple, with a tooltip listing them).
+
+**Changes:**
+
+- `web/src/app/(protected)/governance/page.tsx` — `TraitsPanel` extended:
+  - `categories` state populated alongside `defs` in the `load` callback (one extra `Promise.all` fetch).
+  - `toggleCategory` + `categoryName` helpers (mirror metadata-schemas).
+  - New "Applicable categories" `FormField` in the trait modal — flex-wrap pill picker, scoped to a `max-h-40 overflow-y-auto` container so a 100-category taxonomy doesn't blow out the modal.
+  - Trait card header gets a new pill: `global` when scoped to all, the category name when scoped to one, `N categories` (with a tooltip listing them) when scoped to many.
+
+**Tests:** No new backend tests (no backend change). `tsc --noEmit` clean. ESLint clean (3 pre-existing warnings on governance/page.tsx unchanged).
+
+**Decisions logged:** None. Scope-as-pills (matching metadata-schemas) was chosen over a tree picker because the existing UI sets the precedent — operators get a consistent multi-select shape across the governance page.
+
+**Files changed:**
+
+- `web/src/app/(protected)/governance/page.tsx` — modified (one panel: state + helpers + form field + card pill).
+- Log = 2 files total.
+
+**Open issues / deferred:**
+
+- **No "all categories at level X" shortcut.** Operators picking dozens of categories one-at-a-time is tedious; a "Select all under HR" button would help. Defer until someone asks.
+
+**Phase 3 status:** All §3.4 items complete (trait category-scope picker now shipped). Remaining deferred items: §3.6 redaction options, §3.6 Tier 3 trace deep-link (infra-blocked), §3.8 cross-service metrics (HTTP probe needed), §3.1 version-diff view, §3.9 auto-apply rollback flag — all minor polish items.
+
+**Next:** Phase 3 is genuinely close-out shape now. Choose a next priority bet rather than another small follow-up; the loop has 13 PRs banked today.

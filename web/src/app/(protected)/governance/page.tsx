@@ -1662,17 +1662,31 @@ const TRAIT_DIMENSIONS = ["COMPLETENESS", "DIRECTION", "PROVENANCE"];
 
 function TraitsPanel() {
     const [defs, setDefs] = useState<TraitDef[]>([]);
+    const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
     const [editing, setEditing] = useState<TraitDef | null>(null);
     const [saving, setSaving] = useState(false);
     const [filterDim, setFilterDim] = useState("");
 
     const load = useCallback(async () => {
         try {
-            const { data } = await api.get("/admin/governance/traits/all");
-            setDefs(data);
+            const [t, c] = await Promise.all([
+                api.get("/admin/governance/traits/all"),
+                api.get("/admin/governance/taxonomy"),
+            ]);
+            setDefs(t.data);
+            setCategories(c.data);
         } catch { toast.error("Failed to load traits"); }
     }, []);
     useEffect(() => { load(); }, [load]);
+
+    const toggleCategory = (catId: string) => {
+        if (!editing) return;
+        const ids = editing.applicableCategoryIds ?? [];
+        const next = ids.includes(catId) ? ids.filter(id => id !== catId) : [...ids, catId];
+        setEditing({ ...editing, applicableCategoryIds: next });
+    };
+
+    const categoryName = (id: string) => categories.find(c => c.id === id)?.name ?? id;
 
     const newDef = (): TraitDef => ({
         key: "", displayName: "", description: "", dimension: "COMPLETENESS",
@@ -1793,6 +1807,26 @@ function TraitsPanel() {
                             </label>
                         </div>
                     </FormField>
+                    <FormField label="Applicable categories" id="trait-categories"
+                        hint="Empty = global (the LLM detects this trait on every document). Select categories to scope it.">
+                        <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto p-1">
+                            {categories.length === 0 ? (
+                                <span className="text-xs text-gray-400">No categories defined yet.</span>
+                            ) : categories.map(cat => {
+                                const selected = (editing.applicableCategoryIds ?? []).includes(cat.id);
+                                return (
+                                    <button key={cat.id} type="button" onClick={() => toggleCategory(cat.id)}
+                                        className={`px-2 py-1 text-xs rounded-md border transition-colors ${
+                                            selected
+                                                ? "bg-blue-100 text-blue-700 border-blue-200"
+                                                : "bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100"
+                                        }`}>
+                                        {cat.name}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </FormField>
                 </>)}
             </FormModal>
 
@@ -1821,6 +1855,18 @@ function TraitsPanel() {
                                                 {def.suppressPii && (
                                                     <span className="px-1.5 py-0.5 text-[10px] bg-amber-50 text-amber-700 rounded">
                                                         suppresses PII
+                                                    </span>
+                                                )}
+                                                {(def.applicableCategoryIds && def.applicableCategoryIds.length > 0) ? (
+                                                    <span className="px-1.5 py-0.5 text-[10px] bg-indigo-50 text-indigo-700 rounded"
+                                                        title={def.applicableCategoryIds.map(categoryName).join(", ")}>
+                                                        {def.applicableCategoryIds.length === 1
+                                                            ? categoryName(def.applicableCategoryIds[0])
+                                                            : `${def.applicableCategoryIds.length} categories`}
+                                                    </span>
+                                                ) : (
+                                                    <span className="px-1.5 py-0.5 text-[10px] bg-gray-50 text-gray-500 rounded">
+                                                        global
                                                     </span>
                                                 )}
                                                 {!def.active && (
