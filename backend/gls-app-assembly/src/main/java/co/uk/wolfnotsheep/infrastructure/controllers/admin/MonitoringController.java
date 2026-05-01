@@ -8,6 +8,7 @@ import co.uk.wolfnotsheep.document.repositories.SystemErrorRepository;
 import co.uk.wolfnotsheep.document.services.DocumentService;
 import co.uk.wolfnotsheep.document.services.PiiPatternScanner;
 import co.uk.wolfnotsheep.infrastructure.config.RabbitMqConfig;
+import co.uk.wolfnotsheep.infrastructure.services.BulkReclassifyCostEstimator;
 import co.uk.wolfnotsheep.infrastructure.services.ElasticsearchIndexService;
 import co.uk.wolfnotsheep.infrastructure.services.MonitoringService;
 import co.uk.wolfnotsheep.infrastructure.services.PipelineEventBroadcaster;
@@ -47,6 +48,7 @@ public class MonitoringController {
     private final PipelineRunRepository pipelineRunRepo;
     private final NodeRunRepository nodeRunRepo;
     private final co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService;
+    private final BulkReclassifyCostEstimator costEstimator;
 
     public MonitoringController(MonitoringService monitoringService,
                                 RabbitTemplate rabbitTemplate,
@@ -58,7 +60,8 @@ public class MonitoringController {
                                 PiiPatternScanner piiScanner,
                                 PipelineRunRepository pipelineRunRepo,
                                 NodeRunRepository nodeRunRepo,
-                                co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService) {
+                                co.uk.wolfnotsheep.infrastructure.services.PipelineThrottleService throttleService,
+                                BulkReclassifyCostEstimator costEstimator) {
         this.throttleService = throttleService;
         this.monitoringService = monitoringService;
         this.rabbitTemplate = rabbitTemplate;
@@ -70,6 +73,7 @@ public class MonitoringController {
         this.piiScanner = piiScanner;
         this.pipelineRunRepo = pipelineRunRepo;
         this.nodeRunRepo = nodeRunRepo;
+        this.costEstimator = costEstimator;
     }
 
     /**
@@ -266,6 +270,113 @@ public class MonitoringController {
 
         log.info("Retried {} failed documents", retried);
         return ResponseEntity.ok(Map.of("retried", retried));
+    }
+
+    /**
+     * Bulk reclassify documents matched by status filter and/or explicit id list.
+     * Runs cost estimation up-front (mean of recent CLASSIFY usage) and supports
+     * a {@code dryRun} mode that returns the estimate + matched count without
+     * touching any documents — operators can confirm the spend before clicking
+     * through.
+     *
+     * <p>Status filter accepts the {@code DocumentStatus} enum names. Common
+     * picks: {@code CLASSIFIED}, {@code REVIEW_REQUIRED}, {@code GOVERNANCE_APPLIED}
+     * (re-run governance + classification on already-handled docs after
+     * model / prompt changes); failed states are better routed via
+     * {@code /pipeline/retry-failed}.
+     *
+     * <p>Per-document path: {@code clearErrorForReprocess} → publish
+     * {@code DocumentIngestedEvent} via the same helper as the per-document
+     * reclassify endpoint, so the pipeline handles each doc the same way.
+     */
+    @PostMapping("/pipeline/bulk-reclassify")
+    public ResponseEntity<Map<String, Object>> bulkReclassify(
+            @RequestBody(required = false) BulkReclassifyRequest request) {
+        BulkReclassifyRequest req = request == null ? new BulkReclassifyRequest() : request;
+        boolean dryRun = req.dryRun != null && req.dryRun;
+        int hardCap = req.hardCap != null && req.hardCap > 0 ? Math.min(req.hardCap, 5000) : 1000;
+
+        List<DocumentModel> targets = resolveBulkReclassifyTargets(req, hardCap);
+        BulkReclassifyCostEstimator.Estimate estimate =
+                costEstimator.estimateForCount(targets.size());
+
+        if (dryRun) {
+            log.info("[bulk-reclassify dry-run] matched {} documents (estimate: ${})",
+                    targets.size(), String.format("%.4f", estimate.estimatedTotalCostUsd()));
+            return ResponseEntity.ok(Map.of(
+                    "matched", targets.size(),
+                    "queued", 0,
+                    "skipped", 0,
+                    "errors", List.of(),
+                    "dryRun", true,
+                    "estimate", estimate));
+        }
+
+        int queued = 0;
+        int skipped = 0;
+        List<String> errors = new java.util.ArrayList<>();
+        for (DocumentModel doc : targets) {
+            try {
+                DocumentModel cleared = documentService.clearErrorForReprocess(doc.getId());
+                if (requeueDocument(cleared)) {
+                    queued++;
+                } else {
+                    skipped++;
+                    errors.add("requeue failed: " + doc.getId());
+                }
+            } catch (RuntimeException e) {
+                skipped++;
+                errors.add(doc.getId() + ": " + truncate(e.getMessage(), 200));
+                log.warn("bulk-reclassify error on {}: {}", doc.getId(), e.getMessage());
+            }
+        }
+
+        log.info("[bulk-reclassify] queued {}, skipped {}, of {} matched", queued, skipped, targets.size());
+        return ResponseEntity.ok(Map.of(
+                "matched", targets.size(),
+                "queued", queued,
+                "skipped", skipped,
+                "errors", errors,
+                "dryRun", false,
+                "estimate", estimate));
+    }
+
+    private List<DocumentModel> resolveBulkReclassifyTargets(BulkReclassifyRequest req, int hardCap) {
+        // Explicit ids take precedence — operators picking specific documents.
+        if (req.documentIds != null && !req.documentIds.isEmpty()) {
+            List<String> ids = req.documentIds.size() > hardCap
+                    ? req.documentIds.subList(0, hardCap) : req.documentIds;
+            Query q = Query.query(Criteria.where("_id").in(ids));
+            q.limit(hardCap);
+            return mongoTemplate.find(q, DocumentModel.class);
+        }
+        // Status-based selection. Empty list defaults to CLASSIFIED.
+        List<DocumentStatus> statuses = new java.util.ArrayList<>();
+        if (req.statuses != null) {
+            for (String s : req.statuses) {
+                try { statuses.add(DocumentStatus.valueOf(s)); }
+                catch (IllegalArgumentException ignored) { /* skip unknown */ }
+            }
+        }
+        if (statuses.isEmpty()) {
+            statuses = List.of(DocumentStatus.CLASSIFIED, DocumentStatus.GOVERNANCE_APPLIED);
+        }
+        Query q = Query.query(Criteria.where("status").in(statuses));
+        q.limit(hardCap);
+        return mongoTemplate.find(q, DocumentModel.class);
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "…";
+    }
+
+    /** Body for {@code POST /pipeline/bulk-reclassify}. All fields optional. */
+    public static class BulkReclassifyRequest {
+        public List<String> statuses;
+        public List<String> documentIds;
+        public Boolean dryRun;
+        public Integer hardCap;
     }
 
     /**

@@ -14,6 +14,7 @@ import PipelineRunsTab from "@/components/monitoring/pipeline-runs-tab";
 import DlqReplayTab from "@/components/monitoring/dlq-replay-tab";
 import SchedulerLocksPanel from "@/components/monitoring/scheduler-locks-panel";
 import PerformanceDashboard from "@/components/monitoring/performance-dashboard";
+import BulkReclassifyPanel from "@/components/monitoring/bulk-reclassify-panel";
 
 type ServiceStatus = {
     name: string;
@@ -243,6 +244,10 @@ export default function MonitoringPage() {
                     <section>
                         <SectionHeader icon={Activity} title="Performance" />
                         <PerformanceDashboard />
+                    </section>
+                    <section>
+                        <SectionHeader icon={Activity} title="Bulk operations" />
+                        <BulkReclassifyPanel />
                     </section>
                     <section>
                         <SectionHeader icon={Inbox} title="Dead-letter queues" />
