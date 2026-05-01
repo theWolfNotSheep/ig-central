@@ -393,7 +393,7 @@ services:
       dockerfile: backend/igc-extraction-archive/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
@@ -420,7 +420,7 @@ services:
         OCR_LANGUAGES: ${OCR_LANGUAGES:-eng}
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
@@ -443,7 +443,7 @@ services:
       dockerfile: backend/igc-extraction-audio/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
@@ -468,7 +468,7 @@ services:
       dockerfile: backend/igc-classifier-router/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
@@ -501,7 +501,7 @@ services:
       # platform-audit auto-configures Mongo whenever MongoTemplate is on
       # the classpath; bert-inference doesn't use it but Spring still
       # tries to connect on boot. Point at the compose-network mongo.
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       # Default: stub backend that returns MODEL_NOT_LOADED 503.
       # Flip IGC_BERT_ENGINE to `djl` once the trainer publishes its
       # first ONNX artefact + the engine wires in.
@@ -524,7 +524,7 @@ services:
       dockerfile: backend/igc-slm-worker/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       # Default: stub backend that returns SLM_NOT_CONFIGURED 503.
       # Flip IGC_SLM_BACKEND to `anthropic` (with ANTHROPIC_API_KEY)
       # or `ollama` (with OLLAMA_BASE_URL) to enable real classification.
@@ -548,7 +548,7 @@ services:
       dockerfile: backend/igc-llm-worker/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       # Default: stub backend that returns LLM_NOT_CONFIGURED 503.
       # Flip IGC_LLM_BACKEND to `anthropic` (with ANTHROPIC_API_KEY)
       # or `ollama` (with OLLAMA_BASE_URL) to enable real classification.
@@ -577,7 +577,7 @@ services:
       dockerfile: backend/igc-governance-enforcement/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       MINIO_ENDPOINT: http://minio:9000
@@ -606,7 +606,7 @@ services:
       dockerfile: backend/igc-indexing-worker/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
@@ -625,7 +625,7 @@ services:
       dockerfile: backend/igc-audit-collector/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
