@@ -18,7 +18,11 @@ class MetricsDashboardControllerTest {
     private final MetricsDashboardController controller = new MetricsDashboardController(
             registry,
             new co.uk.wolfnotsheep.infrastructure.services.CrossServiceMetricsProbe(
-                    "http://router-test:0", "http://llm-test:0"));
+                    "http://router-test:0", "http://llm-test:0",
+                    "http://bert-test:0", "http://slm-test:0",
+                    "http://enf-test:0", "http://idx-test:0",
+                    "http://audit-test:0",
+                    "http://archive-test:0", "http://ocr-test:0", "http://audio-test:0"));
 
     @Test
     void emptyRegistry_returnsZeroedSummaryAndEmptyLists() {
