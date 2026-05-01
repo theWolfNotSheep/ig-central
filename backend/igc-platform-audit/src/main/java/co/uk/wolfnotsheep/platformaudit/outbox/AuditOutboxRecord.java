@@ -3,7 +3,6 @@ package co.uk.wolfnotsheep.platformaudit.outbox;
 import co.uk.wolfnotsheep.platformaudit.envelope.AuditEvent;
 import co.uk.wolfnotsheep.platformaudit.envelope.Tier;
 import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
@@ -38,7 +37,7 @@ import java.time.Instant;
 @Document(collection = "audit_outbox")
 public record AuditOutboxRecord(
         @Id String id,
-        @Indexed(unique = true) String eventId,
+        String eventId,
         Tier tier,
         String eventType,
         AuditEvent envelope,
