@@ -5,14 +5,14 @@ import { useCallback, useEffect, useState } from "react";
 import {
     Shield, FolderTree, Clock, HardDrive, ChevronDown, ChevronRight, Plus,
     Pencil, Trash2, Save, X, Loader2, Tag, Fingerprint, Check, XCircle,
-    Database, GripVertical, Globe,
+    Database, GripVertical, Globe, Layers,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
 import ReasonModal from "@/components/reason-modal";
 import FormModal, { FormField } from "@/components/form-modal";
 
-type Tab = "sensitivities" | "taxonomy" | "policies" | "retention" | "storage" | "pii-types" | "metadata-schemas";
+type Tab = "sensitivities" | "taxonomy" | "policies" | "retention" | "storage" | "pii-types" | "metadata-schemas" | "traits";
 
 type SensitivityDef = {
     id?: string;
@@ -99,6 +99,7 @@ const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
     { key: "storage", label: "Storage Tiers", icon: HardDrive },
     { key: "pii-types", label: "PII Types", icon: Fingerprint },
     { key: "metadata-schemas", label: "Metadata Schemas", icon: Database },
+    { key: "traits", label: "Traits", icon: Layers },
 ];
 
 const SENSITIVITIES = ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"];
@@ -157,6 +158,7 @@ export default function GovernancePage() {
             {tab === "storage" && <StoragePanel />}
             {tab === "pii-types" && <PiiTypesPanel />}
             {tab === "metadata-schemas" && <MetadataSchemasPanel />}
+            {tab === "traits" && <TraitsPanel />}
         </>
     );
 }
@@ -1637,6 +1639,229 @@ function MetadataSchemasPanel() {
                     </div>
                 ))}
             </div>
+        </div>
+    );
+}
+
+/* ── Traits ───────────────────────────────────────────── */
+
+type TraitDef = {
+    id?: string;
+    key: string;
+    displayName: string;
+    description: string;
+    dimension: string;
+    detectionHint?: string;
+    indicators: string[];
+    suppressPii: boolean;
+    active: boolean;
+    applicableCategoryIds?: string[];
+};
+
+const TRAIT_DIMENSIONS = ["COMPLETENESS", "DIRECTION", "PROVENANCE"];
+
+function TraitsPanel() {
+    const [defs, setDefs] = useState<TraitDef[]>([]);
+    const [editing, setEditing] = useState<TraitDef | null>(null);
+    const [saving, setSaving] = useState(false);
+    const [filterDim, setFilterDim] = useState("");
+
+    const load = useCallback(async () => {
+        try {
+            const { data } = await api.get("/admin/governance/traits/all");
+            setDefs(data);
+        } catch { toast.error("Failed to load traits"); }
+    }, []);
+    useEffect(() => { load(); }, [load]);
+
+    const newDef = (): TraitDef => ({
+        key: "", displayName: "", description: "", dimension: "COMPLETENESS",
+        detectionHint: "", indicators: [], suppressPii: false, active: true,
+        applicableCategoryIds: [],
+    });
+
+    const handleSave = async () => {
+        if (!editing || !editing.key.trim() || !editing.displayName.trim()) return;
+        setSaving(true);
+        try {
+            if (editing.id) await api.put(`/admin/governance/traits/${editing.id}`, editing);
+            else await api.post("/admin/governance/traits", editing);
+            toast.success(`Trait ${editing.id ? "updated" : "created"}`);
+            setEditing(null); load();
+        } catch { toast.error("Save failed"); }
+        finally { setSaving(false); }
+    };
+
+    const handleDelete = async (id: string) => {
+        if (!confirm("Deactivate this trait?")) return;
+        try { await api.delete(`/admin/governance/traits/${id}`); toast.success("Deactivated"); load(); }
+        catch { toast.error("Failed"); }
+    };
+
+    const filtered = filterDim ? defs.filter(d => d.dimension === filterDim) : defs;
+    const byDimension = TRAIT_DIMENSIONS.map(dim => ({
+        dim,
+        defs: filtered.filter(d => d.dimension === dim),
+    })).filter(g => g.defs.length > 0);
+
+    return (
+        <div className="space-y-4">
+            <div className="flex justify-between items-center gap-3 flex-wrap">
+                <p className="text-sm text-gray-500 flex-1 min-w-48">
+                    Cross-cutting document characteristics — completeness (DRAFT/FINAL/SIGNED),
+                    direction (INBOUND/OUTBOUND), provenance (TEMPLATE/ORIGINAL/COPY).
+                    The LLM detects these during classification.
+                </p>
+                <select value={filterDim} onChange={e => setFilterDim(e.target.value)}
+                    className="text-sm border border-gray-300 rounded-md px-3 py-1.5">
+                    <option value="">All dimensions</option>
+                    {TRAIT_DIMENSIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+                <button onClick={() => setEditing(newDef())} className={btnPrimary}>
+                    <Plus className="size-3.5" />Add Trait
+                </button>
+            </div>
+
+            <FormModal title={editing?.id ? `Edit ${editing.displayName || editing.key}` : "New trait"}
+                open={!!editing}
+                onClose={() => setEditing(null)}
+                width="lg"
+                footer={<>
+                    <button onClick={handleSave} disabled={saving} className={btnPrimary}>
+                        {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}Save
+                    </button>
+                    <button onClick={() => setEditing(null)} className={btnSecondary}>
+                        <X className="size-3.5" />Cancel
+                    </button>
+                </>}>
+                {editing && (<>
+                    <div className="grid grid-cols-2 gap-3">
+                        <FormField label="Key" id="trait-key" required>
+                            <input id="trait-key" value={editing.key}
+                                onChange={e => setEditing({ ...editing, key: e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "") })}
+                                placeholder="DRAFT, SIGNED, ORIGINAL"
+                                className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md font-mono" />
+                        </FormField>
+                        <FormField label="Dimension" id="trait-dim" required>
+                            <select id="trait-dim" value={editing.dimension}
+                                onChange={e => setEditing({ ...editing, dimension: e.target.value })}
+                                className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md">
+                                {TRAIT_DIMENSIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                            </select>
+                        </FormField>
+                    </div>
+                    <FormField label="Display name" id="trait-display" required>
+                        <input id="trait-display" value={editing.displayName}
+                            onChange={e => setEditing({ ...editing, displayName: e.target.value })}
+                            placeholder="Draft document"
+                            className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md" />
+                    </FormField>
+                    <FormField label="Description" id="trait-desc">
+                        <textarea id="trait-desc" value={editing.description}
+                            onChange={e => setEditing({ ...editing, description: e.target.value })}
+                            rows={2}
+                            className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md" />
+                    </FormField>
+                    <FormField label="Detection hint" id="trait-hint"
+                        hint="Instruction the LLM follows when looking for this trait.">
+                        <textarea id="trait-hint" value={editing.detectionHint ?? ""}
+                            onChange={e => setEditing({ ...editing, detectionHint: e.target.value })}
+                            rows={2}
+                            placeholder='Look for "DRAFT" watermarks, missing signatures, version-x.y suffixes.'
+                            className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-md" />
+                    </FormField>
+                    <FormField label="Indicator keywords / phrases" id="trait-indicators">
+                        <TagInput tags={editing.indicators}
+                            onChange={(indicators) => setEditing({ ...editing, indicators })}
+                            placeholder="Add indicator and press Enter" />
+                    </FormField>
+                    <FormField label="Behaviour" id="trait-behaviour">
+                        <div className="space-y-1.5 text-sm">
+                            <label className="flex items-center gap-2">
+                                <input type="checkbox" checked={editing.suppressPii}
+                                    onChange={e => setEditing({ ...editing, suppressPii: e.target.checked })} />
+                                <span>Suppress PII as informational only when this trait fires
+                                    <span className="block text-xs text-gray-500">
+                                        e.g. on TEMPLATE traits, PII matches are placeholder data, not real PII.
+                                    </span>
+                                </span>
+                            </label>
+                            <label className="flex items-center gap-2">
+                                <input type="checkbox" checked={editing.active}
+                                    onChange={e => setEditing({ ...editing, active: e.target.checked })} />
+                                <span>Active (LLM uses it during classification)</span>
+                            </label>
+                        </div>
+                    </FormField>
+                </>)}
+            </FormModal>
+
+            {byDimension.length === 0 ? (
+                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center text-sm text-gray-400">
+                    No traits {filterDim ? `in ${filterDim}` : "defined"} yet.
+                </div>
+            ) : (
+                <div className="space-y-4">
+                    {byDimension.map(group => (
+                        <div key={group.dim} className="bg-white rounded-lg shadow-sm border border-gray-200">
+                            <div className="px-4 py-2 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+                                <Layers className="size-3.5 text-gray-500" />
+                                <span className="text-xs font-mono font-medium text-gray-600">{group.dim}</span>
+                                <span className="text-xs text-gray-400">({group.defs.length})</span>
+                            </div>
+                            <div className="divide-y divide-gray-100">
+                                {group.defs.map(def => (
+                                    <div key={def.id} className={`flex items-start gap-3 px-4 py-3 ${!def.active ? "opacity-50" : ""}`}>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="font-mono text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
+                                                    {def.key}
+                                                </span>
+                                                <span className="font-medium text-sm text-gray-900">{def.displayName}</span>
+                                                {def.suppressPii && (
+                                                    <span className="px-1.5 py-0.5 text-[10px] bg-amber-50 text-amber-700 rounded">
+                                                        suppresses PII
+                                                    </span>
+                                                )}
+                                                {!def.active && (
+                                                    <span className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-500 rounded">
+                                                        Inactive
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {def.description && (
+                                                <p className="text-xs text-gray-500 mt-0.5">{def.description}</p>
+                                            )}
+                                            {def.detectionHint && (
+                                                <p className="text-xs text-gray-400 mt-0.5 italic">Hint: {def.detectionHint}</p>
+                                            )}
+                                            {def.indicators && def.indicators.length > 0 && (
+                                                <div className="flex flex-wrap gap-1 mt-1.5">
+                                                    {def.indicators.map(ind => (
+                                                        <span key={ind} className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-600 rounded">
+                                                            {ind}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="flex gap-1 shrink-0">
+                                            <button onClick={() => setEditing({ ...def })} className={btnSecondary} title="Edit">
+                                                <Pencil className="size-3.5" />
+                                            </button>
+                                            {def.active && (
+                                                <button onClick={() => handleDelete(def.id!)} className={btnDanger} title="Deactivate">
+                                                    <Trash2 className="size-3.5" />
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

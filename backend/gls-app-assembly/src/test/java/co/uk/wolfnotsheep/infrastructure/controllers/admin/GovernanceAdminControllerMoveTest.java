@@ -42,7 +42,7 @@ class GovernanceAdminControllerMoveTest {
         governanceService = mock(GovernanceService.class);
         controller = new GovernanceAdminController(
                 governanceService, null, categoryRepository, null, null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
         // Default: no siblings under any parent. Individual tests override
         // when they care about sibling renumbering.
         when(categoryRepository.findByParentIdIsNullAndStatus(NodeStatus.ACTIVE))

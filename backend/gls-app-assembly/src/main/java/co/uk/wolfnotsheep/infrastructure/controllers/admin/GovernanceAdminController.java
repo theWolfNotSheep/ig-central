@@ -41,6 +41,7 @@ public class GovernanceAdminController {
     private final SensitivityDefinitionRepository sensitivityRepository;
     private final PiiTypeDefinitionRepository piiTypeRepository;
     private final MetadataSchemaRepository metadataSchemaRepository;
+    private final TraitDefinitionRepository traitRepository;
     private final DocumentRepository documentRepository;
     private final MongoTemplate mongoTemplate;
     private final co.uk.wolfnotsheep.platform.config.services.AppConfigService configService;
@@ -63,7 +64,8 @@ public class GovernanceAdminController {
                                      DocumentRepository documentRepository,
                                      MongoTemplate mongoTemplate,
                                      co.uk.wolfnotsheep.platform.config.services.AppConfigService configService,
-                                     co.uk.wolfnotsheep.document.repositories.AiUsageLogRepository aiUsageLogRepo) {
+                                     co.uk.wolfnotsheep.document.repositories.AiUsageLogRepository aiUsageLogRepo,
+                                     TraitDefinitionRepository traitRepository) {
         this.governanceService = governanceService;
         this.policyRepository = policyRepository;
         this.categoryRepository = categoryRepository;
@@ -76,6 +78,7 @@ public class GovernanceAdminController {
         this.mongoTemplate = mongoTemplate;
         this.configService = configService;
         this.aiUsageLogRepo = aiUsageLogRepo;
+        this.traitRepository = traitRepository;
     }
 
     // ── Sensitivity Definitions ─────────────────────────
@@ -1161,5 +1164,62 @@ public class GovernanceAdminController {
                 "classificationCode", doc.getClassificationCode() != null ? doc.getClassificationCode() : "",
                 "classificationLevel", doc.getClassificationLevel() != null ? doc.getClassificationLevel().name() : ""
         ));
+    }
+
+    // ── Trait Definitions (CSV #33) ──────────────────────
+    //
+    // Traits are cross-cutting document characteristics — completeness
+    // (DRAFT / FINAL / SIGNED), direction (INBOUND / OUTBOUND), provenance
+    // (TEMPLATE / ORIGINAL / COPY) — that the LLM detects during
+    // classification. CRUD here matches the shape of the other governance
+    // CRUDs above (sensitivities, PII types, retention).
+
+    @GetMapping("/traits")
+    public ResponseEntity<List<TraitDefinition>> listTraits() {
+        return ResponseEntity.ok(
+                traitRepository.findByActiveTrueOrderByDimensionAscDisplayNameAsc());
+    }
+
+    @GetMapping("/traits/all")
+    public ResponseEntity<List<TraitDefinition>> listAllTraits() {
+        return ResponseEntity.ok(traitRepository.findAll());
+    }
+
+    @PostMapping("/traits")
+    public ResponseEntity<TraitDefinition> createTrait(@RequestBody TraitDefinition def) {
+        def.setActive(true);
+        return ResponseEntity.ok(traitRepository.save(def));
+    }
+
+    @PutMapping("/traits/{id}")
+    public ResponseEntity<TraitDefinition> updateTrait(
+            @PathVariable String id, @RequestBody TraitDefinition updates) {
+        return traitRepository.findById(id)
+                .map(existing -> {
+                    if (updates.getKey() != null) existing.setKey(updates.getKey());
+                    existing.setDisplayName(updates.getDisplayName());
+                    existing.setDescription(updates.getDescription());
+                    existing.setDimension(updates.getDimension());
+                    existing.setDetectionHint(updates.getDetectionHint());
+                    existing.setIndicators(updates.getIndicators());
+                    existing.setSuppressPii(updates.isSuppressPii());
+                    existing.setActive(updates.isActive());
+                    if (updates.getApplicableCategoryIds() != null) {
+                        existing.setApplicableCategoryIds(updates.getApplicableCategoryIds());
+                    }
+                    return ResponseEntity.ok(traitRepository.save(existing));
+                })
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/traits/{id}")
+    public ResponseEntity<Void> deactivateTrait(@PathVariable String id) {
+        return traitRepository.findById(id)
+                .map(def -> {
+                    def.setActive(false);
+                    traitRepository.save(def);
+                    return ResponseEntity.ok().<Void>build();
+                })
+                .orElse(ResponseEntity.notFound().build());
     }
 }
