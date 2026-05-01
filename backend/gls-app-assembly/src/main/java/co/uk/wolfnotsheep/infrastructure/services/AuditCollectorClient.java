@@ -86,6 +86,32 @@ public class AuditCollectorClient {
     }
 
     /**
+     * Verify a Tier 1 hash chain for a resource. Returns the upstream
+     * JSON ({@code status}, {@code eventsTraversed}, etc.) verbatim or
+     * {@link Optional#empty()} on a 404 (no Tier 1 events for this
+     * resource — which is a "valid" outcome, not an error).
+     */
+    public Optional<String> verifyChain(String resourceType, String resourceId) {
+        URI uri = URI.create(baseUrl + "/v1/chains/"
+                + URLEncoder.encode(resourceType, StandardCharsets.UTF_8) + "/"
+                + URLEncoder.encode(resourceId, StandardCharsets.UTF_8) + "/verify");
+        HttpRequest req = HttpRequest.newBuilder(uri)
+                .header("traceparent", randomTraceparent())
+                .header("Accept", "application/json")
+                .timeout(timeout)
+                .GET()
+                .build();
+        HttpResponse<String> resp = send(req, "verifyChain " + resourceType + ":" + resourceId);
+        if (resp.statusCode() == 404) return Optional.empty();
+        if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
+            throw new AuditCollectorException(
+                    "audit-collector HTTP " + resp.statusCode() + " on verifyChain: "
+                            + truncate(resp.body(), 512));
+        }
+        return Optional.of(resp.body());
+    }
+
+    /**
      * Single-event lookup by id. Returns empty when audit-collector
      * responds 404 — the caller treats it as a not-found rather than
      * a transport failure.
