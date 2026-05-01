@@ -4812,3 +4812,58 @@ Frontend adds an "Export CSV" button next to "Search" on the audit-events page. 
 **Phase 3 status:** §3.2 / §3.3 / §3.4 / §3.5 complete. §3.6 partial (Tier 2 search + chain verify + CSV export shipped; Tier 1 timeline + Tier 3 trace deep-link + redaction options deferred). §3.8 mostly complete. §3.1 / §3.9 untouched.
 
 **Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest single piece left, multi-PR), §3.9 hub pack management (medium). §3.6 Tier 1 timeline needs a new collector contract endpoint first.
+
+## 2026-05-01 — Phase 3 PR10 — Tier 1 timeline per resource
+
+**Done:** Phase 3 §3.6 follow-up — closes the "Tier 1 timeline per document (compliance view)" deferred item. Until this PR the Audit Explorer could verify a chain (`/v1/chains/{type}/{id}/verify` returns OK + traversed count) and look up single Tier 1 events by eventId, but it couldn't *list* Tier 1 events for a resource. Compliance officers had to walk the chain manually via repeated single-event lookups.
+
+The audit-collector's `Tier1Store` already exposed `findChainAsc(resourceType, resourceId)` — the same query that drives chain verification. This PR exposes that data via a new contract endpoint, a proxy on `gls-app-assembly`, and a "Timeline" button on the Audit Explorer that renders the events inline.
+
+**Contract change** (audit-collector v0.1.0 → v0.2.0):
+
+- `contracts/audit-collector/openapi.yaml` — adds `GET /v1/resources/{resourceType}/{resourceId}/events` (`operationId: listTier1ForResource`, `tags: [chains]`). Returns the new `Tier1ChainResponse` schema with `resourceType`, `resourceId`, and an `events` array reusing the existing `AuditEvent` shape. Soft cap of 10000 items via `maxItems` on the events array.
+- `contracts/audit-collector/VERSION` — bumped to `0.2.0` (additive feature → minor bump per semver).
+- `contracts/audit-collector/CHANGELOG.md` — `[0.2.0] — 2026-05-01` entry covering the new operation and schema.
+
+**Backend (audit-collector):**
+
+- `gls-audit-collector/.../web/ChainsController.java` — implements the new generated `listTier1ForResource` operation. Calls `Tier1Store.findChainAsc`, applies the 10000-item cap as a server-side guard, throws `AuditResourceNotFoundException` on empty chain (collector's exception handler maps it to 404 with the standard ProblemDetails envelope). Reuses the existing `EventsController.toApiEvent` row-to-DTO mapping (factored as a private static helper here).
+- `gls-audit-collector/.../web/ChainsControllerTest.java` — extended from 3 to 6 tests (+3 new): chronological-order, 404 on empty chain, 10000-item cap enforcement. Constructor signature update to include `Tier1Store` mock.
+
+**Backend proxy (gls-app-assembly):**
+
+- `gls-app-assembly/.../infrastructure/services/AuditCollectorClient.java` — new `listTier1ForResource(resourceType, resourceId)` method, mirrors the `verifyChain` shape (returns `Optional<String>` so 404 is a regular outcome).
+- `gls-app-assembly/.../infrastructure/controllers/admin/AuditExplorerController.java` — new `GET /api/admin/audit-events/v2/resources/{type}/{id}/events` proxy. 200 + upstream JSON on hit, 404 on empty chain, 502 on transport failure. JSON-shaped error bodies as elsewhere on this controller.
+- `gls-app-assembly/.../controllers/admin/AuditExplorerControllerTest.java` — extended from 11 to 14 tests (+3 new): pass-through, 404 on no-events, 502 on collector failure.
+
+**Frontend:**
+
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — adds a "Timeline" button next to "Verify" on the chain-verify section. Clicking it calls the new proxy endpoint with the same resource-type / resource-id pair, then renders the chronological event list inline using the existing `EventSummary` + `OutcomeIcon` components from elsewhere on the page. 404 toast on empty chain. The result panel has its own Close button and is independent of the verify result panel — operators can see both side-by-side.
+
+**Tests:** `gls-audit-collector` `ChainsControllerTest` 6 / 0 (was 3; +3 new). `gls-app-assembly` `AuditExplorerControllerTest` 14 / 0 (was 11; +3 new). Reactor green across both modules. `tsc --noEmit` clean. ESLint clean.
+
+**Decisions logged:** None new. The "soft cap at 10000 items, no pagination" call is worth noting: per-resource Tier 1 chains in real use are bounded by lifecycle events (typically tens, rarely hundreds). Cursor pagination would be over-engineering at this scale and add a moving-cursor consistency problem. If a future deployment shows real 10000+ chains, the contract has the affordance to add `nextPageToken` without breaking existing consumers (additive field).
+
+**Files changed:**
+
+- `contracts/audit-collector/openapi.yaml` — modified (new operation + schema).
+- `contracts/audit-collector/VERSION` — bumped 0.1.0 → 0.2.0.
+- `contracts/audit-collector/CHANGELOG.md` — new entry.
+- `backend/gls-audit-collector/src/main/java/.../web/ChainsController.java` — modified (new method + helpers).
+- `backend/gls-audit-collector/src/test/java/.../web/ChainsControllerTest.java` — modified (constructor + 3 new tests).
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/AuditCollectorClient.java` — modified (one new method).
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/AuditExplorerController.java` — modified (one new endpoint).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/AuditExplorerControllerTest.java` — modified (3 new tests).
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — modified (button + handler + render block).
+- Log = 10 files total.
+
+**Open issues / deferred:**
+
+- **No deep-link from a single Tier 1 event into the timeline.** Single-event lookup shows the event with its `resource.type` + `resource.id`; a "view this event in the chain" button would close the loop. Easy follow-up.
+- **No CSV export of the Tier 1 timeline.** PR9 added CSV export for Tier 2 search; the Tier 1 timeline still exports only as JSON (via the existing Tier 2 search if you know the eventIds). Could extend `AuditCsvExporter` with a Tier 1 path that calls the new endpoint.
+- **No Tier 3 trace deep-link.** Each Tier 1 event has a `traceparent` field. A button that opens Tempo/Jaeger at the trace-id is still pending — depends on Tempo integration.
+- **No redaction options.** Compliance use-cases sometimes need to redact PII columns before sharing the timeline outside the org.
+
+**Phase 3 status:** §3.6 effectively complete (Tier 2 search + chain verify + CSV export + Tier 1 timeline shipped; redaction options + Tier 3 trace deep-link still deferred but those are infra-blocked). §3.2 / §3.3 / §3.4 / §3.5 complete. §3.8 mostly complete. §3.1 / §3.9 untouched.
+
+**Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest single piece left; existing `PipelineEditor` component at 827 lines suggests the visual editor is partially shipped — needs an audit), §3.9 hub pack management (medium; browse / preview / import already shipped, version history per pack + rollback are the remaining gaps).

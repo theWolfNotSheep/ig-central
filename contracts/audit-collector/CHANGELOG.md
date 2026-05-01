@@ -6,6 +6,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 (Entries land alongside the PRs that touch the spec.)
 
+## [0.2.0] — 2026-05-01
+
+### Added
+
+- `GET /v1/resources/{resourceType}/{resourceId}/events` — list the
+  Tier 1 hash-chain events for a resource in chronological order. The
+  same chain that `verifyChain` walks; this endpoint returns the
+  events themselves so the admin Audit Explorer can render a
+  per-document compliance timeline. Phase 3 PR10.
+- New `Tier1ChainResponse` schema. `events` array reuses the existing
+  `AuditEvent` shape so consumers get the full envelope per row.
+
+### Notes
+
+- Additive: existing operations and schemas are unchanged. Minor bump
+  per semver.
+- No cursor pagination on the new endpoint — Tier 1 chains are bounded
+  by per-resource lifecycle events (typically tens, rarely hundreds).
+  A soft cap of 10000 items keeps the response bounded.
+
 ## [0.1.0] — 2026-04-30
 
 ### Added

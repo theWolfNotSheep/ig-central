@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
     ScrollText, Search, RefreshCw, Loader2, ChevronDown, ChevronRight,
     CheckCircle, XCircle, AlertTriangle, Filter, Link2, ShieldCheck, ShieldAlert,
-    Download,
+    Download, Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
@@ -91,6 +91,9 @@ export default function AuditExplorerPage() {
     const [verifyResult, setVerifyResult] = useState<ChainVerifyResponse | null>(null);
     const [verifyLoading, setVerifyLoading] = useState(false);
 
+    const [timelineEvents, setTimelineEvents] = useState<AuditEvent[] | null>(null);
+    const [timelineLoading, setTimelineLoading] = useState(false);
+
     const fetchPage = useCallback(async (token: string | null) => {
         setLoading(true);
         try {
@@ -165,6 +168,28 @@ export default function AuditExplorerPage() {
             setSingleEvent(null);
         } finally {
             setSingleLoading(false);
+        }
+    };
+
+    const onLoadTimeline = async () => {
+        const id = verifyResourceId.trim();
+        if (!id) return;
+        setTimelineLoading(true);
+        try {
+            const { data } = await api.get<{ events: AuditEvent[] }>(
+                `/admin/audit-events/v2/resources/${encodeURIComponent(verifyResourceType)}/${encodeURIComponent(id)}/events`);
+            setTimelineEvents(data.events ?? []);
+            toast.success(`${data.events?.length ?? 0} Tier 1 event(s) loaded`);
+        } catch (err: unknown) {
+            const e = err as { response?: { status?: number } };
+            if (e?.response?.status === 404) {
+                toast.error(`No Tier 1 events for ${verifyResourceType}:${id}`);
+            } else {
+                toast.error("Tier 1 timeline load failed");
+            }
+            setTimelineEvents(null);
+        } finally {
+            setTimelineLoading(false);
         }
     };
 
@@ -261,7 +286,43 @@ export default function AuditExplorerPage() {
                         {verifyLoading ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
                         Verify
                     </button>
+                    <button onClick={onLoadTimeline} disabled={timelineLoading || !verifyResourceId.trim()}
+                        title="List the chronological Tier 1 events for this resource"
+                        className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 disabled:opacity-50">
+                        {timelineLoading ? <Loader2 className="size-4 animate-spin" /> : <Clock className="size-4" />}
+                        Timeline
+                    </button>
                 </div>
+
+                {timelineEvents && (
+                    <div className="mt-3 border border-gray-200 rounded-md bg-white">
+                        <div className="px-3 py-2 border-b border-gray-100 flex items-center gap-2 bg-gray-50">
+                            <Clock className="size-3.5 text-gray-500" />
+                            <span className="text-xs font-medium text-gray-700">
+                                Tier 1 timeline · {verifyResourceType} / {verifyResourceId}
+                            </span>
+                            <span className="text-[10px] text-gray-400">
+                                ({timelineEvents.length} event{timelineEvents.length === 1 ? "" : "s"})
+                            </span>
+                            <button onClick={() => setTimelineEvents(null)}
+                                className="ml-auto text-[10px] text-gray-400 hover:text-gray-600">
+                                Close
+                            </button>
+                        </div>
+                        {timelineEvents.length === 0 ? (
+                            <div className="p-4 text-center text-xs text-gray-400">No Tier 1 events recorded.</div>
+                        ) : (
+                            <div className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
+                                {timelineEvents.map(event => (
+                                    <div key={event.eventId} className="px-3 py-2 flex items-center gap-3">
+                                        <OutcomeIcon outcome={event.outcome} />
+                                        <EventSummary event={event} compact />
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
                 {verifyResult && (
                     <div className={`mt-3 rounded-md p-3 border ${
                         verifyResult.status === "OK"
