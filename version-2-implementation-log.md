@@ -4867,3 +4867,49 @@ The audit-collector's `Tier1Store` already exposed `findChainAsc(resourceType, r
 **Phase 3 status:** §3.6 effectively complete (Tier 2 search + chain verify + CSV export + Tier 1 timeline shipped; redaction options + Tier 3 trace deep-link still deferred but those are infra-blocked). §3.2 / §3.3 / §3.4 / §3.5 complete. §3.8 mostly complete. §3.1 / §3.9 untouched.
 
 **Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest single piece left; existing `PipelineEditor` component at 827 lines suggests the visual editor is partially shipped — needs an audit), §3.9 hub pack management (medium; browse / preview / import already shipped, version history per pack + rollback are the remaining gaps).
+
+## 2026-05-01 — Phase 3 PR11 — Pipeline versioning + rollback
+
+**Done:** Phase 3 §3.1 closing piece. After auditing what's shipped — the Visual DAG editor (`PipelineEditor` 827 lines + supporting components), per-node config (`DynamicConfigForm`), per-category pipeline assignment (already on `PipelineDefinition.applicableCategoryIds`), drag-drop palette and edge-creation — the only un-shipped item from §3.1 was "Pipeline versioning timeline + rollback". This PR fills the gap.
+
+**Model changes** (`PipelineDefinition`):
+
+- New `int currentVersion` field, defaults to 1, bumped on every save.
+- New `List<PipelineSnapshot> versions` field. `PipelineSnapshot` is a record with `version`, `savedAt`, `savedBy`, `changelog`, plus a frozen copy of `steps + visualNodes + visualEdges` from the previous save.
+
+The snapshot intentionally does not capture name, description, category bindings, or mime-type filters — those evolve independently of the workflow and a rollback shouldn't surprise an operator by changing them. Same call as the block library's per-version content snapshot.
+
+**Backend** (`PipelineAdminController`):
+
+- `update()` now archives the previous workflow state into `versions[]` before applying the request body, then bumps `currentVersion`. Optional `?changelog=...` query param records why the change happened (defaults to "save"). Authentication captures `savedBy`. Legacy pipelines with `currentVersion=0` (Mongo's default for `int` on documents written before this PR) are treated as v1.
+- `GET /api/admin/pipelines/{id}/versions` — returns `{currentVersion, versions[]}`. The list is empty for fresh pipelines.
+- `POST /api/admin/pipelines/{id}/rollback/{version}` — finds the target snapshot, archives the current workflow as a new snapshot first (rollback is reversible), then restores the snapshot's `steps + visualNodes + visualEdges` onto the current pipeline. Bumps `currentVersion` and writes a `Rolled back to v{version}` changelog entry. 400 on unknown version.
+
+**Frontend** (`/ai/pipelines` visual editor):
+
+- New `PipelineVersionHistoryPanel` component (right-hand drawer with backdrop, dynamically imported with SSR off to match the existing `PipelineEditor`).
+- New "History" button in the visual-editor toolbar, next to the pipeline name. Shows the current version (`v{N}`) inline.
+- Each version row in the drawer: version number, savedBy, savedAt (relative), changelog, count of steps/nodes/edges, "Rollback" button. Confirm prompt before executing. After rollback, the visual editor reloads the pipeline so the canvas shows the restored workflow.
+
+**Tests:** `PipelineAdminControllerVersioningTest` 9 / 0 (new). Coverage: snapshot-on-update (default + custom changelog + zero-version-as-one), list-versions (with snapshots / empty / 404), rollback (workflow restored + current archived + 400 on unknown / 404 on missing pipeline). Full app-assembly reactor green. `tsc --noEmit` clean. ESLint clean for the new component (the 6 pre-existing warnings on pipelines/page.tsx — unused imports, unused `newPipeline` var — are unchanged).
+
+**Decisions logged:** None new. The "snapshot only the workflow, not the metadata" call deserves a short note: pipelines double as a routing primitive (categories + mime types) AND a workflow definition. Operators tweak both independently — a workflow rollback that also reverted category bindings would surprise them. This matches the block library's "version-content-only" semantic. If a future need arises to roll back metadata too, an opt-in flag on the rollback endpoint is the right shape.
+
+**Files changed:**
+
+- `backend/gls-governance/src/main/java/.../models/PipelineDefinition.java` — modified (2 new fields + getters/setters + `PipelineSnapshot` record).
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/PipelineAdminController.java` — modified (snapshot helper + 2 new endpoints + `Authentication` import).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/PipelineAdminControllerVersioningTest.java` — 1 new (9 tests).
+- `web/src/components/pipeline-editor/PipelineVersionHistoryPanel.tsx` — 1 new.
+- `web/src/app/(protected)/ai/pipelines/page.tsx` — modified (Pipeline type + state + History button + drawer wiring + post-rollback reload).
+- Log = 6 files total.
+
+**Open issues / deferred:**
+
+- **No version-cap.** `versions[]` grows unbounded on every save. Real pipelines see 5–50 saves over their lifetime so this is fine for now; if a future deployment shows pipelines with thousands of saves we'd want to cap (LRU drop with audit) or move snapshots to a separate collection.
+- **No diff view between versions.** The drawer shows changelog and counts but not "what changed". Computing a meaningful diff between two workflow snapshots is non-trivial (steps reordered? node renamed? edge added?) and probably warrants its own focused PR.
+- **No retry policy widget on nodes.** §3.1 lists "retry policy" as a node-level config item; the existing `DynamicConfigForm` doesn't have a `ui:widget="retryPolicy"` for it. Add when a real node type needs it.
+
+**Phase 3 status:** §3.1 complete (visual DAG editor + per-node config + per-category assignment + versioning/rollback all shipped; retry-policy widget + version-diff view deferred). §3.2 / §3.3 / §3.4 / §3.5 / §3.6 complete. §3.8 mostly complete (cross-service metrics deferred — needs HTTP probe layer). §3.9 untouched (browse / preview / selective-import shipped earlier; version-history-per-installed-pack + rollback still gaps).
+
+**Next:** Continue Phase 3 — §3.9 hub pack management is the last large item; alternatively close out §3.8 cross-service metrics or §3.6 redaction options.

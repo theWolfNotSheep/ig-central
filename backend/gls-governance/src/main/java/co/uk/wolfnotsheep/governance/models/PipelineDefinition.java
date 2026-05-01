@@ -27,6 +27,10 @@ public class PipelineDefinition {
     private List<PipelineStep> steps;
     private List<VisualNode> visualNodes;
     private List<VisualEdge> visualEdges;
+    /** Monotonically increasing version number, bumped on each save. Starts at 1. */
+    private int currentVersion = 1;
+    /** Past workflow snapshots, oldest first. Each entry captures the {@code steps + visualNodes + visualEdges} that were active before the save that bumped past that version. */
+    private List<PipelineSnapshot> versions;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -65,6 +69,12 @@ public class PipelineDefinition {
     public List<VisualEdge> getVisualEdges() { return visualEdges; }
     public void setVisualEdges(List<VisualEdge> visualEdges) { this.visualEdges = visualEdges; }
 
+    public int getCurrentVersion() { return currentVersion; }
+    public void setCurrentVersion(int currentVersion) { this.currentVersion = currentVersion; }
+
+    public List<PipelineSnapshot> getVersions() { return versions; }
+    public void setVersions(List<PipelineSnapshot> versions) { this.versions = versions; }
+
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
 
@@ -89,6 +99,25 @@ public class PipelineDefinition {
             String sourceHandle,
             String targetHandle,
             String label
+    ) {}
+
+    /**
+     * Past workflow state. Captures only the editable workflow
+     * ({@code steps}, {@code visualNodes}, {@code visualEdges}); the
+     * pipeline's name, description, and category assignments evolve
+     * independently and are not rolled back. {@code savedBy} is the
+     * authenticated principal at save time, {@code changelog} is an
+     * optional operator-supplied note (passed via the {@code ?changelog=}
+     * query param on the update endpoint, defaulting to "save").
+     */
+    public record PipelineSnapshot(
+            int version,
+            Instant savedAt,
+            String savedBy,
+            String changelog,
+            List<PipelineStep> steps,
+            List<VisualNode> visualNodes,
+            List<VisualEdge> visualEdges
     ) {}
 
     /**
