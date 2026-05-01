@@ -5042,3 +5042,53 @@ The existing `onLoadTimeline` was tightly coupled to `verifyResourceType` / `ver
 - Log = 2 files total.
 
 **Phase 3 status:** Unchanged. PR15 is pure polish.
+
+## 2026-05-01 — Phase 3 PR16 — Cross-service metrics probe (closes §3.8)
+
+**Done:** Closes the last big-ticket §3.8 deferred item from PR2. The Performance dashboard's local section read only `gls-app-assembly`'s own `MeterRegistry`. Metrics that live on peer services — router classify counters, LLM circuit-breaker state, fallback invocations, rate-limit gates — weren't visible without going to Prometheus / Grafana directly. This PR adds an HTTP probe layer so operators see them inline.
+
+The survey confirmed all 10 peer services (router, llm-worker, bert-inference, slm-worker, enforcement-worker, indexing-worker, audit-collector, extraction-archive, extraction-ocr, extraction-audio) already expose `/actuator/prometheus` via `management.endpoints.web.exposure.include: health,info,prometheus` plus the `micrometer-registry-prometheus` parent dep — no peer-side config change needed.
+
+**Backend:**
+
+- `gls-app-assembly/.../infrastructure/services/PrometheusTextParser.java` (new) — minimal parser for the Prometheus text exposition format. Handles `metric_name value`, `metric_name{labels} value`, and `metric_name value timestamp` (the three shapes Spring Boot Actuator's exporter actually emits). Allowlist-driven so the dashboard pulls a curated set rather than dragging every JVM/HTTP-client metric.
+- `gls-app-assembly/.../infrastructure/services/CrossServiceMetricsProbe.java` (new) — JDK `HttpClient` scrapes peer services. Configurable URLs via `${gls.metrics.probe.router-url}` and `${gls.metrics.probe.llm-worker-url}` (Docker hostnames default; overridable per environment). Per-call timeout 3s; failures surface as `ServiceProbeResult.unreachable(...)` rather than throwing — one peer being down doesn't take down the dashboard. Allowlists are per-service: router gets the 7 router metrics (classify result, tier-by-category, cost-units, cascade-steps, budget gate, rate-limit permits); llm-worker gets the 3 worker metrics (circuit-breaker state + consecutive failures + fallback invocations).
+- `gls-app-assembly/.../infrastructure/controllers/admin/MetricsDashboardController.java` — adds `CrossServiceMetricsProbe` constructor dep and a new `GET /api/admin/metrics/dashboard/cross-service` endpoint. Separate from the existing `/dashboard` endpoint so a slow probe doesn't block the local section.
+
+**Frontend:**
+
+- `web/src/components/monitoring/performance-dashboard.tsx` — extended:
+  - Parallel fetch of local + cross-service via `Promise.allSettled` so one failing doesn't break the other.
+  - New `CrossServicePanel` section under the existing four panels.
+  - Per-service `ServiceCard` shows reachable/unreachable status, URL, latency.
+  - `RouterMetrics` component: tier-totals stat grid (BERT / SLM / LLM / etc.), per-tier cost units, LLM-budget badge (red EXHAUSTED / green OK based on `router_llm_budget_exhausted_until_epoch_s` vs probe timestamp), rate-limit permits, expandable per-category tier breakdown.
+  - `LlmWorkerMetrics` component: per-backend circuit-breaker state badge (CLOSED green / HALF_OPEN amber / OPEN red), consecutive failures count, fallback invocations table.
+  - Uses `data.timestamp` from the probe response rather than `Date.now()` for time comparisons — keeps render pure (the `react-hooks/purity` lint is strict about impure functions during render).
+
+**Tests:** `PrometheusTextParserTest` 10 / 0 (new). Coverage: label-less metrics, labelled multi-sample, allowlist filtering, null/empty input, comment-line skip, label parser edge cases (ordered keys, empty, malformed trailing), invalid value lines, trailing timestamps. `MetricsDashboardControllerTest` 6 / 0 (constructor change accommodated). Full app-assembly reactor green. `tsc --noEmit` clean. ESLint clean (initial `Date.now()` impure-function lint resolved by passing the probe timestamp through).
+
+**Decisions logged:** None new. Two design notes worth flagging:
+
+- "Probe timestamp, not browser clock." The first lint pass tripped on `Date.now()` in render. Fixing it by threading `probeTimeMs` from the response is more semantically correct anyway — comparing budget exhaustion against the probe's "now" reflects what the operator sees, not the browser's clock skew.
+- "Allowlist per service, not global." Each service emits dozens of JVM/HTTP-client/HikariCP metrics. Filtering at the parser level (per-service `Set<String>` of metric names) rather than fetching everything and filtering later keeps the dashboard's response small and the parser's work bounded.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/PrometheusTextParser.java` — 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/CrossServiceMetricsProbe.java` — 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/MetricsDashboardController.java` — modified (constructor dep + new endpoint + response record).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/PrometheusTextParserTest.java` — 1 new.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/MetricsDashboardControllerTest.java` — modified (constructor mock).
+- `web/src/components/monitoring/performance-dashboard.tsx` — modified (types + parallel fetch + CrossServicePanel + RouterMetrics + LlmWorkerMetrics + helpers).
+- Log = 7 files total.
+
+**Open issues / deferred:**
+
+- **Only router + llm-worker probed.** The other 8 Spring Boot peers (bert-inference, slm-worker, enforcement-worker, indexing-worker, audit-collector, extraction-archive/ocr/audio) all expose Prometheus too but the dashboard doesn't read them yet — adding more is a one-line allowlist + URL extension. Deferred until operators ask.
+- **No background scrape — manual refresh only.** Each click reloads. Could add a 30-second polling toggle. The Performance section is rarely the focused tab, so manual is the safer default.
+- **No historical trend.** Cross-service shows current values; trends still live in Prometheus / Grafana.
+- **No alert rules.** The badges show OPEN circuit-breakers and EXHAUSTED budgets but don't paginate or notify. Out of scope; alerting belongs in Alertmanager.
+
+**Phase 3 status:** §3.8 now complete. All major plan items shipped or with follow-ups explicitly deferred. Phase 3 close-out genuinely. Remaining deferred items are smaller polish (CSV redaction column-allowlist, async export jobs, Tier 3 trace integration when Tempo lands, retry-policy widget when a node-type needs it).
+
+**Next:** Phase 3 is done in any meaningful sense. The autonomous loop has banked 16 PRs today; this is a natural pause point for review. If the loop keeps firing, options are the smaller polish items or beginning Phase 4 planning.

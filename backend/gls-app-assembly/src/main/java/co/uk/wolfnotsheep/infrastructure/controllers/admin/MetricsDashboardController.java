@@ -1,5 +1,7 @@
 package co.uk.wolfnotsheep.infrastructure.controllers.admin;
 
+import co.uk.wolfnotsheep.infrastructure.services.CrossServiceMetricsProbe;
+import co.uk.wolfnotsheep.infrastructure.services.CrossServiceMetricsProbe.ServiceProbeResult;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Meter;
@@ -50,9 +52,12 @@ public class MetricsDashboardController {
     private static final Logger log = LoggerFactory.getLogger(MetricsDashboardController.class);
 
     private final MeterRegistry meterRegistry;
+    private final CrossServiceMetricsProbe crossServiceProbe;
 
-    public MetricsDashboardController(MeterRegistry meterRegistry) {
+    public MetricsDashboardController(MeterRegistry meterRegistry,
+                                      CrossServiceMetricsProbe crossServiceProbe) {
         this.meterRegistry = meterRegistry;
+        this.crossServiceProbe = crossServiceProbe;
     }
 
     @GetMapping("/dashboard")
@@ -70,6 +75,20 @@ public class MetricsDashboardController {
                     new SummaryStats(0, 0, 0, 0, 0, 0),
                     List.of(), List.of(), List.of()));
         }
+    }
+
+    /**
+     * Cross-service probe results — scrapes peer services'
+     * {@code /actuator/prometheus} and surfaces a curated set of metrics
+     * (router decisions, LLM circuit breaker, fallback invocations,
+     * rate-limit gates). Best-effort: failures per-service surface as
+     * {@code reachable=false} entries rather than 5xx-ing the whole
+     * response.
+     */
+    @GetMapping("/dashboard/cross-service")
+    public ResponseEntity<CrossServiceResponse> crossService() {
+        List<ServiceProbeResult> probes = crossServiceProbe.probeAll();
+        return ResponseEntity.ok(new CrossServiceResponse(Instant.now(), probes));
     }
 
     private SummaryStats stalePipelineSection() {
@@ -195,6 +214,10 @@ public class MetricsDashboardController {
             String queue,
             // mode (real / dry_run) → outcome (replayed / skipped) → count
             Map<String, Map<String, Double>> byMode) {}
+
+    public record CrossServiceResponse(
+            Instant timestamp,
+            List<ServiceProbeResult> services) {}
 
     /** Visible for testing — exposes the canonical metric names the dashboard relies on. */
     static Set<String> trackedMetricNames() {

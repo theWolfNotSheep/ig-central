@@ -15,7 +15,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MetricsDashboardControllerTest {
 
     private final MeterRegistry registry = new SimpleMeterRegistry();
-    private final MetricsDashboardController controller = new MetricsDashboardController(registry);
+    private final MetricsDashboardController controller = new MetricsDashboardController(
+            registry,
+            new co.uk.wolfnotsheep.infrastructure.services.CrossServiceMetricsProbe(
+                    "http://router-test:0", "http://llm-test:0"));
 
     @Test
     void emptyRegistry_returnsZeroedSummaryAndEmptyLists() {
