@@ -7,6 +7,10 @@ import co.uk.wolfnotsheep.platformaudit.relay.OutboxRelay;
 import co.uk.wolfnotsheep.platformaudit.relay.OutboxRelayMetrics;
 import co.uk.wolfnotsheep.platformaudit.relay.OutboxRelayProperties;
 import co.uk.wolfnotsheep.platformaudit.relay.OutboxStartupReplay;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -16,6 +20,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 
@@ -45,6 +50,26 @@ public class PlatformAuditAutoConfiguration {
     @ConditionalOnMissingBean(AuditEmitter.class)
     public AuditEmitter outboxAuditEmitter(AuditOutboxRepository outboxRepository) {
         return new OutboxAuditEmitter(outboxRepository);
+    }
+
+    /**
+     * Spring Boot 4 ships Jackson 3 ({@code tools.jackson.core}) as its
+     * primary ObjectMapper, but most of this codebase still uses Jackson 2
+     * ({@code com.fasterxml.jackson}) — controllers, clients, and platform
+     * libraries all expect the Jackson 2 type. Provide one centrally so
+     * every consumer of platform-audit gets a default Jackson 2 ObjectMapper
+     * for autowiring. Marked {@code @Primary} so it wins over any other
+     * Jackson 2 ObjectMapper that consumer modules also register (e.g. the
+     * named {@code platformConfigObjectMapper}).
+     */
+    @Bean
+    @Primary
+    @ConditionalOnMissingBean(name = "objectMapper")
+    public ObjectMapper objectMapper() {
+        return new ObjectMapper()
+                .registerModule(new JavaTimeModule())
+                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                .setSerializationInclusion(JsonInclude.Include.NON_NULL);
     }
 
     @Configuration(proxyBeanMethods = false)

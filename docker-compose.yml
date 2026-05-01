@@ -51,8 +51,8 @@ services:
     volumes:
       - ./data/minio:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9006:9000"
+      - "9007:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 15s
@@ -74,7 +74,7 @@ services:
     volumes:
       - ./data/elasticsearch:/usr/share/elasticsearch/data
     ports:
-      - "9200:9200"
+      - "9203:9200"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9200/_cluster/health"]
       interval: 15s
@@ -98,7 +98,7 @@ services:
     volumes:
       - ./data/rabbitmq:/var/lib/rabbitmq
     ports:
-      - "15672:15672"
+      - "15675:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 15s
@@ -228,7 +228,7 @@ services:
       - igc
 
   llm-worker:
-    container_name: ${COMPOSE_PROJECT_NAME:-igc}-llm-worker
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-llm-orchestration
     restart: unless-stopped
     build:
       context: .
@@ -301,7 +301,7 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME:-igc}-nginx
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "8090:80"
     depends_on:
       web:
         condition: service_healthy
@@ -331,7 +331,7 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - "9090:9090"
+      - "9091:9090"
     networks:
       - igc
 
@@ -340,7 +340,7 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME:-igc}-grafana
     restart: unless-stopped
     ports:
-      - "3003:3000"
+      - "3004:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     volumes:
@@ -498,6 +498,10 @@ services:
       dockerfile: backend/igc-bert-inference/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
+      # platform-audit auto-configures Mongo whenever MongoTemplate is on
+      # the classpath; bert-inference doesn't use it but Spring still
+      # tries to connect on boot. Point at the compose-network mongo.
+      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       # Default: stub backend that returns MODEL_NOT_LOADED 503.
       # Flip IGC_BERT_ENGINE to `djl` once the trainer publishes its
       # first ONNX artefact + the engine wires in.
@@ -507,6 +511,7 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       IGC_BERT_ARTIFACTS_BUCKET: ${IGC_BERT_ARTIFACTS_BUCKET:-igc-bert-artifacts}
     depends_on:
+      mongo: { condition: service_healthy }
       minio: { condition: service_healthy }
     logging: *default-logging
     networks: [igc]

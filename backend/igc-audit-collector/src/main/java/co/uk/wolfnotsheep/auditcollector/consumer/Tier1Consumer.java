@@ -1,5 +1,6 @@
 package co.uk.wolfnotsheep.auditcollector.consumer;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import co.uk.wolfnotsheep.auditcollector.chain.ChainBrokenException;
 import co.uk.wolfnotsheep.auditcollector.chain.EventHasher;
 import co.uk.wolfnotsheep.auditcollector.store.AppendOnlyViolationException;
@@ -70,6 +71,7 @@ public class Tier1Consumer {
         this(tier1Store, /* rabbit */ null, /* converter */ null, /* metrics */ null);
     }
 
+    @Autowired
     public Tier1Consumer(Tier1Store tier1Store,
                          ObjectProvider<RabbitTemplate> rabbitTemplateProvider,
                          ObjectProvider<MessageConverter> messageConverterProvider,

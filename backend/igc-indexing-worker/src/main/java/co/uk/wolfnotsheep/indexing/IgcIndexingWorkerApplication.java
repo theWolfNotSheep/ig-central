@@ -13,7 +13,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableMongoRepositories(basePackages = {
         "co.uk.wolfnotsheep.indexing.jobs",
         "co.uk.wolfnotsheep.indexing.quarantine",
-        "co.uk.wolfnotsheep.document.repositories"
+        "co.uk.wolfnotsheep.document.repositories",
+        "co.uk.wolfnotsheep.governance.repositories"
 })
 @EnableAsync
 @EnableScheduling

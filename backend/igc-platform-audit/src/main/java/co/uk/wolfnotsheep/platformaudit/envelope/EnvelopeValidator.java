@@ -5,14 +5,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.networknt.schema.JsonSchema;
-import com.networknt.schema.JsonSchemaFactory;
-import com.networknt.schema.SpecVersion;
-import com.networknt.schema.ValidationMessage;
+import com.networknt.schema.Error;
+import com.networknt.schema.Schema;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.dialect.Dialects;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.Set;
+import java.util.List;
 import java.util.stream.Collectors;
 
 /**
@@ -34,7 +34,7 @@ public final class EnvelopeValidator {
 
     private static final String SCHEMA_RESOURCE = "/schemas/event-envelope.schema.json";
 
-    private final JsonSchema schema;
+    private final Schema schema;
     private final ObjectMapper mapper;
 
     /**
@@ -45,7 +45,7 @@ public final class EnvelopeValidator {
      *                               build, not a caller error.
      */
     public static EnvelopeValidator fromBundledSchema() {
-        JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
+        SchemaRegistry registry = SchemaRegistry.withDialect(Dialects.getDraft202012());
         try (InputStream in = EnvelopeValidator.class.getResourceAsStream(SCHEMA_RESOURCE)) {
             if (in == null) {
                 throw new IllegalStateException(
@@ -53,7 +53,7 @@ public final class EnvelopeValidator {
                                 + SCHEMA_RESOURCE
                                 + " — check the igc-platform-audit Maven build.");
             }
-            JsonSchema compiled = factory.getSchema(in);
+            Schema compiled = registry.getSchema(in);
             ObjectMapper mapper = new ObjectMapper()
                     .registerModule(new JavaTimeModule())
                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
@@ -78,7 +78,7 @@ public final class EnvelopeValidator {
         abstract String previousEventHash();
     }
 
-    EnvelopeValidator(JsonSchema schema, ObjectMapper mapper) {
+    EnvelopeValidator(Schema schema, ObjectMapper mapper) {
         this.schema = schema;
         this.mapper = mapper;
     }
@@ -93,10 +93,10 @@ public final class EnvelopeValidator {
      */
     public void validate(AuditEvent envelope) {
         JsonNode tree = mapper.valueToTree(envelope);
-        Set<ValidationMessage> messages = schema.validate(tree);
-        if (!messages.isEmpty()) {
-            String summary = messages.stream()
-                    .map(ValidationMessage::getMessage)
+        List<Error> errors = schema.validate(tree);
+        if (!errors.isEmpty()) {
+            String summary = errors.stream()
+                    .map(Error::getMessage)
                     .collect(Collectors.joining("; "));
             throw new IllegalArgumentException(
                     "audit envelope failed schema validation: " + summary);
