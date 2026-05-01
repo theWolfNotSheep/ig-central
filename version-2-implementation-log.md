@@ -4585,3 +4585,45 @@ The collector itself runs as an internal Docker service (`http://gls-audit-colle
 **Phase 3 status:** §3.6 partial (Tier 2 search shipped; Tier 1 timeline + chain verify + trace deep-link + export still open). All remaining picks: §3.1 (visual DAG editor), §3.3 (taxonomy tree editor), §3.5 finishing (bulk reclassify with cost estimate), §3.4 (component management — partial coverage exists in /governance).
 
 **Next:** Continue Phase 3 — taxonomy tree editor (§3.3) or bulk reclassify (§3.5 finishing) are smallest. Pipeline DAG editor (§3.1) is biggest piece but high value.
+
+## 2026-05-01 — Phase 3 PR4 — Bulk reclassify with cost estimate
+
+**Done:** Phase 3 plan item §3.5 finishing — bulk reclassification trigger with cost estimate from recent CLASSIFY usage. The legacy `/admin/monitoring/pipeline/retry-failed` endpoint already handles failed documents; this fills the gap for the *successfully* classified ones an operator wants to re-run after a prompt or model change.
+
+Backend exposes `POST /api/admin/monitoring/pipeline/bulk-reclassify` accepting either a status filter (multi-select) or an explicit document-ID list, with `dryRun` defaulting to false and a `hardCap` (1–5000, default 1000). Response carries the matched count, queue/skip totals, error list, and a `BulkReclassifyCostEstimator.Estimate` record (mean cost + token counts from the last 100 CLASSIFY usage logs × matched count, USD).
+
+The estimator is a separate service so it's unit-testable without booting Spring. The estimate degrades gracefully — if no recent CLASSIFY logs exist (cold start or local-only Ollama with $0 cost), it returns `Estimate.empty()` and the UI shows "estimate unavailable".
+
+Frontend ships a collapsible `BulkReclassifyPanel` on the Ops tab. Default flow: pick statuses → Preview (dry-run) → see matched count + cost → Execute (browser confirm) → enqueue. Explicit document IDs (textarea, comma/newline-separated) override the status filter. Hard cap is editable.
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/services/BulkReclassifyCostEstimator.java` (new) — pulls last N CLASSIFY logs from `AiUsageLogRepository`, averages `estimatedCost`, scales by document count. Skips zero-cost samples from the cost average (Ollama logs report $0) but still counts their tokens. Returns immutable `Estimate` record.
+- `gls-app-assembly/.../infrastructure/controllers/admin/MonitoringController.java` — adds `bulkReclassify(BulkReclassifyRequest)` + `resolveBulkReclassifyTargets(...)` helper. Constructor extended with `BulkReclassifyCostEstimator` dep. Re-uses the existing `requeueDocument` helper for the per-doc requeue path so behaviour is identical to the per-document reclassify endpoint.
+- `gls-app-assembly/.../infrastructure/services/BulkReclassifyCostEstimatorTest.java` (new) — 5 tests: zero-document-count short-circuit, no-history empty estimate, average-and-scale happy path, zero-cost samples skipped from cost-mean (but token average still counts them), custom sample size forwarded to repo.
+- `web/src/components/monitoring/bulk-reclassify-panel.tsx` (new) — React component with status checkboxes, override textarea, hard-cap input, Preview / Execute buttons, result panel rendering the cost estimate as a four-stat grid plus the matched / queued / skipped counts. `confirm()` step shows the estimated dollar cost before real execution.
+- `web/src/app/(protected)/monitoring/page.tsx` — imports + renders `<BulkReclassifyPanel />` on the Ops tab between Performance and Dead-letter queues.
+
+**Tests:** `gls-app-assembly` `BulkReclassifyCostEstimatorTest` 5 / 0 (new). Full app-assembly suite green (no breakage from the new constructor dep). `tsc --noEmit` clean. ESLint clean for new + edited files (existing monitoring/page.tsx warnings — unused imports, `any` types — pre-existing, not introduced).
+
+**Decisions logged:** None new. The "skip zero-cost samples from cost-mean" decision is worth a callout: when Ollama runs locally it logs $0 cost, which would drag a mean toward zero and make Anthropic-mostly stacks look free. Skipping zeros means the estimate represents *paid* runs only. Documented in the estimator class header.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/BulkReclassifyCostEstimator.java` — 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/MonitoringController.java` — modified (import + constructor dep + 2 new methods + 1 DTO inner class).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/BulkReclassifyCostEstimatorTest.java` — 1 new.
+- `web/src/components/monitoring/bulk-reclassify-panel.tsx` — 1 new.
+- `web/src/app/(protected)/monitoring/page.tsx` — modified (import + 1 new section).
+- Log = 6 files total.
+
+**Open issues / deferred:**
+
+- **No category-based filter.** UI only filters by status or explicit IDs. Adding a "by category" dropdown would need a new `findByCategoryId` query path on `DocumentRepository` (or `MongoTemplate` aggregation in the controller). Tracked.
+- **No per-pipeline override.** Single-document reclassify accepts a `pipelineId` to force a specific pipeline; bulk path uses each document's auto-resolved pipeline. Easy to add if needed.
+- **No hard pre-flight budget gate.** The estimator gives an estimate; the actual spend is unbounded (subject to the per-replica `gls.llm.worker.budget.daily-token-cap` if configured, but that's a soft daily cap, not a per-request cap). For a 5000-doc bulk run an operator could add a confirmation that says "this exceeds today's remaining budget of $X" — needs a budget-remaining API endpoint that doesn't exist yet.
+- **No async / job tracking.** The endpoint loops synchronously and returns when done. For 5000-document runs that's ~minutes of HTTP request — fine for admin tooling but not ideal. Could move to a background job + status poll if it becomes a problem.
+
+**Phase 3 status:** §3.5 effectively complete (DLQ + locks + bulk reclassify all shipped; document monitoring exists; per-doc retry exists). §3.6 partial (Tier 2 search shipped; Tier 1 timeline + chain verify + export still open). §3.8 mostly shipped (cross-service metrics deferred). §3.1 visual DAG editor and §3.3 taxonomy tree editor are the remaining big-ticket Phase 3 items.
+
+**Next:** Continue Phase 3 — pick from §3.1 (visual DAG editor for pipelines, biggest piece), §3.3 (taxonomy tree editor), §3.6 follow-ups (Tier 1 timeline / chain verify / CSV export). DAG editor unblocks per-category pipeline assignment.
