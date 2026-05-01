@@ -4510,3 +4510,40 @@ Reactor green via `./mvnw -DskipTests package`.
 **Phase 3 status:** Plan item §3.5 partial — DLQ inspection + replay UI shipped; document monitoring + retry buttons + bulk reclassification trigger remain. §3.8 (performance dashboards) untouched but the metrics it'd consume are all live from Phase 2.
 
 **Next:** Phase 3 PR2 — pick from §3.1 (visual DAG editor for pipelines), §3.2 (block library), §3.3 (taxonomy tree editor), §3.6 (audit explorer), §3.8 (performance dashboards). Pipeline DAG editor is the biggest single piece; performance dashboards consume the metrics already shipped.
+
+## 2026-05-01 — Phase 3 PR2 — Performance dashboards
+
+**Done:** Phase 3 plan item §3.8. Adds a Performance section to the Ops tab on `/monitoring`, backed by a new admin endpoint that aggregates the Phase 2 Micrometer metrics living on `gls-app-assembly` into a UI-friendly JSON shape. Frontend renders four panels: stale-pipeline detection age (count + p50/p95/p99 + mean + max), per-source connector locks (acquired vs skipped + mean action duration, bar chart + table), per-name scheduler locks (horizontal bar chart of acquired vs skipped), and per-queue DLQ replay activity (real vs dry-run, replayed vs skipped).
+
+Why a custom backend endpoint rather than `/actuator/metrics`: management endpoints in this app are locked down to `health,info` (`management.endpoints.web.exposure.include=health,info`), so direct actuator access wasn't an option. The custom endpoint also lets us shape the response to the four UI panels — actuator's per-meter scalar JSON would still need a frontend aggregation pass.
+
+Cross-service metrics (`gls_router_classify_*`, `llm.circuit_breaker.*`, `llm.fallback.invocations`, etc.) live on the router and worker registries, not on `gls-app-assembly`'s, so they aren't surfaced here yet. Adding them needs an HTTP probe layer that pulls Prometheus-format scrapes from peer services — deferred.
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/controllers/admin/MetricsDashboardController.java` (new) — `GET /api/admin/metrics/dashboard`. Reads the local `MeterRegistry` for the six tracked metric names: `pipeline.stale.detected.age` (DistributionSummary → count/mean/max + p50/p95/p99 from snapshot), `connector.lock.acquired` / `skipped` / `action.duration` (grouped by `source` tag), `scheduler.lock` (grouped by `name` + `outcome`), `dlq.replay` (grouped by `queue` → `mode` → `outcome`). Returns `DashboardResponse(timestamp, stalePipelineDetectionAge, connectorLocks, schedulerLocks, dlqReplay)` records. Build failures degrade to an empty response with a warn-log so a transient registry hiccup never breaks the page.
+- `gls-app-assembly/.../controllers/admin/MetricsDashboardControllerTest.java` (new) — 6 tests covering empty registry, distribution-summary stats extraction (count + percentiles), connector-locks grouping by source (counters + timer), scheduler-locks grouping by name + outcome, DLQ-replay nested grouping by queue → mode → outcome, and the canonical metric-name set. Uses `SimpleMeterRegistry` directly — no Spring context.
+- `web/src/components/monitoring/performance-dashboard.tsx` (new) — React component using `recharts` (already in deps). Four panels with skeleton-on-loading + "no data yet" empty states. Bar charts for connector-locks, scheduler-locks (horizontal — names are long), and per-queue DLQ replay (one chart per queue, mode on x-axis). Stale-pipeline panel is a six-stat card grid (count / mean / max / p50 / p95 / p99). Refresh button shows last-refresh timestamp.
+- `web/src/app/(protected)/monitoring/page.tsx` — imports + renders `<PerformanceDashboard />` as the first section under the existing Ops tab, above DLQ replay and Leader election.
+
+**Tests:** `gls-app-assembly` `MetricsDashboardControllerTest` 6 / 0 (new). Reactor green. `tsc --noEmit` clean. ESLint clean for the new + edited files.
+
+**Decisions logged:** None new. The "custom endpoint over actuator" call was driven by the existing security posture (actuator locked to `health,info`); revisiting that is a separate decision.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../controllers/admin/MetricsDashboardController.java` — 1 new.
+- `backend/gls-app-assembly/src/test/java/.../controllers/admin/MetricsDashboardControllerTest.java` — 1 new.
+- `web/src/components/monitoring/performance-dashboard.tsx` — 1 new.
+- `web/src/app/(protected)/monitoring/page.tsx` — modified (import + 1 new section in Ops tab body).
+- Log = 5 files total.
+
+**Open issues / deferred:**
+
+- **Cross-service metrics not surfaced.** Router classify counters, circuit-breaker state, fallback invocations, per-tier worker latency all live on `gls-classifier-router` / `gls-llm-worker` registries. Surfacing them needs an HTTP probe layer (per-service `GET /metrics` proxy) — separate PR.
+- **No time-series — only current-state.** The dashboard reflects cumulative counter values at refresh time. Historical graphs come from Prometheus + Grafana scraping the same metrics; this dashboard is "what's happening right now" at-a-glance.
+- **No auto-refresh.** Manual refresh only. Could add a 30-second poll if operators want; not added by default to keep the page quiet.
+
+**Phase 3 status:** §3.5 (partial — DLQ + locks shipped, document monitoring + retry buttons + bulk reclassify still open) and §3.8 (now shipped, cross-service metrics deferred). §3.1 (visual DAG editor), §3.2 (block library), §3.3 (taxonomy tree editor), §3.6 (audit explorer) untouched.
+
+**Next:** Continue Phase 3 — pick from §3.1 (visual DAG editor for pipelines), §3.2 (block library UI), §3.3 (taxonomy tree editor), §3.6 (audit explorer). Pipeline DAG editor is the biggest single piece; the rest are smaller CRUD-shaped UIs.

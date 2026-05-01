@@ -13,6 +13,7 @@ import { usePipelineSSE } from "@/hooks/use-pipeline-sse";
 import PipelineRunsTab from "@/components/monitoring/pipeline-runs-tab";
 import DlqReplayTab from "@/components/monitoring/dlq-replay-tab";
 import SchedulerLocksPanel from "@/components/monitoring/scheduler-locks-panel";
+import PerformanceDashboard from "@/components/monitoring/performance-dashboard";
 
 type ServiceStatus = {
     name: string;
@@ -239,6 +240,10 @@ export default function MonitoringPage() {
             {/* ── Ops Tab ───────────────────────────────── */}
             {monTab === "ops" && (
                 <div className="space-y-6">
+                    <section>
+                        <SectionHeader icon={Activity} title="Performance" />
+                        <PerformanceDashboard />
+                    </section>
                     <section>
                         <SectionHeader icon={Inbox} title="Dead-letter queues" />
                         <DlqReplayTab />
