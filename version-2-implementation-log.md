@@ -4913,3 +4913,47 @@ The snapshot intentionally does not capture name, description, category bindings
 **Phase 3 status:** §3.1 complete (visual DAG editor + per-node config + per-category assignment + versioning/rollback all shipped; retry-policy widget + version-diff view deferred). §3.2 / §3.3 / §3.4 / §3.5 / §3.6 complete. §3.8 mostly complete (cross-service metrics deferred — needs HTTP probe layer). §3.9 untouched (browse / preview / selective-import shipped earlier; version-history-per-installed-pack + rollback still gaps).
 
 **Next:** Continue Phase 3 — §3.9 hub pack management is the last large item; alternatively close out §3.8 cross-service metrics or §3.6 redaction options.
+
+## 2026-05-01 — Phase 3 PR12 — Pack import history + re-import (rollback)
+
+**Done:** Phase 3 §3.9 closing piece — chronological import log per pack + re-import for rollback. The `InstalledPack` model already tracked the *currently installed* version (one row per pack), but operators couldn't see the full history of when this pack landed locally, who triggered the import, what mode (FULL / SELECTIVE), and what components changed. They also had no way to roll back beyond clicking through the hub catalogue and importing an older version manually — without remembering which version was last good.
+
+This PR adds a `PackImportHistory` collection (chronological log, append-only by convention), wires `PackImportService` to record an entry on every non-PREVIEW import, and exposes the data via a new admin endpoint + a "Your import history" panel on the pack detail page. Each row has a "Re-import" button that selects the target version + components, then runs the existing diff-preview flow before committing — operators see what would change before clicking Import.
+
+**Backend:**
+
+- `gls-governance/.../models/PackImportHistory.java` (new) — Mongo document `pack_import_history`. Indexed by `packSlug` (asc) and `importedAt` (desc) so the history-list query is a covered scan. Fields: id, packSlug, version, importedAt, importedBy, mode (FULL / OVERWRITE / SELECTIVE), componentTypes, selectedItemKeys (non-null for SELECTIVE), totalCreated/Updated/Skipped/Failed.
+- `gls-governance/.../repositories/PackImportHistoryRepository.java` (new) — `findByPackSlugOrderByImportedAtDesc`, `countByPackSlug`.
+- `gls-app-assembly/.../infrastructure/services/PackImportService.java` — new constructor dep on `PackImportHistoryRepository`. New `importPack(...)` overload accepting `importedBy + selectedItemKeys`; old signature delegates with nulls. New `importSelectedItems(...)` overload with `importedBy`. Private `recordImportHistory(...)` writes the history row at the end of every non-PREVIEW import; non-fatal on repo failure (the import has already landed).
+- `gls-app-assembly/.../infrastructure/controllers/admin/GovernanceImportController.java` — constructor dep on `PackImportHistoryRepository`. `importPack` and `selectiveImport` methods accept Spring's auto-injected `Authentication` and forward `auth.getName()` to the service. New `GET /api/admin/governance/import/history/{packSlug}` returns the list newest-first.
+
+**Frontend:**
+
+- `web/src/app/(protected)/governance/hub/[slug]/page.tsx` — new `ImportHistoryEntry` type, new `loadImportHistory` callback fired on page mount and after every successful import, new "Your import history" panel rendered under the existing "Versions" panel in the right column. Each row shows version, mode badge (color-coded by OVERWRITE/SELECTIVE/MERGE), importedBy, relative time, created/updated counts, component-type chips, and a Re-import button. New `handleReimportVersion(entry)` selects the target version + components and routes through the existing diff flow so the diff preview runs before any changes land. New `formatHistoryDate` helper mirrors the `formatRelative` shape used elsewhere.
+
+**Tests:** `PackImportHistoryRecordingTest` 4 / 0 (new). Reflection-driven (the service has 14 collaborators; we're testing one branch — calling the private method directly is the right size). Coverage: all-fields-captured, selective-mode-detected-from-selectedItemKeys, importedBy-defaults-to-ADMIN-when-null, repo-failures-non-fatal. Full app-assembly reactor green (no breakage from the service constructor change). `tsc --noEmit` clean. ESLint clean for the audit-events page (4 pre-existing `any` warnings on hub/[slug]/page.tsx unchanged).
+
+**Decisions logged:** None new. Two design notes worth flagging:
+
+- "Rollback as re-import." Audit-collector and pipeline rollbacks are first-class — the API directly applies a prior snapshot. For pack imports we deliberately picked "re-import the prior version" instead. Rationale: a pack import touches dozens of entities (categories, retention, schedules, blocks…) and a true atomic-rollback would need a full undo log per import. The diff-preview-before-import flow gives the operator the same safety net (review changes before committing) without the storage and consistency complexity.
+- "SELECTIVE mode synthesised in history, not in the enum." `ImportMode` only has MERGE / OVERWRITE / PREVIEW. Selective imports route through `OVERWRITE` internally; the history records "SELECTIVE" by inspecting whether `selectedItemKeys` is non-empty. This keeps the existing import-mode contract stable while still letting operators see "this was a per-item import, not a full overwrite" in the history UI.
+
+**Files changed:**
+
+- `backend/gls-governance/src/main/java/.../models/PackImportHistory.java` — 1 new.
+- `backend/gls-governance/src/main/java/.../repositories/PackImportHistoryRepository.java` — 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/PackImportService.java` — modified (constructor dep + 2 method overloads + recordImportHistory helper).
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/GovernanceImportController.java` — modified (constructor dep + Authentication threading + new history endpoint).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/PackImportHistoryRecordingTest.java` — 1 new.
+- `web/src/app/(protected)/governance/hub/[slug]/page.tsx` — modified (type + loadImportHistory + handleReimportVersion + UI panel + formatHistoryDate).
+- Log = 7 files total.
+
+**Open issues / deferred:**
+
+- **No version-cap on the history collection.** Grows unbounded but at typical pack-update cadence (a few imports per year) this is fine for years.
+- **Re-import doesn't auto-import** — it stages the diff preview. Operators have to click Import after reviewing. This is the safer default; if a future ops workflow wants one-click rollback the existing flow can be extended with an `?autoApply=true` flag.
+- **No "compare two history entries" diff** — we know what each import created/updated, but not what state the pack was in *between* imports. A "compare entry A vs entry B" UI would need cross-snapshot computation; deferred.
+
+**Phase 3 status:** §3.1 / §3.2 / §3.3 / §3.4 / §3.5 / §3.6 complete. §3.8 mostly complete (cross-service metrics deferred — needs HTTP probe layer). §3.9 effectively complete (browse + diff + selective import + history + re-import shipped; auto-rollback deferred).
+
+**Next:** Phase 3 is now feature-complete modulo the small deferred items (cross-service metrics / redaction / category-trait-scope picker / version-diff views). The remaining work is polish + the larger architectural deferrals (Tier 3 trace, async export jobs, pack auto-rollback). Phase 3 close-out / migration to Phase 4 planning is the next call.

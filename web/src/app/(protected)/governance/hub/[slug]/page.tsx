@@ -31,6 +31,21 @@ type ImportResult = {
     errors: string[];
 };
 
+type ImportHistoryEntry = {
+    id: string;
+    packSlug: string;
+    version: number;
+    importedAt: string;
+    importedBy: string;
+    mode: string;
+    componentTypes: string[];
+    selectedItemKeys?: string[];
+    totalCreated: number;
+    totalUpdated: number;
+    totalSkipped: number;
+    totalFailed: number;
+};
+
 // Diff types
 type FieldDiff = { field: string; currentValue: any; hubValue: any };
 type ItemDiff = {
@@ -89,6 +104,17 @@ export default function PackDetailPage() {
     // Result state
     const [importResult, setImportResult] = useState<ImportResult | null>(null);
     const [showResult, setShowResult] = useState(false);
+    const [importHistory, setImportHistory] = useState<ImportHistoryEntry[]>([]);
+
+    const loadImportHistory = useCallback(async () => {
+        try {
+            const { data } = await api.get<ImportHistoryEntry[]>(`/admin/governance/import/history/${slug}`);
+            setImportHistory(data ?? []);
+        } catch {
+            // Non-fatal — first-time pack views won't have history yet.
+            setImportHistory([]);
+        }
+    }, [slug]);
 
     useEffect(() => {
         Promise.all([
@@ -104,7 +130,8 @@ export default function PackDetailPage() {
             }
         }).catch(() => toast.error("Failed to load pack"))
           .finally(() => setLoading(false));
-    }, [slug]);
+        loadImportHistory();
+    }, [slug, loadImportHistory]);
 
     const toggleComponent = (type: string) => {
         setSelectedComponents(prev => {
@@ -162,11 +189,35 @@ export default function PackDetailPage() {
             setShowDiff(false);
             setShowResult(true);
             toast.success(`Applied ${data.totalCreated + data.totalUpdated} changes`);
+            loadImportHistory();
         } catch {
             toast.error("Import failed");
         } finally {
             setImporting(false);
         }
+    };
+
+    /**
+     * Re-import a previous version. Maps to "rollback" in the §3.9 plan —
+     * the existing import endpoint accepts any version number, so a
+     * rollback is just an import of the prior version. Selects every
+     * component the old import touched so the pre-flight diff catches
+     * everything that would change.
+     */
+    const handleReimportVersion = async (entry: ImportHistoryEntry) => {
+        const targetVersion = versions.find(v => v.versionNumber === entry.version);
+        if (!targetVersion) {
+            toast.error(`v${entry.version} no longer in the hub catalogue — can't re-import`);
+            return;
+        }
+        if (!confirm(`Re-import ${slug} v${entry.version}? This will run the diff preview first so you can review changes before they land.`)) return;
+        setSelectedVersion(targetVersion);
+        setSelectedComponents(new Set(entry.componentTypes));
+        // Defer to the existing diff flow; user clicks Import after reviewing.
+        setTimeout(() => {
+            void handleDiff();
+            toast.info(`Selected v${entry.version} — review the diff and click Import to apply.`);
+        }, 0);
     };
 
     const toggleItem = (key: string) => {
@@ -282,6 +333,67 @@ export default function PackDetailPage() {
                         ))}
                     </div>
                 </div>
+
+                {/* Local import history */}
+                {importHistory.length > 0 && (
+                    <div>
+                        <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                            <Clock className="size-4 text-gray-500" />
+                            Your import history
+                            <span className="text-xs font-normal text-gray-400">({importHistory.length})</span>
+                        </h3>
+                        <p className="text-xs text-gray-500 mb-2">
+                            Every time this pack landed locally. Click <em>Re-import</em> to roll back or refresh — the diff preview runs first.
+                        </p>
+                        <div className="space-y-2">
+                            {importHistory.map(entry => (
+                                <div key={entry.id}
+                                    className="p-3 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 transition-colors">
+                                    <div className="flex items-center justify-between mb-1 gap-2">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <span className="text-sm font-medium text-gray-900">v{entry.version}</span>
+                                            <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
+                                                entry.mode === "OVERWRITE" ? "bg-amber-100 text-amber-700"
+                                                : entry.mode === "SELECTIVE" ? "bg-purple-100 text-purple-700"
+                                                : "bg-gray-100 text-gray-600"
+                                            }`}>{entry.mode}</span>
+                                        </div>
+                                        <button onClick={() => handleReimportVersion(entry)}
+                                            disabled={diffing || importing}
+                                            className="text-xs px-2 py-1 border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-50 shrink-0">
+                                            Re-import
+                                        </button>
+                                    </div>
+                                    <div className="text-[10px] text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                        <span>{entry.importedBy}</span>
+                                        <span>·</span>
+                                        <span>{formatHistoryDate(entry.importedAt)}</span>
+                                        {(entry.totalCreated > 0 || entry.totalUpdated > 0) && (
+                                            <>
+                                                <span>·</span>
+                                                <span>{entry.totalCreated} created · {entry.totalUpdated} updated</span>
+                                            </>
+                                        )}
+                                    </div>
+                                    {entry.componentTypes.length > 0 && (
+                                        <div className="mt-1 flex flex-wrap gap-1">
+                                            {entry.componentTypes.slice(0, 4).map(t => (
+                                                <span key={t} className="px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-600 rounded">
+                                                    {t.toLowerCase().replace(/_/g, " ")}
+                                                </span>
+                                            ))}
+                                            {entry.componentTypes.length > 4 && (
+                                                <span className="text-[10px] text-gray-400">
+                                                    +{entry.componentTypes.length - 4} more
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* ── Diff dialog ─────────────────────────── */}
@@ -493,4 +605,15 @@ function formatValue(val: any): string {
     if (typeof val === "object") return JSON.stringify(val);
     if (typeof val === "boolean") return val ? "Yes" : "No";
     return String(val);
+}
+
+function formatHistoryDate(iso: string): string {
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return iso;
+    const delta = (Date.now() - t) / 1000;
+    if (delta < 60) return `${Math.round(delta)}s ago`;
+    if (delta < 3600) return `${Math.round(delta / 60)}m ago`;
+    if (delta < 86400) return `${Math.round(delta / 3600)}h ago`;
+    if (delta < 86400 * 30) return `${Math.round(delta / 86400)}d ago`;
+    return new Date(iso).toLocaleDateString();
 }
