@@ -4988,3 +4988,36 @@ Frontend-only change. Mirrors the metadata-schemas panel's "Linked Categories" p
 **Phase 3 status:** All §3.4 items complete (trait category-scope picker now shipped). Remaining deferred items: §3.6 redaction options, §3.6 Tier 3 trace deep-link (infra-blocked), §3.8 cross-service metrics (HTTP probe needed), §3.1 version-diff view, §3.9 auto-apply rollback flag — all minor polish items.
 
 **Next:** Phase 3 is genuinely close-out shape now. Choose a next priority bet rather than another small follow-up; the loop has 13 PRs banked today.
+
+## 2026-05-01 — Phase 3 PR14 — Single-event → Tier 1 timeline deep-link
+
+**Done:** §3.6 deferred-follow-up flagged in PR10. The single-event lookup at the top of `/admin/audit-events` showed the full envelope JSON but had no way to jump from "I'm looking at this one event" to "show me the rest of the chain for the same resource". Operators had to copy the resource type + id manually into the chain section below.
+
+This PR adds a "View Tier 1 timeline for {type}:{id}" button to the single-event result panel. Clicking it populates the chain section's resource picker and immediately fires the timeline load. The button only renders when the looked-up event has a known resource type (matches the contract enum) — Tier 2 events without `resource.type` set don't show it.
+
+The existing `onLoadTimeline` was tightly coupled to `verifyResourceType` / `verifyResourceId` state. Refactored to extract `onLoadTimelineFor(rt, id)` so the new deep-link can call it with arguments before the state has propagated; `onLoadTimeline` is now a thin wrapper.
+
+**Changes:**
+
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — single file:
+  - Extracted `onLoadTimelineFor(rt, id)` from the existing `onLoadTimeline`. New name takes args explicitly; old name is a one-line wrapper.
+  - New conditional button on the single-event result panel. Reads `event.resource.type` + `event.resource.id`; only renders when type is in the known enum.
+  - Click handler sets the chain-section state + invokes `onLoadTimelineFor` on next tick (so the state has propagated before the API call's logging).
+
+**Tests:** No new tests (frontend-only state-plumbing change). `tsc --noEmit` clean. ESLint clean.
+
+**Decisions logged:** None.
+
+**Files changed:**
+
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — modified.
+- Log = 2 files total.
+
+**Open issues / deferred:**
+
+- **No "view this event in the timeline list".** When the deep-link loads the timeline, the looked-up event isn't visually highlighted in the resulting list. A scroll-to + outline would close that loop.
+- **No reverse deep-link** from a timeline row back into single-event lookup. Less useful (the rows are already expanded with full envelope) so left.
+
+**Phase 3 status:** Unchanged from PR13 — all sections complete or in deferred-follow-ups. PR14 is genuinely a polish item, not a gap closure.
+
+**Next:** Continue if the loop fires; otherwise pause. The remaining deferred items are bigger architectural bets (cross-service metrics probe, redaction options, async export jobs, Tier 3 trace integration) — none of them are PR-sized one-shots.

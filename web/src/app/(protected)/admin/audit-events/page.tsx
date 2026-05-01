@@ -171,19 +171,19 @@ export default function AuditExplorerPage() {
         }
     };
 
-    const onLoadTimeline = async () => {
-        const id = verifyResourceId.trim();
-        if (!id) return;
+    const onLoadTimelineFor = async (rt: ResourceType, id: string) => {
+        const trimmed = id.trim();
+        if (!trimmed) return;
         setTimelineLoading(true);
         try {
             const { data } = await api.get<{ events: AuditEvent[] }>(
-                `/admin/audit-events/v2/resources/${encodeURIComponent(verifyResourceType)}/${encodeURIComponent(id)}/events`);
+                `/admin/audit-events/v2/resources/${encodeURIComponent(rt)}/${encodeURIComponent(trimmed)}/events`);
             setTimelineEvents(data.events ?? []);
             toast.success(`${data.events?.length ?? 0} Tier 1 event(s) loaded`);
         } catch (err: unknown) {
             const e = err as { response?: { status?: number } };
             if (e?.response?.status === 404) {
-                toast.error(`No Tier 1 events for ${verifyResourceType}:${id}`);
+                toast.error(`No Tier 1 events for ${rt}:${trimmed}`);
             } else {
                 toast.error("Tier 1 timeline load failed");
             }
@@ -192,6 +192,8 @@ export default function AuditExplorerPage() {
             setTimelineLoading(false);
         }
     };
+
+    const onLoadTimeline = () => onLoadTimelineFor(verifyResourceType, verifyResourceId);
 
     const onVerifyChain = async () => {
         const id = verifyResourceId.trim();
@@ -254,6 +256,29 @@ export default function AuditExplorerPage() {
                 {singleEvent && (
                     <div className="mt-3 border border-gray-200 rounded-md bg-gray-50 p-3">
                         <EventSummary event={singleEvent} />
+                        {(() => {
+                            const resourceType = (singleEvent.resource as { type?: string } | undefined)?.type;
+                            const resourceId = (singleEvent.resource as { id?: string } | undefined)?.id;
+                            const isKnownType = resourceType
+                                ? RESOURCE_TYPES.includes(resourceType as ResourceType)
+                                : false;
+                            if (!resourceType || !resourceId || !isKnownType) return null;
+                            return (
+                                <button
+                                    onClick={() => {
+                                        setVerifyResourceType(resourceType as ResourceType);
+                                        setVerifyResourceId(resourceId);
+                                        // Scroll the chain section into view + load timeline.
+                                        setTimeout(() => {
+                                            void onLoadTimelineFor(resourceType as ResourceType, resourceId);
+                                        }, 0);
+                                    }}
+                                    className="mt-2 inline-flex items-center gap-1.5 px-2 py-1 text-xs border border-gray-300 rounded text-gray-700 hover:bg-gray-100">
+                                    <Clock className="size-3" />
+                                    View Tier 1 timeline for {resourceType}:{resourceId}
+                                </button>
+                            );
+                        })()}
                         <pre className="mt-2 text-[10px] text-gray-700 bg-white border border-gray-200 rounded p-2 overflow-x-auto max-h-64">
                             {JSON.stringify(singleEvent, null, 2)}
                         </pre>
