@@ -4,7 +4,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-(Remaining Phase 0.7 — `audit_outbox` MongoDB collection schema and the `gls-platform-audit` shared library.)
+(Remaining Phase 0.7 — `audit_outbox` MongoDB collection schema and the `igc-platform-audit` shared library.)
 
 ## [0.3.0] — 2026-04-26
 

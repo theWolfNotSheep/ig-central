@@ -14,7 +14,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `openapi.yaml` — initial OpenAPI 3.1.1 declaration of `gls-extraction-tika`. Three operations:
+- `openapi.yaml` — initial OpenAPI 3.1.1 declaration of `igc-extraction-tika`. Three operations:
   - `POST /v1/extract` — synchronous text extraction. Idempotent on `nodeRunId` per CSV #16. Returns `TextPayload` (inline ≤ 256 KB else `textRef`) per CSV #19. `costUnits` per CSV #22.
   - `GET /v1/capabilities` — capability advertisement per CSV #21.
   - `GET /actuator/health` — liveness + readiness.

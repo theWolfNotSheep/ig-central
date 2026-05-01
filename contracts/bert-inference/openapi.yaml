@@ -10,14 +10,14 @@ info:
     serving wins from the JVM (homogeneous deploy, observability, IAM,
     lower memory than Python+CUDA), training wins from Python
     (HuggingFace, distillation, ONNX export). The
-    `gls-bert-trainer` (Phase 1.4 follow-up) publishes ONNX artefacts
+    `igc-bert-trainer` (Phase 1.4 follow-up) publishes ONNX artefacts
     to MinIO under versioned keys; this service loads them at startup
     and exposes synchronous inference + a hot-reload trigger.
 
     Phase 1.4 first cut: contract + JVM module + DJL classpath + a
     stub backend that returns `MODEL_NOT_LOADED` until a trained
     artefact is wired. The router cascade integration (BERT tier in
-    `gls-classifier-router`) and the Python trainer ship as separate
+    `igc-classifier-router`) and the Python trainer ship as separate
     follow-up PRs.
 
     **Conventions referenced from `_shared/`:**
@@ -27,7 +27,7 @@ info:
     - `Capabilities` shape — CSV #21.
 
 servers:
-  - url: http://gls-bert-inference:8080
+  - url: http://igc-bert-inference:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8094
     description: Local dev (override).

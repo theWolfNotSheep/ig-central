@@ -11,20 +11,20 @@ info:
     routing key, and message envelope on the bus.
 
     **Currently in production:**
-    - `gls.documents` topic exchange — document lifecycle events.
-    - `gls.pipeline` topic exchange — async LLM job dispatch and
+    - `igc.documents` topic exchange — document lifecycle events.
+    - `igc.pipeline` topic exchange — async LLM job dispatch and
       completion.
 
     **Forward-looking** (declared in `version-2-implementation-plan.md`
     but not yet wired in code; will land in their respective phases):
 
-    - `gls.audit.*` — audit tier channels. Per CSV #3 / #4 / #5.
+    - `igc.audit.*` — audit tier channels. Per CSV #3 / #4 / #5.
       Declared in `contracts/audit/asyncapi.yaml`; the publisher side
-      lives in the `gls-platform-audit` library's outbox-relay (see
+      lives in the `igc-platform-audit` library's outbox-relay (see
       Phase 0.7).
-    - `gls.config.changed` — cache invalidation per CSV #30.
+    - `igc.config.changed` — cache invalidation per CSV #30.
       Channel + payload schema declared here (0.3.0); the publisher /
-      dispatcher / cache primitive ship in the `gls-platform-config`
+      dispatcher / cache primitive ship in the `igc-platform-config`
       shared library (Phase 0.8). `AppConfigService` and the MCP
       governance cache migrate as separate follow-ups.
 
@@ -51,14 +51,14 @@ channels:
   documentIngested:
     address: 'document.ingested'
     description: |
-      Routing key on exchange `gls.documents` (topic). Bound to queue
-      `gls.documents.ingested`. Failed messages are rejected (no
-      requeue) and routed to `gls.documents.dlx`.
+      Routing key on exchange `igc.documents` (topic). Bound to queue
+      `igc.documents.ingested`. Failed messages are rejected (no
+      requeue) and routed to `igc.documents.dlx`.
 
       **Producers:** `DocumentController`, `EmailIngestionService`,
       `GoogleDriveFolderMonitor`, `StaleDocumentRecoveryTask`.
       **Consumer:** `DocumentProcessingPipeline` (in
-      `gls-document-processing`).
+      `igc-document-processing`).
     messages:
       documentIngestedMessage:
         $ref: '#/components/messages/DocumentIngested'
@@ -66,12 +66,12 @@ channels:
   documentProcessed:
     address: 'document.processed'
     description: |
-      Routing key on `gls.documents`. Bound to queue
-      `gls.documents.processed`.
+      Routing key on `igc.documents`. Bound to queue
+      `igc.documents.processed`.
 
       **Producer:** `DocumentProcessingPipeline` after Tika extraction
       and PII scan complete. **Consumer:** `ClassificationPipeline`
-      (in `gls-llm-orchestration`).
+      (in `igc-llm-orchestration`).
     messages:
       documentProcessedMessage:
         $ref: '#/components/messages/DocumentProcessed'
@@ -79,15 +79,15 @@ channels:
   documentClassified:
     address: 'document.classified'
     description: |
-      Routing key on `gls.documents`. Bound to queue
-      `gls.documents.classified`.
+      Routing key on `igc.documents`. Bound to queue
+      `igc.documents.classified`.
 
       **Producer:** `ClassificationPipeline` after a classification
       result is produced. **Consumers:**
       `ClassificationEnforcementConsumer` (always);
       `PipelineExecutionConsumer` (when the engine is running in the
       pipeline-resume mode that uses this channel);
-      `gls-indexing-worker` (Phase 1.11) — writes searchable fields
+      `igc-indexing-worker` (Phase 1.11) — writes searchable fields
       + `extractedMetadata` to Elasticsearch. See
       `contracts/indexing-worker/`. Each consumer binds its own queue
       so the broker fans out the event to all of them.
@@ -98,19 +98,19 @@ channels:
   documentClassificationFailed:
     address: 'document.classification.failed'
     description: |
-      Routing key on `gls.documents`. Bound to queue
-      `gls.documents.classification.failed`. Currently published on
+      Routing key on `igc.documents`. Bound to queue
+      `igc.documents.classification.failed`. Currently published on
       terminal LLM-pipeline failure but not actively consumed by
       application code — the DLX backstop catches it. A future
-      `gls-audit-collector` consumer will subscribe here for
+      `igc-audit-collector` consumer will subscribe here for
       Tier 1 / Tier 2 emission (per CSV #5).
 
   llmJobRequested:
     address: 'pipeline.llm.requested'
     description: |
-      Routing key on exchange `gls.pipeline` (topic). Bound to queue
-      `gls.pipeline.llm.jobs`. DLX routes to `pipeline.dlq`. Consumer
-      prefetch is limited (2 on `gls-llm-orchestration`, 5 elsewhere)
+      Routing key on exchange `igc.pipeline` (topic). Bound to queue
+      `igc.pipeline.llm.jobs`. DLX routes to `pipeline.dlq`. Consumer
+      prefetch is limited (2 on `igc-llm-orchestration`, 5 elsewhere)
       to avoid overwhelming Anthropic / Ollama.
 
       **Producer:** `PipelineExecutionEngine` when an async LLM node
@@ -122,8 +122,8 @@ channels:
   llmJobCompleted:
     address: 'pipeline.llm.completed'
     description: |
-      Routing key on `gls.pipeline`. Bound to queue
-      `gls.pipeline.llm.completed`.
+      Routing key on `igc.pipeline`. Bound to queue
+      `igc.pipeline.llm.completed`.
 
       **Producer:** `ClassificationPipeline.publishJobCompleted`
       (success or failure). **Consumer:** `PipelineResumeConsumer`,
@@ -135,7 +135,7 @@ channels:
   pipelineResume:
     address: 'pipeline.resume'
     description: |
-      Routing key on `gls.pipeline`. Declared but **not** actively
+      Routing key on `igc.pipeline`. Declared but **not** actively
       published or consumed in current code — the engine resumes via
       `pipeline.llm.completed` directly. Kept for forward
       compatibility with a future split between completion and resume.
@@ -143,7 +143,7 @@ channels:
   configChanged:
     address: 'config.changed'
     description: |
-      Routing key on exchange `gls.config` (topic). Cache-invalidation
+      Routing key on exchange `igc.config` (topic). Cache-invalidation
       fanout: every write to a governance entity (taxonomy, PII patterns,
       retention schedules, sensitivity definitions, metadata schemas,
       storage tiers, traits, governance policies, pipeline blocks) fires
@@ -157,7 +157,7 @@ channels:
 
       **Consumer convention.** Every replica subscribes via a
       *non-durable, exclusive* queue with auto-generated name (each
-      replica gets its own copy of every event). The `gls-platform-config`
+      replica gets its own copy of every event). The `igc-platform-config`
       shared library's `ConfigChangeDispatcher` does this automatically
       and routes to registered `ConfigCache` instances by `entityType`.
 
@@ -171,7 +171,7 @@ channels:
   documentsDeadLetter:
     address: '#'
     description: |
-      Fanout from `gls.documents.dlx` into queue `gls.documents.dlq`.
+      Fanout from `igc.documents.dlx` into queue `igc.documents.dlq`.
       Catches rejected messages from any of the document-domain
       queues. Not actively consumed by application code; inspected
       via the admin monitoring page or RabbitMQ management UI.
@@ -179,7 +179,7 @@ channels:
   pipelineDeadLetter:
     address: 'pipeline.dlq'
     description: |
-      Bound to queue `gls.pipeline.dlq` from `gls.pipeline`. Catches
+      Bound to queue `igc.pipeline.dlq` from `igc.pipeline`. Catches
       rejected messages from the pipeline-domain queues. Not actively
       consumed.
 
@@ -238,7 +238,7 @@ operations:
       Consumed by `ClassificationEnforcementConsumer` for governance
       enforcement, (in some pipeline modes) by
       `PipelineExecutionConsumer`, and (Phase 1.11 onward) by
-      `gls-indexing-worker` for Elasticsearch indexing.
+      `igc-indexing-worker` for Elasticsearch indexing.
     messages:
       - $ref: '#/channels/documentClassified/messages/documentClassifiedMessage'
 
@@ -288,7 +288,7 @@ operations:
     summary: |
       Any service mutating a governance entity publishes a
       `ConfigChangedEvent` so peer replicas drop their cache entries.
-      `gls-platform-config` library's `ConfigChangePublisher` is the
+      `igc-platform-config` library's `ConfigChangePublisher` is the
       single emitter — services don't call `RabbitTemplate.convertAndSend`
       for this directly.
     messages:
@@ -300,8 +300,8 @@ operations:
       $ref: '#/channels/configChanged'
     summary: |
       Every replica binds a non-durable exclusive queue to
-      `gls.config` so it receives every invalidation. The
-      `gls-platform-config` library's `ConfigChangeDispatcher` consumes
+      `igc.config` so it receives every invalidation. The
+      `igc-platform-config` library's `ConfigChangeDispatcher` consumes
       and routes to registered `ConfigCache` instances by `entityType`.
     messages:
       - $ref: '#/channels/configChanged/messages/configChangedMessage'
@@ -464,7 +464,7 @@ components:
           type: string
           description: |
             Sensitivity level. Mirrors `SensitivityLabel` enum in
-            `gls-governance` (e.g. `PUBLIC`, `INTERNAL`,
+            `igc-governance` (e.g. `PUBLIC`, `INTERNAL`,
             `CONFIDENTIAL`, `RESTRICTED`).
         tags:
           type: array
@@ -648,7 +648,7 @@ components:
           type: string
           description: |
             Service identifier that fired the event (e.g.
-            `gls-app-assembly`, `gls-governance-hub`).
+            `igc-app-assembly`, `igc-governance-hub`).
         traceparent:
           type: string
           description: W3C trace context per CSV #20; optional.

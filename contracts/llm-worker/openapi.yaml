@@ -8,14 +8,14 @@ info:
   description: |
     LLM (Large Language Model) tier of the cascade — the cascade's
     floor per CSV #1 / architecture §3. Same contract shape as
-    `gls-slm-worker` (SLM was authored first as the template) so the
+    `igc-slm-worker` (SLM was authored first as the template) so the
     cascade router dispatches to either tier through identical client
     code.
 
     Phase 1.6 first cut: contract + JVM module + a stub backend that
     returns `LLM_NOT_CONFIGURED` 503. The actual Anthropic Claude
     integration (with MCP tools per CSV #1) lifts from
-    `gls-llm-orchestration` in a follow-up PR.
+    `igc-llm-orchestration` in a follow-up PR.
 
     **Conventions referenced from `_shared/`:**
     - Error envelope (RFC 7807 + extensions) — CSV #17.
@@ -25,7 +25,7 @@ info:
     - `Capabilities` — CSV #21.
 
 servers:
-  - url: http://gls-llm-worker:8080
+  - url: http://igc-llm-worker:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8096
     description: Local dev (override).

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# backup.sh — Back up MongoDB and (optionally) MinIO data for GLS
+# backup.sh — Back up MongoDB and (optionally) MinIO data for IGC
 #
 # Usage:
 #   ./scripts/backup.sh [BACKUP_DIR]
 #
 # Examples:
 #   ./scripts/backup.sh                          # default: ./backups/<timestamp>
-#   ./scripts/backup.sh /mnt/nas/gls-backup      # custom directory
+#   ./scripts/backup.sh /mnt/nas/igc-backup      # custom directory
 #
 
 set -euo pipefail
@@ -19,7 +19,7 @@ TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP_DIR="${1:-$PROJECT_DIR/backups/$TIMESTAMP}"
 
 # Container names — match docker-compose.yml defaults
-COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-gls}"
+COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-igc}"
 MONGO_CONTAINER="${COMPOSE_PROJECT}-mongo"
 MONGO_DB="${MONGO_DB_NAME:-governance_led_storage_main}"
 MONGO_PASSWORD="${MONGO_PASSWORD:-example}"

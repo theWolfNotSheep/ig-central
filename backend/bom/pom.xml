@@ -4,11 +4,11 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>co.uk.wolfnotsheep</groupId>
-    <artifactId>gls-bom</artifactId>
+    <artifactId>igc-bom</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
-    <name>GLS BOM</name>
-    <description>Bill of Materials — pins compatible versions for all GLS modules</description>
+    <name>IGC BOM</name>
+    <description>Bill of Materials — pins compatible versions for all IGC modules</description>
 
     <properties>
         <!--
@@ -16,30 +16,30 @@
           consumed by deployables and version together as one set; bumping
           one library bumps all libraries.
         -->
-        <gls.version>0.0.1-SNAPSHOT</gls.version>
+        <igc.version>0.0.1-SNAPSHOT</igc.version>
 
         <!--
           Per-deployable versions. Each deployable (Spring Boot app shipped
           as its own container) has its own seam so it can be versioned and
           released independently of the others. Today they all track
-          ${gls.version} — change a deployable's value here when its release
+          ${igc.version} — change a deployable's value here when its release
           cadence diverges from the library set. See CLAUDE.md → Independent
           Deployable Versions.
         -->
-        <gls.api.version>${gls.version}</gls.api.version>
-        <gls.mcp.version>${gls.version}</gls.mcp.version>
-        <gls.orchestrator.version>${gls.version}</gls.orchestrator.version>
-        <gls.hub.version>${gls.version}</gls.hub.version>
-        <gls.extraction.tika.version>${gls.version}</gls.extraction.tika.version>
-        <gls.extraction.archive.version>${gls.version}</gls.extraction.archive.version>
-        <gls.extraction.ocr.version>${gls.version}</gls.extraction.ocr.version>
-        <gls.extraction.audio.version>${gls.version}</gls.extraction.audio.version>
-        <gls.router.version>${gls.version}</gls.router.version>
-        <gls.bert.inference.version>${gls.version}</gls.bert.inference.version>
-        <gls.slm.worker.version>${gls.version}</gls.slm.worker.version>
-        <gls.llm.worker.version>${gls.version}</gls.llm.worker.version>
-        <gls.indexing.worker.version>${gls.version}</gls.indexing.worker.version>
-        <gls.audit.collector.version>${gls.version}</gls.audit.collector.version>
+        <igc.api.version>${igc.version}</igc.api.version>
+        <igc.mcp.version>${igc.version}</igc.mcp.version>
+        <igc.orchestrator.version>${igc.version}</igc.orchestrator.version>
+        <igc.hub.version>${igc.version}</igc.hub.version>
+        <igc.extraction.tika.version>${igc.version}</igc.extraction.tika.version>
+        <igc.extraction.archive.version>${igc.version}</igc.extraction.archive.version>
+        <igc.extraction.ocr.version>${igc.version}</igc.extraction.ocr.version>
+        <igc.extraction.audio.version>${igc.version}</igc.extraction.audio.version>
+        <igc.router.version>${igc.version}</igc.router.version>
+        <igc.bert.inference.version>${igc.version}</igc.bert.inference.version>
+        <igc.slm.worker.version>${igc.version}</igc.slm.worker.version>
+        <igc.llm.worker.version>${igc.version}</igc.llm.worker.version>
+        <igc.indexing.worker.version>${igc.version}</igc.indexing.worker.version>
+        <igc.audit.collector.version>${igc.version}</igc.audit.collector.version>
     </properties>
 
     <dependencyManagement>
@@ -49,144 +49,158 @@
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.platform</groupId>
-                <artifactId>gls-platform</artifactId>
-                <version>${gls.version}</version>
+                <artifactId>igc-platform</artifactId>
+                <version>${igc.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.platformaudit</groupId>
-                <artifactId>gls-platform-audit</artifactId>
-                <version>${gls.version}</version>
+                <artifactId>igc-platform-audit</artifactId>
+                <version>${igc.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.platformconfig</groupId>
-                <artifactId>gls-platform-config</artifactId>
-                <version>${gls.version}</version>
+                <artifactId>igc-platform-config</artifactId>
+                <version>${igc.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.extraction</groupId>
-                <artifactId>gls-extraction-tika</artifactId>
-                <version>${gls.extraction.tika.version}</version>
+                <artifactId>igc-extraction-tika</artifactId>
+                <version>${igc.extraction.tika.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.extraction</groupId>
-                <artifactId>gls-extraction-archive</artifactId>
-                <version>${gls.extraction.archive.version}</version>
+                <artifactId>igc-extraction-archive</artifactId>
+                <version>${igc.extraction.archive.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.extraction</groupId>
-                <artifactId>gls-extraction-ocr</artifactId>
-                <version>${gls.extraction.ocr.version}</version>
+                <artifactId>igc-extraction-ocr</artifactId>
+                <version>${igc.extraction.ocr.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.extraction</groupId>
-                <artifactId>gls-extraction-audio</artifactId>
-                <version>${gls.extraction.audio.version}</version>
+                <artifactId>igc-extraction-audio</artifactId>
+                <version>${igc.extraction.audio.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.router</groupId>
-                <artifactId>gls-classifier-router</artifactId>
-                <version>${gls.router.version}</version>
+                <artifactId>igc-classifier-router</artifactId>
+                <version>${igc.router.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.bert</groupId>
-                <artifactId>gls-bert-inference</artifactId>
-                <version>${gls.bert.inference.version}</version>
+                <artifactId>igc-bert-inference</artifactId>
+                <version>${igc.bert.inference.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.slm</groupId>
-                <artifactId>gls-slm-worker</artifactId>
-                <version>${gls.slm.worker.version}</version>
+                <artifactId>igc-slm-worker</artifactId>
+                <version>${igc.slm.worker.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.llmworker</groupId>
-                <artifactId>gls-llm-worker</artifactId>
-                <version>${gls.llm.worker.version}</version>
+                <artifactId>igc-llm-worker</artifactId>
+                <version>${igc.llm.worker.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.indexing</groupId>
-                <artifactId>gls-indexing-worker</artifactId>
-                <version>${gls.indexing.worker.version}</version>
+                <artifactId>igc-indexing-worker</artifactId>
+                <version>${igc.indexing.worker.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.auditcollector</groupId>
-                <artifactId>gls-audit-collector</artifactId>
-                <version>${gls.audit.collector.version}</version>
+                <artifactId>igc-audit-collector</artifactId>
+                <version>${igc.audit.collector.version}</version>
             </dependency>
 
             <!-- ==================== Governance ==================== -->
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.governance</groupId>
-                <artifactId>gls-governance</artifactId>
-                <version>${gls.version}</version>
+                <artifactId>igc-governance</artifactId>
+                <version>${igc.version}</version>
             </dependency>
 
             <!-- ==================== Document ==================== -->
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.document</groupId>
-                <artifactId>gls-document</artifactId>
-                <version>${gls.version}</version>
+                <artifactId>igc-document</artifactId>
+                <version>${igc.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.docprocessing</groupId>
-                <artifactId>gls-document-processing</artifactId>
-                <version>${gls.version}</version>
+                <artifactId>igc-document-processing</artifactId>
+                <version>${igc.version}</version>
             </dependency>
 
             <!-- ==================== Enforcement ==================== -->
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.enforcement</groupId>
-                <artifactId>gls-governance-enforcement</artifactId>
-                <version>${gls.version}</version>
+                <artifactId>igc-governance-enforcement</artifactId>
+                <version>${igc.version}</version>
             </dependency>
 
             <!-- ==================== App Modules ==================== -->
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep</groupId>
-                <artifactId>gls-app-assembly</artifactId>
-                <version>${gls.api.version}</version>
+                <artifactId>igc-app-assembly</artifactId>
+                <version>${igc.api.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.mcp</groupId>
-                <artifactId>gls-mcp-server</artifactId>
-                <version>${gls.mcp.version}</version>
+                <artifactId>igc-mcp-server</artifactId>
+                <version>${igc.mcp.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.llm</groupId>
-                <artifactId>gls-llm-orchestration</artifactId>
-                <version>${gls.orchestrator.version}</version>
+                <artifactId>igc-llm-orchestration</artifactId>
+                <version>${igc.orchestrator.version}</version>
             </dependency>
 
             <!-- ==================== Governance Hub ==================== -->
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.hub</groupId>
-                <artifactId>gls-governance-hub</artifactId>
-                <version>${gls.version}</version>
+                <artifactId>igc-governance-hub</artifactId>
+                <version>${igc.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>co.uk.wolfnotsheep.hub.app</groupId>
-                <artifactId>gls-governance-hub-app</artifactId>
-                <version>${gls.hub.version}</version>
+                <artifactId>igc-governance-hub-app</artifactId>
+                <version>${igc.hub.version}</version>
+            </dependency>
+
+            <!--
+              Pin json-schema-validator at 2.0.1 — Spring AI mcp-core
+              2.0.0-M2 expects the new `com.networknt.schema.dialect.Dialects`
+              API and `EnvelopeValidator` (in igc-platform-audit) targets
+              the same 2.x API. Without this, spring-ai-bom resolves 1.5.7
+              transitively, which breaks the MCP client autoconfig.
+              Pinned centrally so every consumer is consistent.
+            -->
+            <dependency>
+                <groupId>com.networknt</groupId>
+                <artifactId>json-schema-validator</artifactId>
+                <version>2.0.1</version>
             </dependency>
 
         </dependencies>

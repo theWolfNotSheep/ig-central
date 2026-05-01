@@ -11,18 +11,18 @@ Summary of all changes made during this session. Two new features (Drive Labels 
 ### Files created
 | File | Purpose |
 |------|---------|
-| `gls-app-assembly/.../services/drives/GoogleDriveLabelsService.java` | Lists Workspace labels via DriveLabels API, applies labels to files via Drive API `modifyLabels()` |
-| `gls-app-assembly/.../controllers/admin/DriveLabelConfigController.java` | Admin endpoints: list labels, save/clear config, backfill existing docs |
+| `igc-app-assembly/.../services/drives/GoogleDriveLabelsService.java` | Lists Workspace labels via DriveLabels API, applies labels to files via Drive API `modifyLabels()` |
+| `igc-app-assembly/.../controllers/admin/DriveLabelConfigController.java` | Admin endpoints: list labels, save/clear config, backfill existing docs |
 | `web/src/app/(protected)/drives/[id]/labels/page.tsx` | Label configuration UI: select label, map fields, save/remove |
 
 ### Files modified
 | File | Change |
 |------|--------|
-| `gls-app-assembly/pom.xml` | Added `google-api-services-drivelabels` v2-rev20250602-2.0.0 |
-| `gls-document/.../models/ConnectedDrive.java` | Added `defaultLabelId`, `defaultLabelName`, `fieldMappings`, `needsLabelScope()` |
-| `gls-app-assembly/.../services/drives/GoogleDriveService.java` | Added `drive.labels` scope to OAuth, made credential methods public |
-| `gls-app-assembly/.../services/drives/GoogleDriveWriteBackService.java` | Injected `GoogleDriveLabelsService`, writes label after properties (independent try/catch) |
-| `gls-app-assembly/.../bootstrap/GovernanceDataSeeder.java` | Registered `writeDriveLabel` pipeline node type |
+| `igc-app-assembly/pom.xml` | Added `google-api-services-drivelabels` v2-rev20250602-2.0.0 |
+| `igc-document/.../models/ConnectedDrive.java` | Added `defaultLabelId`, `defaultLabelName`, `fieldMappings`, `needsLabelScope()` |
+| `igc-app-assembly/.../services/drives/GoogleDriveService.java` | Added `drive.labels` scope to OAuth, made credential methods public |
+| `igc-app-assembly/.../services/drives/GoogleDriveWriteBackService.java` | Injected `GoogleDriveLabelsService`, writes label after properties (independent try/catch) |
+| `igc-app-assembly/.../bootstrap/GovernanceDataSeeder.java` | Registered `writeDriveLabel` pipeline node type |
 | `web/src/app/(protected)/drives/page.tsx` | Added label status bar, "Configure Labels" link, label/scope indicators |
 
 ### How it works
@@ -41,26 +41,26 @@ Summary of all changes made during this session. Two new features (Drive Labels 
 ### Files created
 | File | Purpose |
 |------|---------|
-| `gls-app-assembly/.../services/mail/GmailService.java` | Gmail API wrapper: list messages, get message, extract body/attachments, download |
-| `gls-app-assembly/.../services/mail/EmailIngestionService.java` | Ingests email + attachments as linked DocumentModels, publishes to pipeline |
-| `gls-app-assembly/.../controllers/mailboxes/MailboxController.java` | OAuth, browse, import, disconnect endpoints |
-| `gls-app-assembly/.../services/mail/GmailPollingScheduler.java` | `@Scheduled` poller for `gmailWatcher` pipeline nodes |
-| `gls-document/.../models/GmailIngestCursor.java` | Tracks polling position per account+query |
-| `gls-document/.../repositories/GmailIngestCursorRepository.java` | MongoDB repository for cursor |
+| `igc-app-assembly/.../services/mail/GmailService.java` | Gmail API wrapper: list messages, get message, extract body/attachments, download |
+| `igc-app-assembly/.../services/mail/EmailIngestionService.java` | Ingests email + attachments as linked DocumentModels, publishes to pipeline |
+| `igc-app-assembly/.../controllers/mailboxes/MailboxController.java` | OAuth, browse, import, disconnect endpoints |
+| `igc-app-assembly/.../services/mail/GmailPollingScheduler.java` | `@Scheduled` poller for `gmailWatcher` pipeline nodes |
+| `igc-document/.../models/GmailIngestCursor.java` | Tracks polling position per account+query |
+| `igc-document/.../repositories/GmailIngestCursorRepository.java` | MongoDB repository for cursor |
 | `web/src/app/(protected)/mailboxes/page.tsx` | Gmail browser: connect, search, select, import, attachments filter |
 | `web/src/components/email-view.tsx` | Email header display, attachment list, parent backlink |
 
 ### Files modified
 | File | Change |
 |------|--------|
-| `gls-app-assembly/pom.xml` | Added `google-api-services-gmail` v1-rev20250331-2.0.0 |
-| `gls-document/.../models/StorageProviderType.java` | Added `GMAIL` |
-| `gls-document/.../models/DocumentModel.java` | Added `parentDocumentId`, `childDocumentIds` |
-| `gls-document/.../repositories/DocumentRepository.java` | Added `findByParentDocumentId()` |
-| `gls-document/.../repositories/ConnectedDriveRepository.java` | Added `findByUserIdAndProviderAndProviderAccountEmail()`, `findAccessibleByProvider()` |
-| `gls-platform/.../configs/DefaultSecurityConfig.java` | Added CSRF exclusion for `/api/mailboxes/gmail/callback` |
-| `gls-app-assembly/.../controllers/drives/DriveController.java` | OAuth callback now detects `GMAIL:` prefix in state, creates Gmail account correctly |
-| `gls-app-assembly/.../bootstrap/GovernanceDataSeeder.java` | Seeded `gmailWatcher` node type, `EMAIL_BODY`/`EMAIL_ATTACHMENT` traits |
+| `igc-app-assembly/pom.xml` | Added `google-api-services-gmail` v1-rev20250331-2.0.0 |
+| `igc-document/.../models/StorageProviderType.java` | Added `GMAIL` |
+| `igc-document/.../models/DocumentModel.java` | Added `parentDocumentId`, `childDocumentIds` |
+| `igc-document/.../repositories/DocumentRepository.java` | Added `findByParentDocumentId()` |
+| `igc-document/.../repositories/ConnectedDriveRepository.java` | Added `findByUserIdAndProviderAndProviderAccountEmail()`, `findAccessibleByProvider()` |
+| `igc-platform/.../configs/DefaultSecurityConfig.java` | Added CSRF exclusion for `/api/mailboxes/gmail/callback` |
+| `igc-app-assembly/.../controllers/drives/DriveController.java` | OAuth callback now detects `GMAIL:` prefix in state, creates Gmail account correctly |
+| `igc-app-assembly/.../bootstrap/GovernanceDataSeeder.java` | Seeded `gmailWatcher` node type, `EMAIL_BODY`/`EMAIL_ATTACHMENT` traits |
 | `web/src/components/sidebar.tsx` | Added "Mailboxes" nav item with Mail icon |
 | `web/src/app/(protected)/documents/page.tsx` | Integrated `EmailView` component for email/attachment docs |
 
@@ -81,7 +81,7 @@ Summary of all changes made during this session. Two new features (Drive Labels 
 ## Incident: Runaway Queue Storm + Performance Fixes
 
 ### Problem discovered
-- 35,515 messages stuck in `gls.documents.processed` queue
+- 35,515 messages stuck in `igc.documents.processed` queue
 - 439 documents stuck at PROCESSED, 0 classified per hour
 - 513 Spring AI retries against Ollama, all timing out
 - 20 documents stuck at CLASSIFIED (governance never applied)
@@ -92,35 +92,35 @@ Summary of all changes made during this session. Two new features (Drive Labels 
 ### Fixes applied
 
 #### 1. Re-queue storm prevention
-**File:** `gls-app-assembly/.../services/StaleDocumentRecoveryTask.java`
+**File:** `igc-app-assembly/.../services/StaleDocumentRecoveryTask.java`
 - Added 30-minute cooldown between re-queue attempts (touches `updatedAt`)
 - Added retry cap of 3 per document
 - Documents stop being auto-re-queued after 3 failures
 
 #### 2. Consumer prefetch limits
-**Files:** `gls-app-assembly/.../config/RabbitMqConfig.java`, `gls-llm-orchestration/.../config/RabbitMqConfig.java`
+**Files:** `igc-app-assembly/.../config/RabbitMqConfig.java`, `igc-llm-orchestration/.../config/RabbitMqConfig.java`
 - App-assembly prefetch: 5 (was unlimited/250)
 - LLM worker prefetch: 2 (was unlimited/250)
 
 #### 3. LLM Circuit Breaker
-**File:** `gls-llm-orchestration/.../pipeline/ClassificationPipeline.java`
+**File:** `igc-llm-orchestration/.../pipeline/ClassificationPipeline.java`
 - Opens after 5 consecutive LLM failures
 - Pauses classification for 2-minute cooldown
 - Half-open probe: allows one request after cooldown to test recovery
 - Logs CRITICAL SystemError when circuit opens
 - Status exposed via `GET /api/internal/circuit-breaker`
 
-**File:** `gls-llm-orchestration/.../api/ClassificationController.java`
+**File:** `igc-llm-orchestration/.../api/ClassificationController.java`
 - Added `/api/internal/circuit-breaker` endpoint
 
 #### 4. Queue TTL
-- 1-hour TTL policy on `gls.documents.processed` via RabbitMQ policy
+- 1-hour TTL policy on `igc.documents.processed` via RabbitMQ policy
 - Expired messages route to dead-letter queue
 - Prevents unbounded queue growth during outages
 - Policy persists in RabbitMQ data volume
 
 #### 5. Monitoring: Circuit Breaker Visibility
-**Files:** `gls-app-assembly/.../services/MonitoringService.java`, `MonitoringController.java`
+**Files:** `igc-app-assembly/.../services/MonitoringService.java`, `MonitoringController.java`
 - Added `circuitBreaker` field to pipeline metrics (fetched from LLM worker internal API)
 - Added `llmWorkerBaseUrl` config (`llm.service-url`)
 
@@ -169,16 +169,16 @@ Summary of all changes made during this session. Two new features (Drive Labels 
 ### Files created
 | File | Purpose |
 |------|---------|
-| `gls-app-assembly/.../services/PipelineThrottleService.java` | Checks in-flight count against configurable limit, returns 429 when at capacity |
+| `igc-app-assembly/.../services/PipelineThrottleService.java` | Checks in-flight count against configurable limit, returns 429 when at capacity |
 
 ### Files modified
 | File | Change |
 |------|--------|
-| `gls-app-assembly/.../controllers/documents/DocumentController.java` | Throttle check before upload |
-| `gls-app-assembly/.../controllers/drives/DriveController.java` | Throttle check before Drive classify |
-| `gls-app-assembly/.../controllers/mailboxes/MailboxController.java` | Throttle check before Gmail import |
-| `gls-app-assembly/.../controllers/admin/MonitoringController.java` | Added `GET /pipeline/throttle` status endpoint |
-| `gls-app-assembly/.../bootstrap/GovernanceDataSeeder.java` | Seeds `pipeline.throttle.max_in_flight` (50) and `pipeline.throttle.max_batch_size` (20) |
+| `igc-app-assembly/.../controllers/documents/DocumentController.java` | Throttle check before upload |
+| `igc-app-assembly/.../controllers/drives/DriveController.java` | Throttle check before Drive classify |
+| `igc-app-assembly/.../controllers/mailboxes/MailboxController.java` | Throttle check before Gmail import |
+| `igc-app-assembly/.../controllers/admin/MonitoringController.java` | Added `GET /pipeline/throttle` status endpoint |
+| `igc-app-assembly/.../bootstrap/GovernanceDataSeeder.java` | Seeds `pipeline.throttle.max_in_flight` (50) and `pipeline.throttle.max_batch_size` (20) |
 | `web/src/app/(protected)/settings/page.tsx` | Added "Pipeline Throttling" section with both values editable |
 | `web/src/app/(protected)/drives/page.tsx` | 429 error handling with user-friendly toast |
 | `web/src/app/(protected)/mailboxes/page.tsx` | 429 error handling with user-friendly toast |
@@ -231,7 +231,7 @@ See conversation notes for detailed design of each.
 ## Build verification
 
 All changes compile and deploy successfully:
-- Backend: `./mvnw compile -DskipTests -pl gls-app-assembly -am` — BUILD SUCCESS
+- Backend: `./mvnw compile -DskipTests -pl igc-app-assembly -am` — BUILD SUCCESS
 - Frontend: `npm run build` — all pages build, no TypeScript errors
 - Docker: `docker compose up --build -d` — all containers healthy
 - Queues: all clean, circuit breaker CLOSED, model loaded Forever

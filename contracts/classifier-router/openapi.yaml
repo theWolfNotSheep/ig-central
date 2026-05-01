@@ -6,7 +6,7 @@ info:
     name: ig-central engineering
     url: https://github.com/theWolfNotSheep/ig-central
   description: |
-    Task-agnostic cascade router. The `gls-classifier-router` runs a
+    Task-agnostic cascade router. The `igc-classifier-router` runs a
     PROMPT block (or BERT_CLASSIFIER block) against an extracted text
     payload and returns the structured result the block is configured
     to produce — classification, PII / PHI / PCI scan, metadata
@@ -30,7 +30,7 @@ info:
     - `Capabilities` shape — CSV #21.
 
 servers:
-  - url: http://gls-classifier-router:8080
+  - url: http://igc-classifier-router:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8093
     description: Local dev (override).

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gls.local/contracts/blocks/bert-classifier.schema.json",
+  "$id": "https://igc.local/contracts/blocks/bert-classifier.schema.json",
   "title": "BERT_CLASSIFIER block content",
   "description": "Maps a fine-tuned BERT model artefact onto a taxonomy slice. The classifier router resolves this block to pick the model that runs at the BERT tier of the cascade. Per architecture §8.2 and CSV #2 (Python trains, JVM serves).",
   "type": "object",

@@ -10,9 +10,9 @@ Organisations drown in unclassified documents. Sensitive files sit in shared dri
 
 ---
 
-## What GLS Does
+## What IGC Does
 
-GLS is an intelligent document governance platform that **automatically classifies, labels, and enforces policy on every document** the moment it enters your organisation — whether uploaded directly or sitting in Google Drive.
+IGC is an intelligent document governance platform that **automatically classifies, labels, and enforces policy on every document** the moment it enters your organisation — whether uploaded directly or sitting in Google Drive.
 
 ### AI Classification at Scale
 
@@ -31,7 +31,7 @@ AI doesn't replace your records managers — it amplifies them. When the AI's co
 
 ### Define Your Own Governance Framework
 
-GLS doesn't impose a one-size-fits-all taxonomy. You define:
+IGC doesn't impose a one-size-fits-all taxonomy. You define:
 
 - **Classification taxonomy** — hierarchical categories that match your records management scheme
 - **Sensitivity levels** — PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED (or whatever your organisation uses)
@@ -43,7 +43,7 @@ All configuration is runtime-editable. No redeployment needed. Non-technical sta
 
 ### Google Drive Integration
 
-Classify documents **where they already live**. Connect your Google Drive, browse folders, and select files for classification. Documents stay in Drive — GLS reads them, classifies them, and applies governance metadata without moving or copying anything.
+Classify documents **where they already live**. Connect your Google Drive, browse folders, and select files for classification. Documents stay in Drive — IGC reads them, classifies them, and applies governance metadata without moving or copying anything.
 
 ### Real-Time Monitoring & Operations
 
@@ -118,16 +118,16 @@ http://localhost:15672        # RabbitMQ admin (guest / guest)
 http://localhost:9001         # MinIO console
 ```
 
-The doc-processor and governance-enforcer modules used to ship as separate containers; they are now bundled into the `api` container (per `gls-app-assembly`'s startup wiring). New v2 services arrive as commented-out placeholders in `docker-compose.yml` — uncomment per phase.
+The doc-processor and governance-enforcer modules used to ship as separate containers; they are now bundled into the `api` container (per `igc-app-assembly`'s startup wiring). New v2 services arrive as commented-out placeholders in `docker-compose.yml` — uncomment per phase.
 
 ## Local Development
 
 ```bash
 # Backend
-cd backend && ./mvnw compile -DskipTests -pl gls-app-assembly -am
+cd backend && ./mvnw compile -DskipTests -pl igc-app-assembly -am
 
 # Backend tests (per module, fast)
-cd backend && ./mvnw -pl gls-platform-audit,gls-platform-config -am test
+cd backend && ./mvnw -pl igc-platform-audit,igc-platform-config -am test
 
 # Frontend
 cd web && npm install && npm run dev
@@ -140,8 +140,8 @@ The architecture is contract-first: every service-to-service interface is declar
 
 ### Substrate libraries
 
-- **`gls-platform-audit`** — outbox-pattern audit emitter, schema-validating, with the outbox-to-Rabbit relay. Single dependency every JVM service imports for audit traffic. See `backend/gls-platform-audit/README.md`.
-- **`gls-platform-config`** — change-driven config-cache primitive. Replaces the previous Caffeine TTL pattern; per-replica in-memory cache, invalidated via the `gls.config.changed` Rabbit channel. See `backend/gls-platform-config/README.md`.
+- **`igc-platform-audit`** — outbox-pattern audit emitter, schema-validating, with the outbox-to-Rabbit relay. Single dependency every JVM service imports for audit traffic. See `backend/igc-platform-audit/README.md`.
+- **`igc-platform-config`** — change-driven config-cache primitive. Replaces the previous Caffeine TTL pattern; per-replica in-memory cache, invalidated via the `igc.config.changed` Rabbit channel. See `backend/igc-platform-config/README.md`.
 
 ### v2 progress
 

@@ -5,7 +5,7 @@ lifecycle: forward
 
 # `contracts/extraction/`
 
-OpenAPI 3.1.1 spec for `gls-extraction-tika` — the Phase 0.5 reference service. Synchronous text extraction; first per-service contract in the v2 cutover, and the cloneable pattern future services copy.
+OpenAPI 3.1.1 spec for `igc-extraction-tika` — the Phase 0.5 reference service. Synchronous text extraction; first per-service contract in the v2 cutover, and the cloneable pattern future services copy.
 
 ## Layout
 

@@ -3,7 +3,7 @@ title: audit-collector
 lifecycle: forward
 ---
 
-# `gls-audit-collector` contract
+# `igc-audit-collector` contract
 
 The audit collector consumes from `audit.tier1.{eventType}` and
 `audit.tier2.{eventType}` (declared in `contracts/audit/asyncapi.yaml`)

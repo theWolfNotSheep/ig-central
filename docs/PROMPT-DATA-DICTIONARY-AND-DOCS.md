@@ -60,7 +60,7 @@ At the end, include an **Entity Relationship Summary** showing the full object g
 
 ### 2. Generate a Lucidchart-Importable ERD
 
-From the data dictionary you just created, generate a draw.io XML file at `docs/gls-erd.drawio` containing:
+From the data dictionary you just created, generate a draw.io XML file at `docs/igc-erd.drawio` containing:
 
 - **Every entity** as a colour-coded rounded rectangle showing collection name (bold) and class name (italic)
 - **Colour-code by domain** — use distinct fill colours to visually group related entities (e.g. blue for core domain, green for governance, orange for pipeline, purple for auth, etc.)

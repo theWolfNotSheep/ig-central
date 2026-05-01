@@ -21,7 +21,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `policy.schema.json` — POLICY block content (Phase 1.8 / CSV #35). Carries post-classification policy for a category: `requiredScans[]` (PII / PHI / PCI / CUSTOM scans), `metadataSchemaIds[]` (extraction schemas), `governancePolicyIds[]` (storage / retention / access enforcement). Optional `conditions.bySensitivity[]` for per-sensitivity overrides (e.g. RESTRICTED docs needing stricter scans than the category default).
-- `BlockType.POLICY` added to `gls-governance.PipelineBlock` so the engine + admin UI can identify POLICY blocks distinctly from PROMPT / ROUTER / BERT_CLASSIFIER / etc.
+- `BlockType.POLICY` added to `igc-governance.PipelineBlock` so the engine + admin UI can identify POLICY blocks distinctly from PROMPT / ROUTER / BERT_CLASSIFIER / etc.
 
 ## [0.3.0] — 2026-04-29
 

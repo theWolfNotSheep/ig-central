@@ -5,9 +5,9 @@ lifecycle: forward
 
 # ig-central service template
 
-The cloneable pattern for v2 services. `gls-extraction-tika` (Phase 0.5 reference implementation) was the first instance; this document is the generic version. **Read it before starting a new service Maven module.**
+The cloneable pattern for v2 services. `igc-extraction-tika` (Phase 0.5 reference implementation) was the first instance; this document is the generic version. **Read it before starting a new service Maven module.**
 
-The pattern is contract-first, audit-aware, idempotent, and built around three substrate libraries (`gls-platform-audit`, `gls-platform-config`, generated OpenAPI stubs). It also documents the surprises that bit the reference implementation, so the next service skips them.
+The pattern is contract-first, audit-aware, idempotent, and built around three substrate libraries (`igc-platform-audit`, `igc-platform-config`, generated OpenAPI stubs). It also documents the surprises that bit the reference implementation, so the next service skips them.
 
 ## What "a v2 service" means
 
@@ -16,20 +16,20 @@ A v2 service is a Spring Boot app that:
 1. Declares its HTTP surface in an OpenAPI 3.1.1 spec under `contracts/<service>/openapi.yaml`.
 2. Generates server interfaces + model records via `openapi-generator-maven-plugin`.
 3. Implements those interfaces in a `@RestController`.
-4. Emits Tier 2 audit events for every request via `gls-platform-audit`.
+4. Emits Tier 2 audit events for every request via `igc-platform-audit`.
 5. Idempotency on the relevant request key (CSV #16) backed by Mongo with a TTL index.
 6. Surfaces errors as RFC 7807 with concrete `code` extensions.
 7. Ships as its own container with a `HEALTHCHECK`.
 
-The reference is `gls-extraction-tika` — copy from there and adapt.
+The reference is `igc-extraction-tika` — copy from there and adapt.
 
 ## Bring-up checklist
 
 In rough chronological order:
 
 1. **Contract first.** Author `contracts/<service>/openapi.yaml` referencing `_shared/`. `VERSION` 0.1.0; `CHANGELOG.md`; `README.md`. **No code yet.**
-2. **Add the Maven module.** New `backend/<service>/pom.xml` with parent ref. Add to the reactor in `backend/pom.xml` and to the BOM in `backend/bom/pom.xml` (with a fresh `gls.<service>.version` per-deployable property — see "Independent Deployable Versions" in `CLAUDE.md`).
-3. **Wire the generator.** Add `openapi-generator-maven-plugin` to the new pom with the same config options used in `gls-extraction-tika` (`interfaceOnly=true`, `useSpringBoot3=true`, `useJakartaEe=true`, `skipDefaultInterface=true`, `openApiNullable=false`, `useTags=true`). `inputSpec` points at the contract; `apiPackage` / `modelPackage` follow the `co.uk.wolfnotsheep.<domain>.api` / `.model` convention.
+2. **Add the Maven module.** New `backend/<service>/pom.xml` with parent ref. Add to the reactor in `backend/pom.xml` and to the BOM in `backend/bom/pom.xml` (with a fresh `igc.<service>.version` per-deployable property — see "Independent Deployable Versions" in `CLAUDE.md`).
+3. **Wire the generator.** Add `openapi-generator-maven-plugin` to the new pom with the same config options used in `igc-extraction-tika` (`interfaceOnly=true`, `useSpringBoot3=true`, `useJakartaEe=true`, `skipDefaultInterface=true`, `openApiNullable=false`, `useTags=true`). `inputSpec` points at the contract; `apiPackage` / `modelPackage` follow the `co.uk.wolfnotsheep.<domain>.api` / `.model` convention.
 4. **Write the parser / source / sink layers as plain services.** Decouple them from the controller via interfaces so the controller is unit-testable against fakes.
 5. **Implement the generated `*Api` interface in a `@RestController`.** This is where the orchestration lives. Wrap the work in a try/catch that emits `<DOMAIN>_FAILED` audit events and rethrows.
 6. **Add a `MetaController implements MetaApi`** for `GET /v1/capabilities` and `GET /actuator/health`.
@@ -41,7 +41,7 @@ In rough chronological order:
 
 ## Substrate use
 
-### Audit (`gls-platform-audit`)
+### Audit (`igc-platform-audit`)
 
 Every service emits Tier 2 audit events on success and failure:
 
@@ -58,11 +58,11 @@ auditEmitter.emit(<Domain>Events.failed(serviceName, version, instance,
         nodeRunId, traceparent, errorCode, cause.getMessage()));
 ```
 
-`<Domain>Events` is a pure factory living at `<package>.audit.<Domain>Events`. Tier 2 events don't chain (no `previousEventHash`) and don't carry a `retentionClass`. `eventId` is currently 26 uppercase hex chars from `UUID.randomUUID()` until the ULID utility lands in `gls-platform-audit`.
+`<Domain>Events` is a pure factory living at `<package>.audit.<Domain>Events`. Tier 2 events don't chain (no `previousEventHash`) and don't carry a `retentionClass`. `eventId` is currently 26 uppercase hex chars from `UUID.randomUUID()` until the ULID utility lands in `igc-platform-audit`.
 
-### Config cache (`gls-platform-config`)
+### Config cache (`igc-platform-config`)
 
-If the service caches governance reference data, use `ConfigCache<V>` and register it with `ConfigCacheRegistry` on construction. Mutations elsewhere (e.g. via Hub or admin UI) publish `gls.config.changed` events; the dispatcher routes them to the cache by `entityType`. **Do not roll a Caffeine TTL** — that's the previous pattern, replaced by the change-driven invalidation per CSV #30.
+If the service caches governance reference data, use `ConfigCache<V>` and register it with `ConfigCacheRegistry` on construction. Mutations elsewhere (e.g. via Hub or admin UI) publish `igc.config.changed` events; the dispatcher routes them to the cache by `entityType`. **Do not roll a Caffeine TTL** — that's the previous pattern, replaced by the change-driven invalidation per CSV #30.
 
 ### Generated stubs
 
@@ -84,15 +84,15 @@ CSV #16 mandates idempotent retries on the relevant request key (e.g. `nodeRunId
 
 ## Repo-root Docker build context
 
-Every service Dockerfile **must use the repo root as build context**, not `./backend/`. Reason: `gls-platform-audit`'s Maven build copies `contracts/audit/event-envelope.schema.json` into its jar via a build-time resource at `../../contracts/audit/`. With a `./backend/` context, Docker can't reach `contracts/`, the resource silently doesn't bundle, and the deployed jar's runtime schema validator fails on first emit.
+Every service Dockerfile **must use the repo root as build context**, not `./backend/`. Reason: `igc-platform-audit`'s Maven build copies `contracts/audit/event-envelope.schema.json` into its jar via a build-time resource at `../../contracts/audit/`. With a `./backend/` context, Docker can't reach `contracts/`, the resource silently doesn't bundle, and the deployed jar's runtime schema validator fails on first emit.
 
 Compose pattern:
 
 ```yaml
-gls-<service>:
+igc-<service>:
   build:
     context: .
-    dockerfile: backend/gls-<service>/Dockerfile
+    dockerfile: backend/igc-<service>/Dockerfile
 ```
 
 Inside the Dockerfile, `WORKDIR /workspace`, copy `backend/` and `contracts/`, then `cd /workspace/backend && ./mvnw …`.
@@ -160,7 +160,7 @@ when(repository.findById(any())).thenReturn(helper);
 
 ### `ConfigChangePublisher` needs spring-amqp on the test classpath
 
-Mockito instruments the class to mock it. Instantiation triggers loading of `org.springframework.amqp.AmqpException` (referenced through `ConfigChangePublisher`'s optional dep). If your service depends on `gls-platform-config` and tests mock `ConfigChangePublisher`, declare:
+Mockito instruments the class to mock it. Instantiation triggers loading of `org.springframework.amqp.AmqpException` (referenced through `ConfigChangePublisher`'s optional dep). If your service depends on `igc-platform-config` and tests mock `ConfigChangePublisher`, declare:
 
 ```xml
 <dependency>
@@ -179,5 +179,5 @@ Runtime is unaffected (services that need Rabbit pull it in via their own poms).
 - `version-2-implementation-plan.md` — the phased plan.
 - `version-2-implementation-log.md` — the running narrative.
 - `CLAUDE.md` — the rules.
-- `backend/gls-extraction-tika/` — the reference implementation.
+- `backend/igc-extraction-tika/` — the reference implementation.
 - `contracts/extraction/openapi.yaml` — the reference spec.

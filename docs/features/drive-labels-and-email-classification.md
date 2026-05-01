@@ -1,8 +1,8 @@
 # Plan: Google Drive Labels + Email Classification
 
-Two related features that extend GLS into the user's existing tools rather than asking them to upload everything into our system.
+Two related features that extend IGC into the user's existing tools rather than asking them to upload everything into our system.
 
-- **Feature 1 — Drive Labels:** push the GLS classification (category, sensitivity, retention) back to Google Drive as **native Drive Labels** so it shows up in the Drive UI, drives Drive's own search/filters, and survives outside GLS.
+- **Feature 1 — Drive Labels:** push the IGC classification (category, sensitivity, retention) back to Google Drive as **native Drive Labels** so it shows up in the Drive UI, drives Drive's own search/filters, and survives outside IGC.
 - **Feature 2 — Email Classification:** ingest emails from Gmail (and later other providers), classify the body as a document, and classify each attachment as a related document.
 
 Both features build on the existing storage-provider abstraction, the OAuth/ConnectedDrive flow, the document ingest pipeline, and the per-pipeline-node config UI.
@@ -12,8 +12,8 @@ Both features build on the existing storage-provider abstraction, the OAuth/Conn
 ## What's already in place (no need to rebuild)
 
 ### Drive
-- `ConnectedDrive` model with `accessToken`, `refreshToken`, `tokenExpiresAt`, `grantedScopes`, `hasWriteAccess()` — `gls-document/.../models/ConnectedDrive.java`
-- OAuth flow + callback at `DriveController.getAuthUrl()` / `handleCallback()` — `gls-app-assembly/.../controllers/drives/DriveController.java`
+- `ConnectedDrive` model with `accessToken`, `refreshToken`, `tokenExpiresAt`, `grantedScopes`, `hasWriteAccess()` — `igc-document/.../models/ConnectedDrive.java`
+- OAuth flow + callback at `DriveController.getAuthUrl()` / `handleCallback()` — `igc-app-assembly/.../controllers/drives/DriveController.java`
 - `GoogleDriveService` wraps `google-api-services-drive` v3 — list, browse folders, stream content, refresh tokens, `writeClassificationProperties()` (already writes `ig_central_*` custom file properties on terminal status)
 - `GoogleDriveWriteBackService` — `@Async` consumer triggered when a Drive doc reaches GOVERNANCE_APPLIED / REVIEW_REQUIRED / etc. Logs to `SystemErrorRepository` on failure.
 - `DocumentModel.storageProvider="GOOGLE_DRIVE"` + `externalStorageRef={driveId, fileId, ownerEmail, webViewLink}`
@@ -37,7 +37,7 @@ We keep the existing properties write-back as a fallback (works for any Google a
 
 ### Drive Labels primer
 
-- A **label** is a Workspace-admin-defined schema (e.g. "GLS Classification") with **fields** (e.g. `category`, `sensitivity`, `retention_until`).
+- A **label** is a Workspace-admin-defined schema (e.g. "IGC Classification") with **fields** (e.g. `category`, `sensitivity`, `retention_until`).
 - Labels live in the Workspace, not on individual files — admins create them once via Google's Label Manager.
 - The Drive Labels API lets you **apply** an instance of a label to a file with values for each field.
 - Required scope: `https://www.googleapis.com/auth/drive.labels` (read) + `https://www.googleapis.com/auth/drive` (apply via Drive API `modifyLabels`).
@@ -46,11 +46,11 @@ We keep the existing properties write-back as a fallback (works for any Google a
 ### Step-by-step plan
 
 #### Step 1 — Add Drive Labels API client
-- Add to `gls-app-assembly/pom.xml`: `google-api-services-drivelabels` (v2)
+- Add to `igc-app-assembly/pom.xml`: `google-api-services-drivelabels` (v2)
 - No new transitive auth — uses the same `Credential` we already build.
 
 #### Step 2 — Extend `ConnectedDrive` for label config
-- Add `defaultLabelId` (String) and `fieldMappings` (Map<String,String>) to `ConnectedDrive` — maps GLS classification keys (`category`, `sensitivity`, `retention_until`, `vital_record`, `legal_hold`) to the Workspace's label field IDs.
+- Add `defaultLabelId` (String) and `fieldMappings` (Map<String,String>) to `ConnectedDrive` — maps IGC classification keys (`category`, `sensitivity`, `retention_until`, `vital_record`, `legal_hold`) to the Workspace's label field IDs.
 - Optional: a discovery endpoint `/api/drives/{driveId}/labels` that lists available Workspace labels so the admin can pick one in the UI.
 - Re-prompt for OAuth consent if the new `drive.labels` scope isn't in `grantedScopes`.
 
@@ -77,7 +77,7 @@ We keep the existing properties write-back as a fallback (works for any Google a
 - New "Drive Labels" section showing:
   - Current `defaultLabelId` + label name (or "Not configured — using file properties only")
   - Button: **"Choose a Workspace label"** → modal lists labels from `listAvailableLabels`, lets admin pick one
-  - Field-mapping table — for each GLS field (category, sensitivity, retention_until, …) show a dropdown of label fields from the chosen label
+  - Field-mapping table — for each IGC field (category, sensitivity, retention_until, …) show a dropdown of label fields from the chosen label
 - Also surface in the document detail page: when a Drive-stored doc has been label-written, show "Label applied: ✓ {labelName}" with a link to open in Drive.
 
 #### Step 7 — Backfill for already-classified docs
@@ -87,7 +87,7 @@ We keep the existing properties write-back as a fallback (works for any Google a
 ### Out of scope (defer)
 - Multi-label support per file (one label per file is enough for v1)
 - Sharing-level enforcement based on labels (Google has DLP for this; we just emit the metadata)
-- Reading user-applied label changes back into GLS (one-way push only for v1)
+- Reading user-applied label changes back into IGC (one-way push only for v1)
 
 ---
 
@@ -102,7 +102,7 @@ This means **no new pipeline** is needed — the existing classification pipelin
 ### Step-by-step plan
 
 #### Step 1 — Add Gmail API client
-- `gls-app-assembly/pom.xml`: `google-api-services-gmail` (v1, latest revision).
+- `igc-app-assembly/pom.xml`: `google-api-services-gmail` (v1, latest revision).
 - Extend the existing Google OAuth flow to optionally request the `https://www.googleapis.com/auth/gmail.readonly` scope (or `gmail.modify` if we later want to apply Gmail labels back).
 
 #### Step 2 — New storage provider: `GMAIL`
@@ -194,15 +194,15 @@ OAuth callback paths (`/api/drives/google/callback`, `/api/auth/public/google/ca
 
 | File | Purpose |
 |---|---|
-| `gls-app-assembly/.../services/drives/GoogleDriveLabelsService.java` | Drive Labels API wrapper (list + apply) |
-| `gls-app-assembly/.../controllers/admin/DriveLabelConfigController.java` | List labels, save defaultLabelId + fieldMappings |
+| `igc-app-assembly/.../services/drives/GoogleDriveLabelsService.java` | Drive Labels API wrapper (list + apply) |
+| `igc-app-assembly/.../controllers/admin/DriveLabelConfigController.java` | List labels, save defaultLabelId + fieldMappings |
 | `web/src/app/(protected)/drives/[id]/labels/page.tsx` | Drive Labels config UI |
-| `gls-document/.../models/ConnectedAccount.java` (rename of ConnectedDrive) | Generic connected account, provider field |
-| `gls-document/.../models/EmailAttachment.java` | Record describing an email attachment for ingest |
-| `gls-app-assembly/.../services/mail/GmailService.java` | Gmail API wrapper |
-| `gls-app-assembly/.../services/mail/EmailIngestionService.java` | Ingest email + attachments as documents |
-| `gls-app-assembly/.../services/mail/GmailPollingScheduler.java` | `@Scheduled` poller driven by `gmailWatcher` node configs |
-| `gls-app-assembly/.../controllers/mailboxes/MailboxController.java` | OAuth + browse + manual import endpoints |
+| `igc-document/.../models/ConnectedAccount.java` (rename of ConnectedDrive) | Generic connected account, provider field |
+| `igc-document/.../models/EmailAttachment.java` | Record describing an email attachment for ingest |
+| `igc-app-assembly/.../services/mail/GmailService.java` | Gmail API wrapper |
+| `igc-app-assembly/.../services/mail/EmailIngestionService.java` | Ingest email + attachments as documents |
+| `igc-app-assembly/.../services/mail/GmailPollingScheduler.java` | `@Scheduled` poller driven by `gmailWatcher` node configs |
+| `igc-app-assembly/.../controllers/mailboxes/MailboxController.java` | OAuth + browse + manual import endpoints |
 | `web/src/app/(protected)/mailboxes/page.tsx` | Mailbox list + browse + import UI |
 | `web/src/components/document-viewer/EmailView.tsx` | Email-specific document viewer |
 
@@ -210,13 +210,13 @@ OAuth callback paths (`/api/drives/google/callback`, `/api/auth/public/google/ca
 
 | File | Change |
 |---|---|
-| `gls-app-assembly/pom.xml` | Add `google-api-services-drivelabels`, `google-api-services-gmail` |
-| `gls-document/.../models/DocumentModel.java` | Add `parentDocumentId`, `childDocumentIds` |
-| `gls-document/.../models/ConnectedDrive.java` | Add `defaultLabelId`, `fieldMappings`; or rename to ConnectedAccount |
-| `gls-app-assembly/.../services/drives/GoogleDriveService.java` | Use new labels service alongside properties |
-| `gls-app-assembly/.../services/drives/GoogleDriveWriteBackService.java` | Call labels write after properties write |
-| `gls-app-assembly/.../bootstrap/GovernanceDataSeeder.java` | Register `writeDriveLabel` + `gmailWatcher` node types; seed `EMAIL_BODY` / `EMAIL_ATTACHMENT` traits |
-| `gls-app-assembly/.../controllers/drives/DriveController.java` | Add `drive.labels` scope to OAuth request when admin enables it |
+| `igc-app-assembly/pom.xml` | Add `google-api-services-drivelabels`, `google-api-services-gmail` |
+| `igc-document/.../models/DocumentModel.java` | Add `parentDocumentId`, `childDocumentIds` |
+| `igc-document/.../models/ConnectedDrive.java` | Add `defaultLabelId`, `fieldMappings`; or rename to ConnectedAccount |
+| `igc-app-assembly/.../services/drives/GoogleDriveService.java` | Use new labels service alongside properties |
+| `igc-app-assembly/.../services/drives/GoogleDriveWriteBackService.java` | Call labels write after properties write |
+| `igc-app-assembly/.../bootstrap/GovernanceDataSeeder.java` | Register `writeDriveLabel` + `gmailWatcher` node types; seed `EMAIL_BODY` / `EMAIL_ATTACHMENT` traits |
+| `igc-app-assembly/.../controllers/drives/DriveController.java` | Add `drive.labels` scope to OAuth request when admin enables it |
 | `web/src/app/(protected)/help/help-content.ts` | Document the two features |
 
 ---
@@ -236,11 +236,11 @@ Both features share the OAuth + Google API client foundation, but neither blocks
 ## Verification
 
 **Drive Labels:**
-1. Workspace admin creates a "GLS Classification" label with fields `category`, `sensitivity`, `retention_until` in Google Admin → Drive → Labels.
-2. Connect drive in GLS, configure label mapping in `/drives/[id]/labels`.
+1. Workspace admin creates a "IGC Classification" label with fields `category`, `sensitivity`, `retention_until` in Google Admin → Drive → Labels.
+2. Connect drive in IGC, configure label mapping in `/drives/[id]/labels`.
 3. Classify a Drive doc → open in Drive → label appears in right-hand pane with correct values.
 4. Override classification in review queue → re-run write-back → label fields update.
-5. Drive search `labels:GLSClassification.sensitivity = "RESTRICTED"` returns the file.
+5. Drive search `labels:IGCClassification.sensitivity = "RESTRICTED"` returns the file.
 
 **Email:**
 1. Connect Gmail in `/mailboxes`.

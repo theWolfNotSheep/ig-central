@@ -1,7 +1,7 @@
-# Multi-stage build for gls-mcp-server (the mcp-server container).
+# Multi-stage build for igc-mcp-server (the mcp-server container).
 #
 # Build context: repo root, NOT ./backend/. See backend/Dockerfile for
-# the rationale (gls-platform-audit's bundled schema; per-service
+# the rationale (igc-platform-audit's bundled schema; per-service
 # OpenAPI generator runs).
 FROM eclipse-temurin:25-jdk AS build
 WORKDIR /workspace
@@ -11,36 +11,36 @@ COPY backend/mvnw backend/mvnw
 COPY backend/pom.xml backend/pom.xml
 COPY backend/bom/pom.xml backend/bom/pom.xml
 COPY backend/contracts-smoke/pom.xml backend/contracts-smoke/pom.xml
-COPY backend/gls-platform/pom.xml backend/gls-platform/pom.xml
-COPY backend/gls-platform-audit/pom.xml backend/gls-platform-audit/pom.xml
-COPY backend/gls-platform-config/pom.xml backend/gls-platform-config/pom.xml
-COPY backend/gls-governance/pom.xml backend/gls-governance/pom.xml
-COPY backend/gls-document/pom.xml backend/gls-document/pom.xml
-COPY backend/gls-document-processing/pom.xml backend/gls-document-processing/pom.xml
-COPY backend/gls-mcp-server/pom.xml backend/gls-mcp-server/pom.xml
-COPY backend/gls-llm-orchestration/pom.xml backend/gls-llm-orchestration/pom.xml
-COPY backend/gls-governance-enforcement/pom.xml backend/gls-governance-enforcement/pom.xml
-COPY backend/gls-app-assembly/pom.xml backend/gls-app-assembly/pom.xml
-COPY backend/gls-governance-hub/pom.xml backend/gls-governance-hub/pom.xml
-COPY backend/gls-governance-hub-app/pom.xml backend/gls-governance-hub-app/pom.xml
-COPY backend/gls-extraction-tika/pom.xml backend/gls-extraction-tika/pom.xml
+COPY backend/igc-platform/pom.xml backend/igc-platform/pom.xml
+COPY backend/igc-platform-audit/pom.xml backend/igc-platform-audit/pom.xml
+COPY backend/igc-platform-config/pom.xml backend/igc-platform-config/pom.xml
+COPY backend/igc-governance/pom.xml backend/igc-governance/pom.xml
+COPY backend/igc-document/pom.xml backend/igc-document/pom.xml
+COPY backend/igc-document-processing/pom.xml backend/igc-document-processing/pom.xml
+COPY backend/igc-mcp-server/pom.xml backend/igc-mcp-server/pom.xml
+COPY backend/igc-llm-orchestration/pom.xml backend/igc-llm-orchestration/pom.xml
+COPY backend/igc-governance-enforcement/pom.xml backend/igc-governance-enforcement/pom.xml
+COPY backend/igc-app-assembly/pom.xml backend/igc-app-assembly/pom.xml
+COPY backend/igc-governance-hub/pom.xml backend/igc-governance-hub/pom.xml
+COPY backend/igc-governance-hub-app/pom.xml backend/igc-governance-hub-app/pom.xml
+COPY backend/igc-extraction-tika/pom.xml backend/igc-extraction-tika/pom.xml
 
 WORKDIR /workspace/backend
-RUN ./mvnw dependency:go-offline -DskipTests -B -pl gls-mcp-server -am || true
+RUN ./mvnw dependency:go-offline -DskipTests -B -pl igc-mcp-server -am || true
 
 WORKDIR /workspace
 COPY backend backend
 COPY contracts contracts
 
 WORKDIR /workspace/backend
-RUN ./mvnw -DskipTests package -pl gls-mcp-server -am -o \
-    || ./mvnw -DskipTests package -pl gls-mcp-server -am
+RUN ./mvnw -DskipTests package -pl igc-mcp-server -am -o \
+    || ./mvnw -DskipTests package -pl igc-mcp-server -am
 
 FROM eclipse-temurin:25-jre
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=build /workspace/backend/gls-mcp-server/target/*.jar /app/app.jar
+COPY --from=build /workspace/backend/igc-mcp-server/target/*.jar /app/app.jar
 EXPOSE 8081
 CMD ["java","-jar","/app/app.jar"]

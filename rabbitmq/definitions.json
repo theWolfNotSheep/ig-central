@@ -3,7 +3,7 @@
     {
       "vhost": "/",
       "name": "processed-queue-ttl",
-      "pattern": "gls\\.documents\\.processed",
+      "pattern": "igc\\.documents\\.processed",
       "apply-to": "queues",
       "definition": {
         "message-ttl": 3600000

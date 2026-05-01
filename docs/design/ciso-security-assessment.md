@@ -131,7 +131,7 @@
 | Full document text to Anthropic | Up to 100,000 chars of raw text sent externally. If the document contains confidential, privileged, or classified content, it leaves the perimeter. | `ClassificationPromptBuilder.java` |
 | No prompt injection mitigation | Document text is string-interpolated via `.replace("{extractedText}", ...)` with no escaping or structural separation. A malicious document could manipulate classification. | `ClassificationPromptBuilder.java` |
 | No content filtering pre-send | No check for sensitivity level, classification, or document type before sending to external LLM. | Pipeline services |
-| LLM worker has `anyRequest().permitAll()` | The LLM orchestration service has no authentication. If network segmentation fails, any caller can trigger classification. | `SecurityConfig.java` (gls-llm-orchestration) |
+| LLM worker has `anyRequest().permitAll()` | The LLM orchestration service has no authentication. If network segmentation fails, any caller can trigger classification. | `SecurityConfig.java` (igc-llm-orchestration) |
 
 **Remediation:**
 - Add a pre-send PII redaction step using the existing regex scanner
@@ -226,7 +226,7 @@ The following ports are bound to `0.0.0.0` (all host interfaces):
 | `9090` | Prometheus | **None** | Full metrics exposure |
 | `3003` | Grafana | `admin/admin` hardcoded | Dashboard access, potential data source queries |
 
-All services share a single flat Docker network (`gls`). No network isolation between application services, data stores, and monitoring.
+All services share a single flat Docker network (`igc`). No network isolation between application services, data stores, and monitoring.
 
 **Remediation:**
 - Bind management ports to `127.0.0.1` only in production

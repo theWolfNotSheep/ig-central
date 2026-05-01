@@ -2,14 +2,14 @@
 BERT Classifier Sidecar Service
 
 A FastAPI service that runs BERT-based document classification.
-Designed to sit alongside the GLS Java backend as a pipeline accelerator.
+Designed to sit alongside the IGC Java backend as a pipeline accelerator.
 
 Supports two modes:
 1. ONNX Runtime inference (production) — fast, CPU-optimized
 2. HuggingFace transformers pipeline (development/fine-tuning)
 
 The service loads a label map from a JSON file that maps model output
-indices to GLS taxonomy categories. This file is generated during
+indices to IGC taxonomy categories. This file is generated during
 fine-tuning and must be mounted or baked into the container.
 """
 
@@ -44,7 +44,7 @@ label_map: dict[int, dict] = {}  # idx -> {category_id, category_name, sensitivi
 
 
 def load_label_map() -> dict[int, dict]:
-    """Load the label map that maps model output indices to GLS categories."""
+    """Load the label map that maps model output indices to IGC categories."""
     path = Path(LABEL_MAP_PATH)
     if not path.exists():
         logger.warning("No label_map.json found at %s — using demo labels", path)
@@ -173,7 +173,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="GLS BERT Classifier",
+    title="IGC BERT Classifier",
     description="Document classification sidecar using fine-tuned BERT models",
     version="1.0.0",
     lifespan=lifespan,
@@ -299,7 +299,7 @@ async def classify(request: ClassifyRequest):
 
     inference_ms = int((time.time() - start) * 1000)
 
-    # Map prediction to GLS category
+    # Map prediction to IGC category
     label_info = label_map.get(predicted_idx, {})
     category_id = label_info.get("category_id")
     category_name = label_info.get("category_name", f"Unknown ({predicted_idx})")

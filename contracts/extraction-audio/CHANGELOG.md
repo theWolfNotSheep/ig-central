@@ -8,7 +8,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `openapi.yaml` — initial OpenAPI 3.1.1 declaration of `gls-extraction-audio`. Four operations:
+- `openapi.yaml` — initial OpenAPI 3.1.1 declaration of `igc-extraction-audio`. Four operations:
   - `POST /v1/extract` — sync (200) by default; with `Prefer: respond-async` returns 202 + `Location: /v1/jobs/{nodeRunId}` (CSV #13 / #47). Pluggable transcription backend per CSV #46.
   - `GET /v1/jobs/{nodeRunId}` — polls async transcription jobs.
   - `GET /v1/capabilities` — capability advertisement per CSV #21.

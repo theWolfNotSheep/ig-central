@@ -11,7 +11,7 @@ x-logging: &default-logging
 services:
   cloudflared:
     image: cloudflare/cloudflared:latest
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-cloudflared
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
     depends_on:
@@ -19,11 +19,11 @@ services:
         condition: service_healthy
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   mongo:
     image: mongo:7
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-mongo
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-mongo
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
@@ -38,11 +38,11 @@ services:
       start_period: 20s
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-minio
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -51,8 +51,8 @@ services:
     volumes:
       - ./data/minio:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9006:9000"
+      - "9007:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 15s
@@ -61,11 +61,11 @@ services:
       start_period: 20s
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-elasticsearch
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-elasticsearch
     restart: unless-stopped
     environment:
       - discovery.type=single-node
@@ -74,7 +74,7 @@ services:
     volumes:
       - ./data/elasticsearch:/usr/share/elasticsearch/data
     ports:
-      - "9200:9200"
+      - "9203:9200"
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9200/_cluster/health"]
       interval: 15s
@@ -83,11 +83,11 @@ services:
       start_period: 30s
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   rabbitmq:
     image: rabbitmq:4-management-alpine
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-rabbitmq
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-rabbitmq
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
@@ -98,7 +98,7 @@ services:
     volumes:
       - ./data/rabbitmq:/var/lib/rabbitmq
     ports:
-      - "15672:15672"
+      - "15675:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 15s
@@ -107,10 +107,10 @@ services:
       start_period: 30s
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   bert-classifier:
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-bert-classifier
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-bert-classifier
     restart: unless-stopped
     build:
       context: ./bert-classifier
@@ -134,14 +134,14 @@ services:
       start_period: 30s
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   api:
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-api
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-api
     restart: unless-stopped
     build:
       # Repo-root context so the build can reach contracts/ —
-      # gls-platform-audit bundles the audit envelope schema from
+      # igc-platform-audit bundles the audit envelope schema from
       # contracts/audit/ at build time, and that resource path goes up
       # two levels from the module's pom.
       context: .
@@ -170,7 +170,7 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
+      MINIO_BUCKET: ${MINIO_BUCKET:-igc-documents}
       SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
       # Google OAuth, Hub connection, and LLM config come from Settings UI (app_config in MongoDB)
       # These are fallback defaults only
@@ -201,10 +201,10 @@ services:
       start_period: 120s
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   mcp-server:
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-mcp-server
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-mcp-server
     restart: unless-stopped
     build:
       context: .
@@ -225,10 +225,10 @@ services:
       start_period: 60s
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   llm-worker:
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-llm-worker
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-llm-orchestration
     restart: unless-stopped
     build:
       context: .
@@ -250,7 +250,7 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
+      MINIO_BUCKET: ${MINIO_BUCKET:-igc-documents}
     depends_on:
       mongo:
         condition: service_healthy
@@ -268,10 +268,10 @@ services:
       start_period: 60s
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   web:
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-web
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-web
     restart: unless-stopped
     build:
       context: ./web
@@ -294,14 +294,14 @@ services:
       start_period: 30s
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   nginx:
     image: nginx:alpine
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-nginx
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-nginx
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "8090:80"
     depends_on:
       web:
         condition: service_healthy
@@ -318,7 +318,7 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
     logging: *default-logging
     networks:
-      - gls
+      - igc
 
   # ── Governance Hub ──────────────────────────────────────
   # The hub runs as a standalone stack on its own network.
@@ -326,21 +326,21 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-prometheus
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-prometheus
     restart: unless-stopped
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - "9090:9090"
+      - "9091:9090"
     networks:
-      - gls
+      - igc
 
   grafana:
     image: grafana/grafana:latest
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-grafana
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-grafana
     restart: unless-stopped
     ports:
-      - "3003:3000"
+      - "3004:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     volumes:
@@ -350,28 +350,28 @@ services:
     depends_on:
       - prometheus
     networks:
-      - gls
+      - igc
 
   # ====================================================================
   # v2 Phase 1+ services — placeholders.
   #
   # These are the services that land as the v2 cutover progresses. Each
   # block stays commented out until its phase begins; uncomment + fill in
-  # when the corresponding `gls-<service>/` Maven module + Dockerfile
+  # when the corresponding `igc-<service>/` Maven module + Dockerfile
   # exists. The shape below is the cloneable pattern from
   # `docs/service-template.md` (lands with Phase 0.5 reference impl).
   # See `version-2-implementation-plan.md` for phase ownership.
   # ====================================================================
 
-  # gls-extraction-tika:                                  # Phase 0.5
-  #   container_name: ${COMPOSE_PROJECT_NAME:-gls}-extraction-tika
+  # igc-extraction-tika:                                  # Phase 0.5
+  #   container_name: ${COMPOSE_PROJECT_NAME:-igc}-extraction-tika
   #   restart: unless-stopped
   #   build:
   #     # Repo-root context so the build can reach contracts/ — the
-  #     # gls-platform-audit Maven module bundles the audit envelope
+  #     # igc-platform-audit Maven module bundles the audit envelope
   #     # schema from contracts/audit/ at build time.
   #     context: .
-  #     dockerfile: backend/gls-extraction-tika/Dockerfile
+  #     dockerfile: backend/igc-extraction-tika/Dockerfile
   #   environment:
   #     SPRING_PROFILES_ACTIVE: docker
   #     MINIO_ENDPOINT: http://minio:9000
@@ -382,203 +382,212 @@ services:
   #   depends_on:
   #     minio: { condition: service_healthy }
   #   logging: *default-logging
-  #   networks: [gls]
+  #   networks: [igc]
 
-  gls-extraction-archive:                                 # Phase 1.1
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-extraction-archive
+  igc-extraction-archive:                                 # Phase 1.1
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-extraction-archive
     restart: unless-stopped
     build:
       # Repo-root context (see Tika block above) so contracts/ is reachable.
       context: .
-      dockerfile: backend/gls-extraction-archive/Dockerfile
+      dockerfile: backend/igc-extraction-archive/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      GLS_ARCHIVE_SINK_BUCKET: ${GLS_ARCHIVE_SINK_BUCKET:-gls-archive-children}
+      IGC_ARCHIVE_SINK_BUCKET: ${IGC_ARCHIVE_SINK_BUCKET:-igc-archive-children}
     depends_on:
       mongo: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       minio: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  gls-extraction-ocr:                                     # Phase 1.1
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-extraction-ocr
+  igc-extraction-ocr:                                     # Phase 1.1
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-extraction-ocr
     restart: unless-stopped
     build:
       # Repo-root context. OCR_LANGUAGES build-arg can be set via
       # `docker compose build --build-arg OCR_LANGUAGES="eng fra deu"`.
       context: .
-      dockerfile: backend/gls-extraction-ocr/Dockerfile
+      dockerfile: backend/igc-extraction-ocr/Dockerfile
       args:
         OCR_LANGUAGES: ${OCR_LANGUAGES:-eng}
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      GLS_OCR_SINK_BUCKET: ${GLS_OCR_SINK_BUCKET:-gls-ocr-text}
+      IGC_OCR_SINK_BUCKET: ${IGC_OCR_SINK_BUCKET:-igc-ocr-text}
     depends_on:
       mongo: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       minio: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  gls-extraction-audio:                                   # Phase 1.1
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-extraction-audio
+  igc-extraction-audio:                                   # Phase 1.1
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-extraction-audio
     restart: unless-stopped
     build:
       context: .
-      dockerfile: backend/gls-extraction-audio/Dockerfile
+      dockerfile: backend/igc-extraction-audio/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      GLS_AUDIO_PROVIDER: ${GLS_AUDIO_PROVIDER:-none}
+      IGC_AUDIO_PROVIDER: ${IGC_AUDIO_PROVIDER:-none}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      GLS_AUDIO_SINK_BUCKET: ${GLS_AUDIO_SINK_BUCKET:-gls-audio-text}
+      IGC_AUDIO_SINK_BUCKET: ${IGC_AUDIO_SINK_BUCKET:-igc-audio-text}
     depends_on:
       mongo: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
       minio: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  gls-classifier-router:                                  # Phase 1.2
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-classifier-router
+  igc-classifier-router:                                  # Phase 1.2
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-classifier-router
     restart: unless-stopped
     build:
       context: .
-      dockerfile: backend/gls-classifier-router/Dockerfile
+      dockerfile: backend/igc-classifier-router/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
       SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       # Cascade tier feature flags. Default off — flip to true once
       # the targeted worker is reachable.
-      GLS_ROUTER_BERT_ENABLED: ${GLS_ROUTER_BERT_ENABLED:-false}
-      GLS_ROUTER_BERT_URL: http://gls-bert-inference:8094
-      GLS_ROUTER_SLM_ENABLED: ${GLS_ROUTER_SLM_ENABLED:-false}
-      GLS_ROUTER_SLM_URL: http://gls-slm-worker:8095
-      # Legacy Rabbit-based LLM dispatch (gls-llm-orchestration).
-      # Phase 1.6 PR3 introduced an HTTP path; flip GLS_ROUTER_LLM_HTTP_ENABLED
+      IGC_ROUTER_BERT_ENABLED: ${IGC_ROUTER_BERT_ENABLED:-false}
+      IGC_ROUTER_BERT_URL: http://igc-bert-inference:8094
+      IGC_ROUTER_SLM_ENABLED: ${IGC_ROUTER_SLM_ENABLED:-false}
+      IGC_ROUTER_SLM_URL: http://igc-slm-worker:8095
+      # Legacy Rabbit-based LLM dispatch (igc-llm-orchestration).
+      # Phase 1.6 PR3 introduced an HTTP path; flip IGC_ROUTER_LLM_HTTP_ENABLED
       # to use it. When both are on, HTTP wins.
-      GLS_ROUTER_LLM_ENABLED: ${GLS_ROUTER_LLM_ENABLED:-false}
-      GLS_ROUTER_LLM_HTTP_ENABLED: ${GLS_ROUTER_LLM_HTTP_ENABLED:-false}
-      GLS_ROUTER_LLM_HTTP_URL: http://gls-llm-worker:8096
+      IGC_ROUTER_LLM_ENABLED: ${IGC_ROUTER_LLM_ENABLED:-false}
+      IGC_ROUTER_LLM_HTTP_ENABLED: ${IGC_ROUTER_LLM_HTTP_ENABLED:-false}
+      IGC_ROUTER_LLM_HTTP_URL: http://igc-llm-worker:8096
     depends_on:
       mongo: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  gls-bert-inference:                                     # Phase 1.4
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-bert-inference
+  igc-bert-inference:                                     # Phase 1.4
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-bert-inference
     restart: unless-stopped
     build:
       context: .
-      dockerfile: backend/gls-bert-inference/Dockerfile
+      dockerfile: backend/igc-bert-inference/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
+      # platform-audit auto-configures Mongo whenever MongoTemplate is on
+      # the classpath; bert-inference doesn't use it but Spring still
+      # tries to connect on boot. Point at the compose-network mongo.
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       # Default: stub backend that returns MODEL_NOT_LOADED 503.
-      # Flip GLS_BERT_ENGINE to `djl` once the trainer publishes its
+      # Flip IGC_BERT_ENGINE to `djl` once the trainer publishes its
       # first ONNX artefact + the engine wires in.
-      GLS_BERT_ENGINE: ${GLS_BERT_ENGINE:-none}
+      IGC_BERT_ENGINE: ${IGC_BERT_ENGINE:-none}
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      GLS_BERT_ARTIFACTS_BUCKET: ${GLS_BERT_ARTIFACTS_BUCKET:-gls-bert-artifacts}
+      IGC_BERT_ARTIFACTS_BUCKET: ${IGC_BERT_ARTIFACTS_BUCKET:-igc-bert-artifacts}
     depends_on:
+      mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
       minio: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  gls-slm-worker:                                         # Phase 1.5
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-slm-worker
+  igc-slm-worker:                                         # Phase 1.5
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-slm-worker
     restart: unless-stopped
     build:
       context: .
-      dockerfile: backend/gls-slm-worker/Dockerfile
+      dockerfile: backend/igc-slm-worker/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       # Default: stub backend that returns SLM_NOT_CONFIGURED 503.
-      # Flip GLS_SLM_BACKEND to `anthropic` (with ANTHROPIC_API_KEY)
+      # Flip IGC_SLM_BACKEND to `anthropic` (with ANTHROPIC_API_KEY)
       # or `ollama` (with OLLAMA_BASE_URL) to enable real classification.
-      GLS_SLM_BACKEND: ${GLS_SLM_BACKEND:-none}
+      IGC_SLM_BACKEND: ${IGC_SLM_BACKEND:-none}
       SPRING_AI_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       SPRING_AI_OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      GLS_SLM_ANTHROPIC_MODEL: ${GLS_SLM_ANTHROPIC_MODEL:-claude-haiku-4-5}
-      GLS_SLM_OLLAMA_MODEL: ${GLS_SLM_OLLAMA_MODEL:-llama3.1:8b}
-      GLS_MCP_SERVER_URL: http://mcp-server:8081
+      IGC_SLM_ANTHROPIC_MODEL: ${IGC_SLM_ANTHROPIC_MODEL:-claude-haiku-4-5}
+      IGC_SLM_OLLAMA_MODEL: ${IGC_SLM_OLLAMA_MODEL:-llama3.1:8b}
+      IGC_MCP_SERVER_URL: http://mcp-server:8081
     depends_on:
       mongo: { condition: service_healthy }
       mcp-server: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  gls-llm-worker:                                         # Phase 1.6
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-llm-worker
+  igc-llm-worker:                                         # Phase 1.6
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-llm-worker
     restart: unless-stopped
     build:
       context: .
-      dockerfile: backend/gls-llm-worker/Dockerfile
+      dockerfile: backend/igc-llm-worker/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       # Default: stub backend that returns LLM_NOT_CONFIGURED 503.
-      # Flip GLS_LLM_BACKEND to `anthropic` (with ANTHROPIC_API_KEY)
+      # Flip IGC_LLM_BACKEND to `anthropic` (with ANTHROPIC_API_KEY)
       # or `ollama` (with OLLAMA_BASE_URL) to enable real classification.
-      GLS_LLM_BACKEND: ${GLS_LLM_BACKEND:-none}
+      IGC_LLM_BACKEND: ${IGC_LLM_BACKEND:-none}
       SPRING_AI_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       SPRING_AI_OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      GLS_LLM_ANTHROPIC_MODEL: ${GLS_LLM_ANTHROPIC_MODEL:-claude-sonnet-4-5}
-      GLS_LLM_OLLAMA_MODEL: ${GLS_LLM_OLLAMA_MODEL:-qwen2.5:32b}
-      GLS_MCP_SERVER_URL: http://mcp-server:8081
+      IGC_LLM_ANTHROPIC_MODEL: ${IGC_LLM_ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      IGC_LLM_OLLAMA_MODEL: ${IGC_LLM_OLLAMA_MODEL:-qwen2.5:32b}
+      IGC_MCP_SERVER_URL: http://mcp-server:8081
       # Cost budget + rate limit defaults are 0 (disabled). Tune via
-      # GLS_LLM_BUDGET_DAILY_TOKEN_CAP / GLS_LLM_RATE_LIMIT_PERMITS.
-      GLS_LLM_BUDGET_DAILY_TOKEN_CAP: ${GLS_LLM_BUDGET_DAILY_TOKEN_CAP:-0}
-      GLS_LLM_RATE_LIMIT_PERMITS: ${GLS_LLM_RATE_LIMIT_PERMITS:-0}
-      GLS_LLM_RATE_LIMIT_WAIT_MS: ${GLS_LLM_RATE_LIMIT_WAIT_MS:-0}
+      # IGC_LLM_BUDGET_DAILY_TOKEN_CAP / IGC_LLM_RATE_LIMIT_PERMITS.
+      IGC_LLM_BUDGET_DAILY_TOKEN_CAP: ${IGC_LLM_BUDGET_DAILY_TOKEN_CAP:-0}
+      IGC_LLM_RATE_LIMIT_PERMITS: ${IGC_LLM_RATE_LIMIT_PERMITS:-0}
+      IGC_LLM_RATE_LIMIT_WAIT_MS: ${IGC_LLM_RATE_LIMIT_WAIT_MS:-0}
     depends_on:
       mongo: { condition: service_healthy }
       mcp-server: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  gls-enforcement-worker:                                 # Phase 1.10
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-enforcement-worker
+  igc-enforcement-worker:                                 # Phase 1.10
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-enforcement-worker
     restart: unless-stopped
     build:
       context: .
-      dockerfile: backend/gls-governance-enforcement/Dockerfile
+      dockerfile: backend/igc-governance-enforcement/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
+      MINIO_BUCKET: ${MINIO_BUCKET:-igc-documents}
       # The HTTP worker is the new entry point (Phase 1.10 PR3 will
       # cut the orchestrator over to it). Disable the legacy in-process
       # Rabbit consumer in this container so it doesn't double-process
@@ -591,17 +600,17 @@ services:
       rabbitmq: { condition: service_healthy }
       minio: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  gls-indexing-worker:                                    # Phase 1.11
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-indexing-worker
+  igc-indexing-worker:                                    # Phase 1.11
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-indexing-worker
     restart: unless-stopped
     build:
       context: .
-      dockerfile: backend/gls-indexing-worker/Dockerfile
+      dockerfile: backend/igc-indexing-worker/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
@@ -610,17 +619,17 @@ services:
       rabbitmq: { condition: service_healthy }
       elasticsearch: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  gls-audit-collector:                                    # Phase 1.12
-    container_name: ${COMPOSE_PROJECT_NAME:-gls}-audit-collector
+  igc-audit-collector:                                    # Phase 1.12
+    container_name: ${COMPOSE_PROJECT_NAME:-igc}-audit-collector
     restart: unless-stopped
     build:
       context: .
-      dockerfile: backend/gls-audit-collector/Dockerfile
+      dockerfile: backend/igc-audit-collector/Dockerfile
     environment:
       SPRING_PROFILES_ACTIVE: docker
-      SPRING_DATA_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
       SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
@@ -628,21 +637,21 @@ services:
       # Flip to `es` once the audit_tier2_events ES index is wired
       # for ILM in production. Mongo remains the safe default until
       # ES indexing is observed.
-      GLS_AUDIT_TIER2_BACKEND: ${GLS_AUDIT_TIER2_BACKEND:-mongo}
+      IGC_AUDIT_TIER2_BACKEND: ${IGC_AUDIT_TIER2_BACKEND:-mongo}
     depends_on:
       mongo: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
     logging: *default-logging
-    networks: [gls]
+    networks: [igc]
 
-  # (gls-classifier-router placeholder removed — active block is below.)
+  # (igc-classifier-router placeholder removed — active block is below.)
 
-  # gls-audit-collector:                                  # Phase 1.12 / 0.7 follow-up
-  #   container_name: ${COMPOSE_PROJECT_NAME:-gls}-audit-collector
+  # igc-audit-collector:                                  # Phase 1.12 / 0.7 follow-up
+  #   container_name: ${COMPOSE_PROJECT_NAME:-igc}-audit-collector
   #   restart: unless-stopped
   #   build:
   #     context: ./backend
-  #     dockerfile: gls-audit-collector/Dockerfile
+  #     dockerfile: igc-audit-collector/Dockerfile
   #   environment:
   #     SPRING_PROFILES_ACTIVE: docker
   #     SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
@@ -652,11 +661,11 @@ services:
   #     mongo: { condition: service_healthy }
   #     rabbitmq: { condition: service_healthy }
   #   logging: *default-logging
-  #   networks: [gls]
+  #   networks: [igc]
 
 volumes:
   grafana_data:
 
 networks:
-  gls:
+  igc:
     driver: bridge

@@ -1,0 +1,19 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: igc-governance-hub
+  mongodb:
+    uri: ${SPRING_MONGODB_URI:mongodb://root:example@localhost:27017/governance_hub?authSource=admin}
+
+hub:
+  admin:
+    username: ${HUB_ADMIN_USERNAME:admin}
+    password: ${HUB_ADMIN_PASSWORD:ChangeMe123!}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: info,health

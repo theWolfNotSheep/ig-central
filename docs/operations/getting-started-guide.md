@@ -62,11 +62,11 @@ Open `.env` in a text editor. Here is what each section means and what we need t
 #### Project Settings (leave as defaults)
 
 ```env
-COMPOSE_PROJECT_NAME=gls
+COMPOSE_PROJECT_NAME=igc
 APP_ENV=DEV
 ```
 
-`COMPOSE_PROJECT_NAME` prefixes all Docker container names (e.g., `gls-mongo-1`). `APP_ENV` controls which Spring profile is active.
+`COMPOSE_PROJECT_NAME` prefixes all Docker container names (e.g., `igc-mongo-1`). `APP_ENV` controls which Spring profile is active.
 
 #### URLs
 
@@ -142,7 +142,7 @@ Credentials for the message queue. The defaults work for development.
 ```env
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=gls-documents
+MINIO_BUCKET=igc-documents
 ```
 
 MinIO is an S3-compatible object store where uploaded documents are physically stored. The defaults work for development.
@@ -544,9 +544,9 @@ Green = healthy. Red = down. If a service is down, the relevant pipeline step wi
 ### 9.3 Queue Depths
 
 Shows how many messages are waiting in each RabbitMQ queue:
-- `gls.documents.ingested` — waiting for text extraction
-- `gls.documents.processed` — waiting for LLM classification
-- `gls.documents.classified` — waiting for governance enforcement
+- `igc.documents.ingested` — waiting for text extraction
+- `igc.documents.processed` — waiting for LLM classification
+- `igc.documents.classified` — waiting for governance enforcement
 
 If a queue is growing, it means the consuming service cannot keep up or is down.
 
@@ -1146,7 +1146,7 @@ To connect a Google Drive account:
 2. Add the redirect URI: `{PUBLIC_URL}/api/drives/google/callback`
 3. Navigate to **Settings** and enter the Google OAuth Client ID and Secret
 4. Navigate to **Drives** and click **Connect Google Drive**
-5. Authorise GLS to read the Drive
+5. Authorise IGC to read the Drive
 6. Browse folders, select files, and classify them in place
 
 Classified Google Drive files show their Drive location (owner, account, "Open in Drive" link) alongside the classification result.

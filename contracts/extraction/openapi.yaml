@@ -22,7 +22,7 @@ info:
     - `Capabilities` shape — CSV #21.
 
 servers:
-  - url: http://gls-extraction-tika:8080
+  - url: http://igc-extraction-tika:8080
     description: Internal Docker Compose hostname.
   - url: http://localhost:8080
     description: Local dev (override).

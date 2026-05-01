@@ -1,0 +1,49 @@
+spring:
+  data:
+    mongodb:
+      auto-index-creation: true
+  rabbitmq:
+    host: rabbitmq
+    port: 5672
+    listener:
+      simple:
+        concurrency: 3
+        max-concurrency: 10
+        prefetch: 3
+  threads:
+    virtual:
+      enabled: true
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.oauth2.client.servlet.OAuth2ClientAutoConfiguration
+
+minio:
+  endpoint: http://minio:9000
+
+spring.elasticsearch:
+  uris: http://elasticsearch:9200
+
+monitoring:
+  services:
+    - name: api
+      url: http://localhost:8080/actuator/health
+    - name: mcp-server
+      url: http://mcp-server:8081/actuator/health
+    - name: llm-worker
+      url: http://llm-worker:8082/actuator/health
+  rabbitmq-management-url: http://rabbitmq:15672/api
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: igc
+
+logging:
+  level:
+    co.uk.wolfnotsheep: ${LOG_LEVEL:INFO}
+    org.springframework.security: WARN
+    org.springframework.web.cors: WARN

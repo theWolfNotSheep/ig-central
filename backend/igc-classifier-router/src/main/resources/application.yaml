@@ -1,0 +1,83 @@
+spring:
+  application:
+    name: igc-classifier-router
+
+server:
+  port: 8093
+
+igc:
+  router:
+    jobs:
+      # TTL for the router_jobs collection (Mongo TTL index on
+      # JobRecord.expiresAt). Idempotency cache + async-job poll
+      # surface share rows; the TTL governs both. Phase 1.4 PR3
+      # supersedes the old igc.router.idempotency.ttl property.
+      ttl: ${IGC_ROUTER_JOBS_TTL:PT24H}
+    async:
+      # Bounded thread pool for the Prefer: respond-async path
+      # (CSV #47). Tune up if a representative load profile shows
+      # cascade jobs queueing.
+      core-size: ${IGC_ROUTER_ASYNC_CORE:4}
+      max-size: ${IGC_ROUTER_ASYNC_MAX:8}
+      queue-capacity: ${IGC_ROUTER_ASYNC_QUEUE:32}
+    cascade:
+      llm:
+        # When true, LlmDispatchCascadeService dispatches via Rabbit
+        # to the existing igc-llm-orchestration worker. When false
+        # (default), MockCascadeService returns a deterministic stub.
+        # Phase 1.2 PR2 wires this; PR1 was mock-only.
+        enabled: ${IGC_ROUTER_LLM_ENABLED:false}
+        timeout: ${IGC_ROUTER_LLM_TIMEOUT:PT60S}
+      bert:
+        # When true, BertOrchestratorCascadeService fronts the LLM (or
+        # mock) inner cascade with HTTP calls to igc-bert-inference for
+        # BERT_CLASSIFIER blocks. On 503 MODEL_NOT_LOADED (or any
+        # transport error) the cascade escalates to the inner. When
+        # false (default), the orchestrator is not wired and the router
+        # behaves exactly as before. Phase 1.4 PR2.
+        enabled: ${IGC_ROUTER_BERT_ENABLED:false}
+        url: ${IGC_ROUTER_BERT_URL:http://igc-bert-inference:8080}
+        timeout-ms: ${IGC_ROUTER_BERT_TIMEOUT_MS:30000}
+      slm:
+        # When true, SlmOrchestratorCascadeService fronts the LLM (or
+        # mock) inner cascade with HTTP calls to igc-slm-worker for
+        # PROMPT blocks. On 503 SLM_NOT_CONFIGURED (or any transport
+        # error) the cascade escalates to the inner. Composes with
+        # the BERT tier — BERT runs outermost, then SLM, then the
+        # inner cascade. Phase 1.5 PR3.
+        enabled: ${IGC_ROUTER_SLM_ENABLED:false}
+        url: ${IGC_ROUTER_SLM_URL:http://igc-slm-worker:8080}
+        timeout-ms: ${IGC_ROUTER_SLM_TIMEOUT_MS:60000}
+      llm-http:
+        # When true, the LLM tier dispatches via HTTP to
+        # igc-llm-worker (Phase 1.6 PR3). When false, falls back to
+        # the legacy Rabbit-based LlmDispatchCascadeService
+        # (igc.router.cascade.llm.enabled=true). The HTTP path is
+        # the cut-over target — once the new igc-llm-worker is
+        # production-stable, the Rabbit dispatcher gets retired.
+        enabled: ${IGC_ROUTER_LLM_HTTP_ENABLED:false}
+        url: ${IGC_ROUTER_LLM_HTTP_URL:http://igc-llm-worker:8080}
+        timeout-ms: ${IGC_ROUTER_LLM_HTTP_TIMEOUT_MS:90000}
+    policy:
+      # ROUTER block name to load tier thresholds from. The block is
+      # seeded by Mongock V003_DefaultRouterBlock as `default-router`.
+      # Per-request ROUTER block selection (via the request's
+      # cascadeHints) is a follow-up.
+      block-name: ${IGC_ROUTER_POLICY_BLOCK_NAME:default-router}
+      # Cache TTL for the parsed policy. Tune down for snappier admin-
+      # UI tuning at the cost of a Mongo round-trip on the cache miss.
+      refresh-seconds: ${IGC_ROUTER_POLICY_REFRESH_SECONDS:60}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+
+logging:
+  level:
+    co.uk.wolfnotsheep: INFO

@@ -1630,7 +1630,7 @@ function SuggestSchemaModal({ documentId, onClose }: {
     const handleCreate = () => {
         // Navigate to governance metadata-schemas tab with suggestion data in sessionStorage
         const suggestion = JSON.stringify({ name: schemaName, fields });
-        sessionStorage.setItem("gls-schema-suggestion", suggestion);
+        sessionStorage.setItem("igc-schema-suggestion", suggestion);
         window.location.href = "/governance#metadata-schemas";
     };
 

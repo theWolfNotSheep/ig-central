@@ -5,26 +5,26 @@ COPY .mvn .mvn
 COPY mvnw .
 COPY pom.xml .
 COPY bom/pom.xml bom/
-COPY gls-platform/pom.xml gls-platform/
-COPY gls-governance/pom.xml gls-governance/
-COPY gls-document/pom.xml gls-document/
-COPY gls-document-processing/pom.xml gls-document-processing/
-COPY gls-mcp-server/pom.xml gls-mcp-server/
-COPY gls-llm-orchestration/pom.xml gls-llm-orchestration/
-COPY gls-governance-enforcement/pom.xml gls-governance-enforcement/
-COPY gls-app-assembly/pom.xml gls-app-assembly/
-COPY gls-governance-hub/pom.xml gls-governance-hub/
-COPY gls-governance-hub-app/pom.xml gls-governance-hub-app/
+COPY igc-platform/pom.xml igc-platform/
+COPY igc-governance/pom.xml igc-governance/
+COPY igc-document/pom.xml igc-document/
+COPY igc-document-processing/pom.xml igc-document-processing/
+COPY igc-mcp-server/pom.xml igc-mcp-server/
+COPY igc-llm-orchestration/pom.xml igc-llm-orchestration/
+COPY igc-governance-enforcement/pom.xml igc-governance-enforcement/
+COPY igc-app-assembly/pom.xml igc-app-assembly/
+COPY igc-governance-hub/pom.xml igc-governance-hub/
+COPY igc-governance-hub-app/pom.xml igc-governance-hub-app/
 
-RUN ./mvnw dependency:go-offline -DskipTests -B -pl gls-governance-hub-app -am || true
+RUN ./mvnw dependency:go-offline -DskipTests -B -pl igc-governance-hub-app -am || true
 
 COPY . .
 
-RUN ./mvnw -DskipTests package -pl gls-governance-hub-app -am -o || ./mvnw -DskipTests package -pl gls-governance-hub-app -am
+RUN ./mvnw -DskipTests package -pl igc-governance-hub-app -am -o || ./mvnw -DskipTests package -pl igc-governance-hub-app -am
 
 FROM eclipse-temurin:25-jre
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=build /app/gls-governance-hub-app/target/*.jar /app/app.jar
+COPY --from=build /app/igc-governance-hub-app/target/*.jar /app/app.jar
 EXPOSE 8090
 CMD ["java","-jar","/app/app.jar"]

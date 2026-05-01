@@ -12,7 +12,7 @@ info:
     **Status: stub.** This file declares the *shape* of the three audit
     tier channels. The common envelope schema (`event-envelope.schema.json`)
     and concrete payload bindings land in **Phase 0.7** alongside the
-    `gls-platform-audit` shared library and the `audit_outbox` MongoDB
+    `igc-platform-audit` shared library and the `audit_outbox` MongoDB
     collection.
 
     The Tier 1 backend remains RECOMMENDED in CSV #3 (external WORM)
@@ -43,7 +43,7 @@ channels:
       `GOVERNANCE_APPLIED`, `CLASSIFICATION_FAILED`,
       `RECLASSIFICATION`).
 
-      **Consumer:** `gls-audit-collector` (Tier 1 leader, single
+      **Consumer:** `igc-audit-collector` (Tier 1 leader, single
       writer per CSV #4). **Backend:** RECOMMENDED external WORM
       (CSV #3) — final destination DECIDED in Phase 0.7 / 1.12.
 
@@ -61,7 +61,7 @@ channels:
       (e.g. `EXTRACTION_ATTEMPT`, `CLASSIFICATION_ATTEMPT_FAILED`,
       `MCP_TOOL_CALLED` per CSV #8, `BLOCK_CACHE_REFRESH`).
 
-      **Consumer:** `gls-audit-collector` (Tier 2 horizontal scale).
+      **Consumer:** `igc-audit-collector` (Tier 2 horizontal scale).
 
       Payload uses the common audit envelope (lands in 0.7).
     parameters:
@@ -90,7 +90,7 @@ operations:
       $ref: '#/channels/auditTier1'
     summary: |
       Emit a Tier 1 (compliance) event. Producers in every service
-      write to `audit_outbox` first; the `gls-platform-audit` library
+      write to `audit_outbox` first; the `igc-platform-audit` library
       relays to this channel. Ordering is per-resource, not global.
 
   consumeAuditTier1:
@@ -98,7 +98,7 @@ operations:
     channel:
       $ref: '#/channels/auditTier1'
     summary: |
-      `gls-audit-collector` (Tier 1 role, ShedLock-coordinated leader)
+      `igc-audit-collector` (Tier 1 role, ShedLock-coordinated leader)
       consumes, validates the per-resource hash chain, and writes to
       the WORM backend.
 
@@ -115,7 +115,7 @@ operations:
     channel:
       $ref: '#/channels/auditTier2'
     summary: |
-      `gls-audit-collector` (Tier 2 role, horizontally scaled) consumes
+      `igc-audit-collector` (Tier 2 role, horizontally scaled) consumes
       and writes to the time-series store.
 
 components:

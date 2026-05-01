@@ -28,10 +28,10 @@ components:
       properties:
         service:
           type: string
-          description: Service identifier (matches the `gls-*` deployable name).
+          description: Service identifier (matches the `igc-*` deployable name).
           examples:
-            - gls-extraction-tika
-            - gls-classifier-router
+            - igc-extraction-tika
+            - igc-classifier-router
         version:
           type: string
           description: Semantic version of the running container image.

@@ -3,10 +3,10 @@ title: indexing-worker
 lifecycle: forward
 ---
 
-# `gls-indexing-worker` contract
+# `igc-indexing-worker` contract
 
 The post-classification indexing stage of the pipeline. Today this
-logic lives inside `gls-app-assembly` as `ElasticsearchIndexService`,
+logic lives inside `igc-app-assembly` as `ElasticsearchIndexService`,
 called in-process from `DocumentController` / `MonitoringController`
 / `PipelineWebhookController`. Phase 1.11 carves it out into a
 standalone deployable that consumes `document.classified` from
@@ -16,7 +16,7 @@ Elasticsearch.
 ## Surface
 
 **Async (primary).** Subscribes to `document.classified` on the
-`gls.documents` exchange. See `contracts/messaging/asyncapi.yaml`
+`igc.documents` exchange. See `contracts/messaging/asyncapi.yaml`
 operation `consumeDocumentClassified` — the worker is the third
 consumer alongside `ClassificationEnforcementConsumer` and
 `PipelineExecutionConsumer`. The Rabbit message envelope is the
@@ -54,7 +54,7 @@ For each classified document:
   `index_quarantine` rows on mapping conflict).
 - Elasticsearch (write target).
 - RabbitMQ (consume `document.classified`; emit `INDEX_FAILED` audit
-  via `gls-platform-audit` once that lands).
+  via `igc-platform-audit` once that lands).
 
 ## Versioning
 

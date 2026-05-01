@@ -35,7 +35,7 @@ Legend:
 | # | Feature | Status | Location |
 |---|---|---|---|
 | 3.1 | Review queue — approve / reclassify / reject / flag PII | ✅ Video 4 | `/review` |
-| 3.2 | Correction feedback loop → MCP tools at next classification | ✅ Video 4 (narrated) | Backend, `gls-mcp-server` |
+| 3.2 | Correction feedback loop → MCP tools at next classification | ✅ Video 4 (narrated) | Backend, `igc-mcp-server` |
 | 3.3 | PII quick-flag from document selection | ✅ Video 3 | Document viewer |
 
 ## 4. Search & Discovery
@@ -199,4 +199,4 @@ Inventory derived from codebase sweep on 2026-04-19. Regenerate by scanning:
 - `web/app/**` (Next.js routes)
 - `web-hub/app/**` (Hub publisher routes)
 - `backend/**/*Controller.java` (API surface)
-- `backend/gls-app-assembly/src/main/resources/seeders` (seeded capabilities)
+- `backend/igc-app-assembly/src/main/resources/seeders` (seeded capabilities)

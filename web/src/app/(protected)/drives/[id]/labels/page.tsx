@@ -9,7 +9,7 @@ import api from "@/lib/axios/axios.client";
 type LabelFieldInfo = { id: string; displayName: string; type: string };
 type LabelInfo = { id: string; name: string; fields: LabelFieldInfo[] };
 
-const GLS_FIELDS = [
+const IGC_FIELDS = [
     { key: "category", label: "Category", description: "Classification category name" },
     { key: "sensitivity", label: "Sensitivity", description: "PUBLIC, INTERNAL, CONFIDENTIAL, RESTRICTED" },
     { key: "retention_until", label: "Retention Until", description: "Retention expiry date" },
@@ -169,20 +169,20 @@ export default function DriveLabelsPage() {
                         <div className="bg-white rounded-lg border border-gray-200 p-5">
                             <h3 className="text-sm font-semibold text-gray-900 mb-1">Field Mapping</h3>
                             <p className="text-xs text-gray-500 mb-4">
-                                Map each GLS classification field to a field in the &ldquo;{selectedLabel.name}&rdquo; label.
+                                Map each IGC classification field to a field in the &ldquo;{selectedLabel.name}&rdquo; label.
                             </p>
 
                             <div className="space-y-3">
-                                {GLS_FIELDS.map(glsField => (
-                                    <div key={glsField.key} className="flex items-center gap-3">
+                                {IGC_FIELDS.map(igcField => (
+                                    <div key={igcField.key} className="flex items-center gap-3">
                                         <div className="w-40 shrink-0">
-                                            <div className="text-sm font-medium text-gray-700">{glsField.label}</div>
-                                            <div className="text-[10px] text-gray-400">{glsField.description}</div>
+                                            <div className="text-sm font-medium text-gray-700">{igcField.label}</div>
+                                            <div className="text-[10px] text-gray-400">{igcField.description}</div>
                                         </div>
                                         <span className="text-gray-300">&rarr;</span>
                                         <select
-                                            value={fieldMappings[glsField.key] || ""}
-                                            onChange={e => setFieldMappings(prev => ({ ...prev, [glsField.key]: e.target.value }))}
+                                            value={fieldMappings[igcField.key] || ""}
+                                            onChange={e => setFieldMappings(prev => ({ ...prev, [igcField.key]: e.target.value }))}
                                             className="flex-1 text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white">
                                             <option value="">-- Not mapped --</option>
                                             {selectedLabel.fields.map(f => (

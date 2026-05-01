@@ -17,22 +17,22 @@ The 502 means one link in this chain is failing.
 ### 1. Check Spring Boot API is responding
 
 ```bash
-docker exec gls-api curl -s http://localhost:8080/api/admin/bert/training-jobs
+docker exec igc-api curl -s http://localhost:8080/api/admin/bert/training-jobs
 ```
 
 Expected: `{"error":"Unauthorized",...}` (401 is fine — means the endpoint exists and responds)
 
-If this fails → API is down or endpoint doesn't exist. Check `docker logs gls-api --tail 50`.
+If this fails → API is down or endpoint doesn't exist. Check `docker logs igc-api --tail 50`.
 
 ### 2. Check Next.js can reach Spring Boot
 
 ```bash
-docker exec gls-web curl -s http://api:8080/api/admin/bert/training-jobs
+docker exec igc-web curl -s http://api:8080/api/admin/bert/training-jobs
 ```
 
 If this fails → DNS resolution or network issue between containers. Check both are on the same Docker network:
 ```bash
-docker network inspect gls | grep -A2 "gls-api\|gls-web"
+docker network inspect igc | grep -A2 "igc-api\|igc-web"
 ```
 
 ### 3. Check Next.js proxy route environment
@@ -44,7 +44,7 @@ BACKEND_BASE_URL or API_BASE_URL or "http://localhost:8080"
 
 Check what the web container has:
 ```bash
-docker exec gls-web env | grep -i "BASE_URL\|API_URL\|BACKEND"
+docker exec igc-web env | grep -i "BASE_URL\|API_URL\|BACKEND"
 ```
 
 It should be `http://api:8080` (Docker service name), NOT `http://localhost:8080`.
@@ -62,14 +62,14 @@ API_BASE_URL: http://api:8080
 ### 4. Check nginx is routing correctly
 
 ```bash
-docker exec gls-nginx curl -s http://web:3000/api/proxy/admin/bert/training-jobs
+docker exec igc-nginx curl -s http://web:3000/api/proxy/admin/bert/training-jobs
 ```
 
 ### 5. Check MongoDB connectivity
 
 The API had MongoDB timeouts in recent logs. If Mongo is slow:
 ```bash
-docker exec gls-mongo mongosh --quiet -u root -p devpassword123 --authenticationDatabase admin --eval "db.adminCommand('ping')"
+docker exec igc-mongo mongosh --quiet -u root -p devpassword123 --authenticationDatabase admin --eval "db.adminCommand('ping')"
 ```
 
 ### 6. Rebuild everything cleanly
@@ -98,7 +98,7 @@ Wait 30 seconds for all health checks to pass, then test.
 ### What to verify after 502 is fixed:
 1. Clear old failed jobs: `db.bert_training_jobs.deleteMany({})`
 2. Click "Train BERT" on `/ai/models` page
-3. Watch logs: `docker logs -f gls-bert-classifier` and `docker logs -f gls-api | grep train`
+3. Watch logs: `docker logs -f igc-bert-classifier` and `docker logs -f igc-api | grep train`
 4. Job should show TRAINING → COMPLETED with metrics
 5. Click Promote → model hot-swapped → BERT status changes from "demo" to "onnx" or "transformers"
 

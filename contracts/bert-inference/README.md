@@ -5,7 +5,7 @@ lifecycle: forward
 
 # `contracts/bert-inference/`
 
-OpenAPI 3.1.1 spec for `gls-bert-inference` — Phase 1.4. JVM + DJL + ONNX Runtime per CSV #2 hybrid (Python trains, JVM serves).
+OpenAPI 3.1.1 spec for `igc-bert-inference` — Phase 1.4. JVM + DJL + ONNX Runtime per CSV #2 hybrid (Python trains, JVM serves).
 
 ## Operations
 
@@ -20,8 +20,8 @@ OpenAPI 3.1.1 spec for `gls-bert-inference` — Phase 1.4. JVM + DJL + ONNX Runt
 ## Phase 1.4 sequencing
 
 1. **PR1 (this contract)** — bert-inference module skeleton + DJL + ONNX Runtime classpath + stub backend that returns `MODEL_NOT_LOADED`.
-2. **PR2** — `gls-bert-trainer` (Python) — fine-tune ModernBERT, export ONNX to MinIO. Probably published as a separate repo / Python package; only the Dockerfile + scheduler trigger live here.
-3. **PR3** — Wire bert-inference into the `gls-classifier-router` cascade as the BERT tier behind the existing ROUTER block. Conservative `bertAccept=0.92` defaults; per-category rollout.
+2. **PR2** — `igc-bert-trainer` (Python) — fine-tune ModernBERT, export ONNX to MinIO. Probably published as a separate repo / Python package; only the Dockerfile + scheduler trigger live here.
+3. **PR3** — Wire bert-inference into the `igc-classifier-router` cascade as the BERT tier behind the existing ROUTER block. Conservative `bertAccept=0.92` defaults; per-category rollout.
 4. **PR4** — Real ONNX load from MinIO; hot reload via `/v1/models/reload`. Lands once the trainer publishes its first artefact.
 
 ## Cross-references

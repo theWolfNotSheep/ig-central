@@ -5,7 +5,7 @@ lifecycle: forward
 
 # `contracts/classifier-router/`
 
-OpenAPI 3.1.1 spec for `gls-classifier-router` — the task-agnostic cascade router (Phase 1.2). One service, one contract, many tasks: classification, PII / PHI / PCI scans, metadata extraction. The block coordinates on the request decide what the cascade does; the cascade decides which tier (BERT → SLM → LLM) does it.
+OpenAPI 3.1.1 spec for `igc-classifier-router` — the task-agnostic cascade router (Phase 1.2). One service, one contract, many tasks: classification, PII / PHI / PCI scans, metadata extraction. The block coordinates on the request decide what the cascade does; the cascade decides which tier (BERT → SLM → LLM) does it.
 
 ## Operations
 

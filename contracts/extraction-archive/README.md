@@ -5,7 +5,7 @@ lifecycle: forward
 
 # `contracts/extraction-archive/`
 
-OpenAPI 3.1.1 spec for `gls-extraction-archive` — Phase 1.1 of the v2 plan. Synchronous archive unpacking; second per-service contract, cloned from the `gls-extraction-tika` pattern (Phase 0.5 reference) and `docs/service-template.md`.
+OpenAPI 3.1.1 spec for `igc-extraction-archive` — Phase 1.1 of the v2 plan. Synchronous archive unpacking; second per-service contract, cloned from the `igc-extraction-tika` pattern (Phase 0.5 reference) and `docs/service-template.md`.
 
 ## Layout
 
@@ -18,14 +18,14 @@ OpenAPI 3.1.1 spec for `gls-extraction-archive` — Phase 1.1 of the v2 plan. Sy
 
 | Method + path | Op id | Notes |
 |---|---|---|
-| `POST /v1/extract` | `extractArchive` | One-level archive walk. Lands each direct child in MinIO; returns the list of `documentRef`s. Caller (`gls-app-assembly` / orchestrator) creates `DocumentModel` rows and publishes `gls.documents.ingested` events per child. `Idempotency-Key` honoured (CSV #16). |
+| `POST /v1/extract` | `extractArchive` | One-level archive walk. Lands each direct child in MinIO; returns the list of `documentRef`s. Caller (`igc-app-assembly` / orchestrator) creates `DocumentModel` rows and publishes `igc.documents.ingested` events per child. `Idempotency-Key` honoured (CSV #16). |
 | `GET /v1/capabilities` | `getCapabilities` | Supported archive types + caps + flags per CSV #21. |
 | `GET /actuator/health` | `getHealth` | Liveness + readiness; readiness checks parser init + MinIO reach. |
 
 ## Behaviour notes
 
 - **One-level unpack per invocation.** Nested archives are returned as children with `detectedMimeType` set to the inner archive's mime; the orchestrator re-routes them through this service on a fresh `nodeRunId`. Recursion depth is bounded by the pipeline's per-document depth cap, not by this service. Decision: CSV #43.
-- **Caller owns fan-out.** The service does not write to Mongo and does not publish to RabbitMQ for child ingest — it returns the child list and the caller commits the per-child DocumentModel + ingest event in `gls-app-assembly`'s existing transaction-safe path.
+- **Caller owns fan-out.** The service does not write to Mongo and does not publish to RabbitMQ for child ingest — it returns the child list and the caller commits the per-child DocumentModel + ingest event in `igc-app-assembly`'s existing transaction-safe path.
 - **Bounded scope.** Per-archive size, max child count, and max nesting depth are configurable runtime caps; exceeding any cap returns `413` with the envelope `code` extension identifying which cap was hit (zip-bomb defence).
 
 ## Cross-references

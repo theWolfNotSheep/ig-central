@@ -3,12 +3,12 @@ title: enforcement-worker
 lifecycle: forward
 ---
 
-# `gls-enforcement-worker` contract
+# `igc-enforcement-worker` contract
 
 The post-classification enforcement stage of the pipeline (architecture
 §3 / §11.A). Today this logic lives inside the monolith via the
-`gls-governance-enforcement` Spring Boot module dependency on
-`gls-app-assembly`; Phase 1.10 splits it out into a standalone
+`igc-governance-enforcement` Spring Boot module dependency on
+`igc-app-assembly`; Phase 1.10 splits it out into a standalone
 deployable so the orchestrator calls it over HTTP rather than
 invoking the in-process `EnforcementService`.
 

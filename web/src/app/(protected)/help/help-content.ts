@@ -601,7 +601,7 @@ export const helpSections: HelpSection[] = [
             ]},
             { type: "tip", text: "The circuit breaker status is shown on the monitoring page above the queue depths. A red pulsing dot means the circuit is open and classification is paused." },
             { type: "heading", text: "Queue TTL & Overflow Protection" },
-            { type: "paragraph", text: "Messages in the classification queue (gls.documents.processed) have a 1-hour TTL. If the LLM worker can't process them within an hour, they expire and are routed to the dead-letter queue. This prevents unbounded queue growth during outages." },
+            { type: "paragraph", text: "Messages in the classification queue (igc.documents.processed) have a 1-hour TTL. If the LLM worker can't process them within an hour, they expire and are routed to the dead-letter queue. This prevents unbounded queue growth during outages." },
             { type: "list", items: [
                 "The stale document recovery task re-queues stuck documents, but with a **30-minute cooldown** to prevent re-queuing the same documents every 5 minutes.",
                 "Each document has a retry cap of **3 automatic retries** — after that it stays at PROCESSED until manually retried.",

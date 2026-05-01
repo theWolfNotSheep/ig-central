@@ -902,7 +902,7 @@ function QueueCard({ queue, depth, onPurged }: { queue: string; depth: number; o
     return (
         <div className="p-3 bg-gray-50 rounded-lg">
             <div className="flex items-center justify-between mb-1">
-                <div className="text-xs text-gray-500 truncate">{queue.replace("gls.documents.", "")}</div>
+                <div className="text-xs text-gray-500 truncate">{queue.replace("igc.documents.", "")}</div>
                 <Inbox className={`size-4 ${depth > 0 ? "text-amber-400" : "text-gray-300"}`} />
             </div>
             <div className={`text-lg font-bold ${depth > 0 ? "text-amber-600" : "text-gray-400"}`}>

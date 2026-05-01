@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: igc-bert-inference
+
+server:
+  port: 8094
+
+igc:
+  bert:
+    inference:
+      # `none` (default) → NotLoadedInferenceEngine; every /v1/infer
+      # returns 503 MODEL_NOT_LOADED. `djl` (Phase 1.4 follow-up) wires
+      # the real DJL + ONNX Runtime engine.
+      engine: ${IGC_BERT_ENGINE:none}
+      minio:
+        endpoint: ${MINIO_ENDPOINT:http://minio:9000}
+        access-key: ${MINIO_ACCESS_KEY:minioadmin}
+        secret-key: ${MINIO_SECRET_KEY:minioadmin}
+        bucket: ${IGC_BERT_ARTIFACTS_BUCKET:igc-bert-artifacts}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+
+logging:
+  level:
+    co.uk.wolfnotsheep: INFO
+    ai.djl: WARN

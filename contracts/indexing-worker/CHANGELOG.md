@@ -10,11 +10,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Initial contract for `gls-indexing-worker` — Phase 1.11 PR1.
+- Initial contract for `igc-indexing-worker` — Phase 1.11 PR1.
   Greenfield deployable that consumes `document.classified` from
   RabbitMQ and writes searchable fields + `extractedMetadata` to
   Elasticsearch. Replaces the in-process `ElasticsearchIndexService`
-  in `gls-app-assembly` (PR3 cuts callers over).
+  in `igc-app-assembly` (PR3 cuts callers over).
 - **Async primary surface** — declared in
   `contracts/messaging/asyncapi.yaml` as the third consumer on
   `documentClassified` (alongside `ClassificationEnforcementConsumer`

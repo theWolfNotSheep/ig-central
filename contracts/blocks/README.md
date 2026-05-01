@@ -27,7 +27,7 @@ Block content is dynamic — different block types have different schemas. Stori
 
 ## Convention
 
-Every schema declares `$id` as a stable URL: `https://gls.local/contracts/blocks/<name>.schema.json`. Schemas reference `_shared/` for cross-cutting types (e.g. duration, currency).
+Every schema declares `$id` as a stable URL: `https://igc.local/contracts/blocks/<name>.schema.json`. Schemas reference `_shared/` for cross-cutting types (e.g. duration, currency).
 
 ## Versioning
 

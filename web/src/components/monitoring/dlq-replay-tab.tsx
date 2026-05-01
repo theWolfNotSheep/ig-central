@@ -15,18 +15,18 @@ import api from "@/lib/axios/axios.client";
  * shipped in Phase 2.3 PR4 (#111) + dry-run support from PR5 (#116).
  *
  * The whitelist is fixed in the backend; this UI surfaces the two
- * configured DLQs (`gls.documents.dlq`, `gls.pipeline.dlq`) and lets
+ * configured DLQs (`igc.documents.dlq`, `igc.pipeline.dlq`) and lets
  * an admin preview (dry-run) or replay messages from either.
  */
 
 const ALLOWED_DLQS: { name: string; label: string; description: string }[] = [
     {
-        name: "gls.documents.dlq",
+        name: "igc.documents.dlq",
         label: "Document pipeline DLQ",
         description: "Failed documents.ingested / processed / classified messages.",
     },
     {
-        name: "gls.pipeline.dlq",
+        name: "igc.pipeline.dlq",
         label: "Pipeline-execution DLQ",
         description: "Failed pipeline node-execution messages (LLM jobs, resume events).",
     },

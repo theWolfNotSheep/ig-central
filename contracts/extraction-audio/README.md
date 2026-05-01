@@ -5,7 +5,7 @@ lifecycle: forward
 
 # `contracts/extraction-audio/`
 
-OpenAPI 3.1.1 spec for `gls-extraction-audio` — Phase 1.1 audio transcription. Sync (`200`) or async (`202` + poll) via the `Prefer: respond-async` header per CSV #13 / #47. Pluggable backend per CSV #46 (default impls in this repo: OpenAI Whisper cloud + a `not-configured` fallback).
+OpenAPI 3.1.1 spec for `igc-extraction-audio` — Phase 1.1 audio transcription. Sync (`200`) or async (`202` + poll) via the `Prefer: respond-async` header per CSV #13 / #47. Pluggable backend per CSV #46 (default impls in this repo: OpenAI Whisper cloud + a `not-configured` fallback).
 
 ## Operations
 
@@ -18,7 +18,7 @@ OpenAPI 3.1.1 spec for `gls-extraction-audio` — Phase 1.1 audio transcription.
 
 ## Backend
 
-`AudioTranscriptionService` is an interface; the runtime chooses an implementation via `gls.extraction.audio.provider`:
+`AudioTranscriptionService` is an interface; the runtime chooses an implementation via `igc.extraction.audio.provider`:
 
 - `openai` — `OpenAiWhisperService`, calls `api.openai.com/v1/audio/transcriptions` with model `whisper-1`. Auth via `OPENAI_API_KEY`. Per-request `language` + `prompt` honoured.
 - `none` (default) — `NotConfiguredAudioTranscriptionService`, returns `503 AUDIO_NOT_CONFIGURED` so deployments without a configured backend fail loud rather than silently.

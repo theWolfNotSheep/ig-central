@@ -98,7 +98,7 @@ services:
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
-      MINIO_BUCKET: ${MINIO_BUCKET:-gls-documents}
+      MINIO_BUCKET: ${MINIO_BUCKET:-igc-documents}
       SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
       GOVERNANCE_HUB_URL: http://governance-hub:8090
       GOVERNANCE_HUB_API_KEY: ${GOVERNANCE_HUB_API_KEY:-}
