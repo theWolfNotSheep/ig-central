@@ -17,7 +17,9 @@ import static org.mockito.Mockito.when;
 class AuditExplorerControllerTest {
 
     private final AuditCollectorClient client = mock(AuditCollectorClient.class);
-    private final AuditExplorerController controller = new AuditExplorerController(client);
+    private final co.uk.wolfnotsheep.infrastructure.services.AuditCsvExporter csvExporter =
+            mock(co.uk.wolfnotsheep.infrastructure.services.AuditCsvExporter.class);
+    private final AuditExplorerController controller = new AuditExplorerController(client, csvExporter);
 
     @Test
     void search_forwardsAllParamsToClient() {

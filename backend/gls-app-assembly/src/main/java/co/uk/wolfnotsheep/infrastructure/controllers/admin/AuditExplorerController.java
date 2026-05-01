@@ -1,8 +1,11 @@
 package co.uk.wolfnotsheep.infrastructure.controllers.admin;
 
 import co.uk.wolfnotsheep.infrastructure.services.AuditCollectorClient;
+import co.uk.wolfnotsheep.infrastructure.services.AuditCsvExporter;
+import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,6 +14,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Optional;
 
 /**
@@ -48,9 +55,11 @@ public class AuditExplorerController {
     private static final Logger log = LoggerFactory.getLogger(AuditExplorerController.class);
 
     private final AuditCollectorClient client;
+    private final AuditCsvExporter csvExporter;
 
-    public AuditExplorerController(AuditCollectorClient client) {
+    public AuditExplorerController(AuditCollectorClient client, AuditCsvExporter csvExporter) {
         this.client = client;
+        this.csvExporter = csvExporter;
     }
 
     @GetMapping(value = "/v2", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -84,6 +93,48 @@ public class AuditExplorerController {
         } catch (AuditCollectorClient.AuditCollectorException e) {
             log.warn("audit-collector get proxy failed: {}", e.getMessage());
             return ResponseEntity.status(502).body(
+                    "{\"error\":\"audit-collector unavailable\",\"detail\":\""
+                            + escapeJson(e.getMessage()) + "\"}");
+        }
+    }
+
+    /**
+     * Stream the Tier 2 search results matching the supplied filters as
+     * a CSV download. Paginates through the audit collector internally,
+     * writes a flat 16-column projection of the envelope, applies a hard
+     * cap (default 10000, max 50000) to keep memory bounded.
+     *
+     * <p>Filename includes a UTC timestamp + the hard-cap-hit hint so
+     * operators can spot when their filters were too broad. {@code 200}
+     * with a partial payload on cap; {@code 502} on collector failure.
+     */
+    @GetMapping(value = "/v2/export.csv", produces = "text/csv")
+    public void exportTier2Csv(
+            @RequestParam(required = false) String documentId,
+            @RequestParam(required = false) String eventType,
+            @RequestParam(required = false) String actorService,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(defaultValue = "10000") int hardCap,
+            HttpServletResponse response) throws IOException {
+        int cap = Math.max(1, Math.min(hardCap, 50_000));
+        AuditCollectorClient.SearchParams base = new AuditCollectorClient.SearchParams(
+                documentId, eventType, actorService, from, to, null, null);
+        String filename = "audit-tier2-" + Instant.now().toString().replace(":", "-") + ".csv";
+        response.setContentType("text/csv; charset=utf-8");
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
+                "attachment; filename=\"" + filename + "\"");
+        try (PrintWriter writer = response.getWriter()) {
+            AuditCsvExporter.ExportResult result = csvExporter.export(base, cap, writer);
+            if (result.hitCap()) {
+                writer.write("# hit hard cap of " + cap + " events — narrow filters for a complete export\n");
+            }
+        } catch (AuditCollectorClient.AuditCollectorException e) {
+            log.warn("audit-collector csv-export proxy failed: {}", e.getMessage());
+            response.setStatus(502);
+            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            response.getWriter().write(
                     "{\"error\":\"audit-collector unavailable\",\"detail\":\""
                             + escapeJson(e.getMessage()) + "\"}");
         }

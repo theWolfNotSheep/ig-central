@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
     ScrollText, Search, RefreshCw, Loader2, ChevronDown, ChevronRight,
     CheckCircle, XCircle, AlertTriangle, Filter, Link2, ShieldCheck, ShieldAlert,
+    Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/axios/axios.client";
@@ -116,6 +117,24 @@ export default function AuditExplorerPage() {
     const onSearch = () => {
         setPageStack([null]);
         fetchPage(null);
+    };
+
+    /**
+     * Trigger a CSV download via the proxy endpoint. We build the
+     * same filter query string as the search, then let the browser
+     * follow the URL — the backend sets Content-Disposition so the
+     * download just works without us touching `Blob` here.
+     */
+    const onExportCsv = () => {
+        const params = new URLSearchParams();
+        if (documentId.trim()) params.set("documentId", documentId.trim());
+        if (eventType.trim()) params.set("eventType", eventType.trim());
+        if (actorService.trim()) params.set("actorService", actorService.trim());
+        if (from) params.set("from", new Date(from).toISOString());
+        if (to) params.set("to", new Date(to).toISOString());
+        const url = `${api.defaults.baseURL ?? ""}/admin/audit-events/v2/export.csv?${params}`;
+        window.location.href = url;
+        toast.info("CSV download starting…");
     };
 
     const onNextPage = () => {
@@ -325,7 +344,13 @@ export default function AuditExplorerPage() {
                         </select>
                     </Field>
                 </div>
-                <div className="mt-3 flex items-center justify-end">
+                <div className="mt-3 flex items-center justify-end gap-2">
+                    <button onClick={onExportCsv} disabled={loading}
+                        title="Download CSV of all events matching the current filters"
+                        className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 disabled:opacity-50">
+                        <Download className="size-4" />
+                        Export CSV
+                    </button>
                     <button onClick={onSearch} disabled={loading}
                         className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50">
                         {loading ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
