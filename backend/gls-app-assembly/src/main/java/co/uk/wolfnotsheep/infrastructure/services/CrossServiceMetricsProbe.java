@@ -68,25 +68,70 @@ public class CrossServiceMetricsProbe {
             "llm_circuit_breaker_consecutive_failures",
             "llm_fallback_invocations_total");
 
+    /**
+     * Generic operational signals every Spring Boot service emits.
+     * Useful when a peer doesn't have distinctive app-level metrics
+     * yet — the dashboard still gets a "service is up + this busy"
+     * indicator. Caveat: {@code http_server_requests_seconds_count}
+     * has high label cardinality (uri × method × status); we accept
+     * the data volume because Spring restricts the {@code uri} label
+     * to the matched template, not the raw URL.
+     */
+    private static final Set<String> GENERIC_METRICS = Set.of(
+            "process_uptime_seconds",
+            "jvm_threads_live_threads",
+            "http_server_requests_seconds_count");
+
+    private static Set<String> withGeneric(Set<String> serviceSpecific) {
+        Set<String> merged = new java.util.HashSet<>(GENERIC_METRICS);
+        merged.addAll(serviceSpecific);
+        return Set.copyOf(merged);
+    }
+
     private final HttpClient httpClient;
-    private final String routerUrl;
-    private final String llmWorkerUrl;
+    private final List<PeerService> peers;
 
     public CrossServiceMetricsProbe(
             @Value("${gls.metrics.probe.router-url:http://gls-classifier-router:8093}") String routerUrl,
-            @Value("${gls.metrics.probe.llm-worker-url:http://gls-llm-worker:8096}") String llmWorkerUrl) {
-        this.routerUrl = stripTrailing(routerUrl);
-        this.llmWorkerUrl = stripTrailing(llmWorkerUrl);
+            @Value("${gls.metrics.probe.llm-worker-url:http://gls-llm-worker:8096}") String llmWorkerUrl,
+            @Value("${gls.metrics.probe.bert-inference-url:http://gls-bert-inference:8094}") String bertUrl,
+            @Value("${gls.metrics.probe.slm-worker-url:http://gls-slm-worker:8095}") String slmUrl,
+            @Value("${gls.metrics.probe.enforcement-worker-url:http://gls-enforcement-worker:8097}") String enforcementUrl,
+            @Value("${gls.metrics.probe.indexing-worker-url:http://gls-indexing-worker:8098}") String indexingUrl,
+            @Value("${gls.metrics.probe.audit-collector-url:http://gls-audit-collector:8099}") String auditUrl,
+            @Value("${gls.metrics.probe.extraction-archive-url:http://gls-extraction-archive:8090}") String archiveUrl,
+            @Value("${gls.metrics.probe.extraction-ocr-url:http://gls-extraction-ocr:8091}") String ocrUrl,
+            @Value("${gls.metrics.probe.extraction-audio-url:http://gls-extraction-audio:8092}") String audioUrl) {
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(2))
                 .build();
+        // Order: hot-path services first (operators care about router / llm-worker
+        // most), then collectors, then extraction. Helps when the dashboard
+        // truncates on slow renders.
+        this.peers = List.of(
+                new PeerService("router", stripTrailing(routerUrl), withGeneric(ROUTER_METRICS)),
+                new PeerService("llm-worker", stripTrailing(llmWorkerUrl), withGeneric(LLM_WORKER_METRICS)),
+                new PeerService("bert-inference", stripTrailing(bertUrl), GENERIC_METRICS),
+                new PeerService("slm-worker", stripTrailing(slmUrl), GENERIC_METRICS),
+                new PeerService("enforcement-worker", stripTrailing(enforcementUrl), GENERIC_METRICS),
+                new PeerService("indexing-worker", stripTrailing(indexingUrl), GENERIC_METRICS),
+                new PeerService("audit-collector", stripTrailing(auditUrl), GENERIC_METRICS),
+                new PeerService("extraction-archive", stripTrailing(archiveUrl), GENERIC_METRICS),
+                new PeerService("extraction-ocr", stripTrailing(ocrUrl), GENERIC_METRICS),
+                new PeerService("extraction-audio", stripTrailing(audioUrl), GENERIC_METRICS));
     }
 
     public List<ServiceProbeResult> probeAll() {
-        return List.of(
-                probe("router", routerUrl, ROUTER_METRICS),
-                probe("llm-worker", llmWorkerUrl, LLM_WORKER_METRICS));
+        // Probe sequentially so a slow peer doesn't pile on the thread pool.
+        // If real-world latency makes this slow, swap to virtual-thread parallelism.
+        List<ServiceProbeResult> out = new java.util.ArrayList<>(peers.size());
+        for (PeerService peer : peers) {
+            out.add(probe(peer.name(), peer.baseUrl(), peer.metrics()));
+        }
+        return out;
     }
+
+    private record PeerService(String name, String baseUrl, Set<String> metrics) {}
 
     ServiceProbeResult probe(String service, String baseUrl, Set<String> allowlist) {
         URI uri = URI.create(baseUrl + "/actuator/prometheus");

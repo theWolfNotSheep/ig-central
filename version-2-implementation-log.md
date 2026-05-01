@@ -5092,3 +5092,48 @@ The survey confirmed all 10 peer services (router, llm-worker, bert-inference, s
 **Phase 3 status:** §3.8 now complete. All major plan items shipped or with follow-ups explicitly deferred. Phase 3 close-out genuinely. Remaining deferred items are smaller polish (CSV redaction column-allowlist, async export jobs, Tier 3 trace integration when Tempo lands, retry-policy widget when a node-type needs it).
 
 **Next:** Phase 3 is done in any meaningful sense. The autonomous loop has banked 16 PRs today; this is a natural pause point for review. If the loop keeps firing, options are the smaller polish items or beginning Phase 4 planning.
+
+## 2026-05-01 — Phase 3 PR17 — Probe all 10 peer services
+
+**Done:** Extends PR16. Until now the cross-service metrics probe only hit `gls-classifier-router` and `gls-llm-worker`. PR17 expands to all 10 peer Spring Boot services: bert-inference, slm-worker, enforcement-worker, indexing-worker, audit-collector, extraction-archive, extraction-ocr, extraction-audio. Operators get visibility into the full stack at one click.
+
+For services that don't have distinctive app-level metrics yet (everything except router + llm-worker), the probe pulls a generic operational allowlist — `process_uptime_seconds`, `jvm_threads_live_threads`, `http_server_requests_seconds_count` — and the dashboard renders a "service is up + this busy" view. The router and llm-worker also get the generic metrics layered on top of their custom ones (no harm, just extra context).
+
+**Backend changes:**
+
+- `CrossServiceMetricsProbe`:
+  - Constructor now takes 10 `@Value`-injected URL properties (Docker hostnames default; overridable). New properties named `gls.metrics.probe.{service}-url`.
+  - New `GENERIC_METRICS` set (uptime / threads / HTTP request totals) and a `withGeneric(...)` helper that merges generic + service-specific.
+  - `probeAll()` returns 10 `ServiceProbeResult`s in priority order (router + llm-worker first, then collectors, then extraction).
+  - Internal `PeerService` record holds `(name, baseUrl, metrics)` triples — keeps the constructor wiring tidy.
+- `MetricsDashboardControllerTest` constructor mock updated to pass the 10 URL placeholders.
+
+**Frontend changes:**
+
+- `GenericSamplesTable` rebuilt: rather than showing a raw key-value table, surfaces uptime + thread count + total requests + 4xx/5xx error count as four stat tiles. Adds an expandable "Per-route request breakdown" details element listing the top 50 routes by count, with 4xx/5xx statuses tinted red.
+- New `formatDurationSeconds` helper — humanises the uptime metric (s → m → h → d).
+- `Stat` accepts an optional `highlight` prop (red text for the error-count tile when > 0).
+
+**Tests:** `MetricsDashboardControllerTest` 6 / 0 + `PrometheusTextParserTest` 10 / 0 — constructor mock change handled, no new assertions needed (the parser logic is unchanged). Full app-assembly reactor green. `tsc --noEmit` + ESLint clean.
+
+**Decisions logged:** None new. Two notes worth flagging:
+
+- "Per-route URI cardinality." `http_server_requests_seconds_count` carries `uri × method × status` labels. Spring Boot Actuator restricts the URI label to the *matched template* (e.g. `/api/admin/metrics/dashboard`, not the raw URL with query string), so cardinality stays bounded — typically tens of routes per service. Safe to scrape.
+- "Sequential probe loop." `probeAll()` iterates serially. With 10 peers × 3s timeout each, worst-case is 30s if every peer is dead. Acceptable for a manual-refresh dashboard; if real-world latency makes it slow we'd swap to virtual-thread parallelism (one-line change, JDK 21).
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/CrossServiceMetricsProbe.java` — modified (8 new constructor args + GENERIC_METRICS + PeerService record + sequential probeAll loop).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/MetricsDashboardControllerTest.java` — modified (10 URL placeholders).
+- `web/src/components/monitoring/performance-dashboard.tsx` — modified (rebuilt `GenericSamplesTable`, new `formatDurationSeconds`, `Stat.highlight`).
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **No request-rate (per-second) view.** `http_server_requests_seconds_count` is a counter; rate would need a delta between two scrapes. Could ship a 30-second polling toggle that computes deltas client-side. Deferred.
+- **No latency breakdown.** Spring Boot also emits `http_server_requests_seconds_sum` (total time) and `_count` per timer; latency = sum/count. Could surface mean / max per route. Defer until operators ask.
+- **No filter UI.** All 10 services render unconditionally; long-scroll on the Performance tab. A type-ahead filter or collapsed-by-default cards would help.
+
+**Phase 3 status:** §3.8 fully complete. All Phase 3 sections shipped; remaining deferred items are polish without active stakeholders.
+
+**Next:** 17 PRs banked today. Genuine pause point. If the loop keeps firing, the only remaining items with possible end-user value are CSV redaction (§3.6 follow-up) and the dashboard polling toggle. Everything else is infra-blocked or speculative.
