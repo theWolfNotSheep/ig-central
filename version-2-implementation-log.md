@@ -4770,3 +4770,45 @@ Traits are cross-cutting document characteristics — completeness (DRAFT / FINA
 **Phase 3 status:** §3.2 complete. §3.3 complete. §3.4 complete (with the deferred follow-ups above). §3.5 complete. §3.6 partial (Tier 2 search + chain verify; Tier 1 timeline + CSV export deferred). §3.8 mostly complete (cross-service metrics deferred). §3.1 / §3.9 untouched.
 
 **Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest single piece left, multi-PR), §3.9 hub pack management (medium), §3.6 follow-ups (Tier 1 timeline / CSV export).
+
+## 2026-05-01 — Phase 3 PR9 — Audit Tier 2 CSV export
+
+**Done:** Phase 3 §3.6 follow-up — closes the "Export for legal hold" deferred item. The Audit Explorer's Tier 2 search already covered filtering, pagination, and click-to-expand JSON. Operators couldn't pull the matched events into a spreadsheet for compliance review or legal hold without copy-pasting JSON manually. This PR adds a one-click CSV download.
+
+Backend ships a new `AuditCsvExporter` service that paginates through `AuditCollectorClient.listTier2Events` (page size 500, hard cap configurable up to 50k), writes a flat 16-column projection to a caller-supplied `Writer`. Columns: timestamp, eventId, eventType, tier, schemaVersion, action, outcome, documentId, pipelineRunId, nodeRunId, traceparent, actorService, actorUserId, resourceType, resourceId, retentionClass. Free-form `details` are intentionally excluded — they vary per event-type and would either explode the column set or stuff a JSON blob into a cell. RFC 4180 escaping handles commas, quotes, newlines.
+
+The new `GET /api/admin/audit-events/v2/export.csv` controller endpoint streams directly to the response writer using `HttpServletResponse` + `PrintWriter` so memory is bounded by the per-page buffer, not the full event count. Filename includes a UTC timestamp; Content-Disposition triggers browser download. When the cap is hit a `# hit hard cap of N events…` trailing comment is appended so the operator knows their filters were too broad.
+
+Frontend adds an "Export CSV" button next to "Search" on the audit-events page. Click sets `window.location.href` to the proxy URL — same-origin navigation carries the session cookie + CSRF token, no `Blob` plumbing needed.
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/services/AuditCsvExporter.java` (new) — pagination + CSV writer + RFC 4180 escape. Exposes a static `escapeCsv` for unit-testing the escape edge cases. `ExportResult` record carries `eventCount` + `hitCap` so the controller can append the "hit cap" trailer comment.
+- `gls-app-assembly/.../infrastructure/controllers/admin/AuditExplorerController.java` — adds `AuditCsvExporter` constructor dep + `GET /v2/export.csv`. Hard-cap defaults 10000, max 50000. 502 with JSON error body on collector failure.
+- `gls-app-assembly/.../services/AuditCsvExporterTest.java` (new) — 6 tests: single-page header + row, pagination across pages with token forwarding, hard-cap stops mid-page, escape rules (commas / quotes / newlines), empty results write header only, helper-method edge cases (null / empty / special chars).
+- `gls-app-assembly/.../controllers/admin/AuditExplorerControllerTest.java` — constructor signature update to inject the now-required `AuditCsvExporter` mock. No new assertions; existing 11 tests still pass.
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — new `Export CSV` button + `onExportCsv` handler that builds the same query string as `fetchPage` and triggers a navigation download via `window.location.href`.
+
+**Tests:** `AuditCsvExporterTest` 6 / 0 (new). `AuditExplorerControllerTest` 11 / 0 (constructor change handled). Full app-assembly reactor green. `tsc --noEmit` clean. ESLint clean for the audit-events page.
+
+**Decisions logged:** None new. The "stream via PrintWriter, don't buffer the whole thing in memory" call is worth a quick note — for a 50k-event export that's ~10MB of CSV which would buffer fine, but a 100k-event extension wouldn't. Streaming now means the cap is the only knob to tune later.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/services/AuditCsvExporter.java` — 1 new.
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/AuditExplorerController.java` — modified (constructor dep + new endpoint).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/services/AuditCsvExporterTest.java` — 1 new.
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/AuditExplorerControllerTest.java` — modified (constructor mock).
+- `web/src/app/(protected)/admin/audit-events/page.tsx` — modified (Download icon import + button + handler).
+- Log = 6 files total.
+
+**Open issues / deferred:**
+
+- **No redaction options.** §3.6 calls for "Export for legal hold, with redaction options" — current export is unredacted. Adding a redaction layer needs a column-allowlist UI + per-column transformation pipeline. Significant scope; deferred.
+- **No "include details JSON" flag.** Free-form `details` are dropped. Could add an `?includeDetails=json` query param that emits a single JSON-string column.
+- **No async / background-export job.** The endpoint streams synchronously. For 50k-event exports that's a few seconds; for hypothetical 500k+ runs we'd want an async job + signed download URL.
+- **No filename customisation.** Operator gets a UTC-timestamp-based filename. Custom prefix would be a small win for legal hold archival.
+
+**Phase 3 status:** §3.2 / §3.3 / §3.4 / §3.5 complete. §3.6 partial (Tier 2 search + chain verify + CSV export shipped; Tier 1 timeline + Tier 3 trace deep-link + redaction options deferred). §3.8 mostly complete. §3.1 / §3.9 untouched.
+
+**Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest single piece left, multi-PR), §3.9 hub pack management (medium). §3.6 Tier 1 timeline needs a new collector contract endpoint first.
