@@ -502,6 +502,9 @@ services:
       # the classpath; bert-inference doesn't use it but Spring still
       # tries to connect on boot. Point at the compose-network mongo.
       SPRING_MONGODB_URI: mongodb://root:${MONGO_PASSWORD:-example}@mongo:27017/${MONGO_DB_NAME:-governance_led_storage_main}?authSource=admin
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_USERNAME: ${RABBITMQ_USER:-guest}
+      SPRING_RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
       # Default: stub backend that returns MODEL_NOT_LOADED 503.
       # Flip IGC_BERT_ENGINE to `djl` once the trainer publishes its
       # first ONNX artefact + the engine wires in.
@@ -512,6 +515,7 @@ services:
       IGC_BERT_ARTIFACTS_BUCKET: ${IGC_BERT_ARTIFACTS_BUCKET:-igc-bert-artifacts}
     depends_on:
       mongo: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
       minio: { condition: service_healthy }
     logging: *default-logging
     networks: [igc]
