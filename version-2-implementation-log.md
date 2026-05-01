@@ -4737,3 +4737,36 @@ Frontend extends each tree row with three drop zones detected from the cursor's 
 **Phase 3 status:** §3.3 effectively complete (drag-drop reparent + sibling reorder + per-node fields all shipped; audit-trail-per-category + hub pack browser/import wizard still open). §3.5 complete. §3.6 partial. §3.8 mostly complete. §3.1 / §3.4 / §3.9 untouched.
 
 **Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest), §3.4 component management UI, §3.9 hub pack management. The first is multi-PR; the latter two are smaller and could ship as solo PRs.
+
+## 2026-05-01 — Phase 3 PR8 — Trait definitions admin (closes §3.4)
+
+**Done:** Phase 3 plan item §3.4 closing piece. /governance already had tabs for sensitivities, taxonomy, policies, retention, storage tiers, PII types, and metadata schemas — the only §3.4 list item without admin coverage was trait definitions. The model + repository + seeder + pack-import pathway all existed; the missing slice was the REST surface and the admin UI.
+
+Traits are cross-cutting document characteristics — completeness (DRAFT / FINAL / SIGNED), direction (INBOUND / OUTBOUND), provenance (TEMPLATE / ORIGINAL / COPY) — that the LLM detects during classification. Each has a key, dimension, display name, description, indicator keywords, and a `suppressPii` flag (used by TEMPLATE traits so PII matches are treated as informational placeholder data, not real findings).
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/controllers/admin/GovernanceAdminController.java` — adds `TraitDefinitionRepository` constructor dep + 5 endpoints under `/api/admin/governance/traits` mirroring the PII-types CRUD shape: `GET /` (active only), `GET /all`, `POST /`, `PUT /{id}`, `DELETE /{id}` (soft-deactivate). The PUT preserves the existing `key` if the request body omits it (rare to rename a trait once the LLM uses it).
+- `web/src/app/(protected)/governance/page.tsx` — new `Traits` tab slot in the existing TABS array + a `TraitsPanel` component mirroring the PII-types panel shape: dimension filter, grouped-by-dimension card layout (COMPLETENESS / DIRECTION / PROVENANCE sections), inline edit/deactivate, FormModal-driven create/edit with key + dimension + display name + description + detection-hint textarea + `TagInput` for indicators + suppress-PII / active checkboxes.
+- `gls-app-assembly/.../controllers/admin/GovernanceAdminControllerMoveTest.java` — constructor signature update (one extra null for the new `TraitDefinitionRepository` parameter). No new assertions added; existing 12 tests still pass.
+
+**Tests:** Full `gls-app-assembly` reactor green (the move-test suite picks up the constructor change without semantic break). `tsc --noEmit` clean. ESLint clean for the trait additions (the 3 pre-existing warnings on governance/page.tsx remain — set-state-in-effect on tab init at line 121, unused `i` at line 329, ternary-as-expression in the toggle helper at line 511 — none introduced here).
+
+**Decisions logged:** None new. The "mirror PII-types CRUD" decision is worth a short note: traits and PII types share the same shape (typed key + dimension/category + indicators + active flag) so the panel boilerplate is similar by design. If a future PR factors out a generic `<KeyedDefinitionPanel />` helper, both this and the PII-types panel could share it — but that refactor is bigger than either panel and not worth doing pre-emptively.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/GovernanceAdminController.java` — modified (constructor dep + 5 new endpoints).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/GovernanceAdminControllerMoveTest.java` — modified (one extra null in `new GovernanceAdminController(...)`).
+- `web/src/app/(protected)/governance/page.tsx` — modified (Tab union + TABS entry + tab dispatch + new TraitsPanel + TraitDef type).
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **No category-scope picker in the trait form.** The model has `applicableCategoryIds` (CSV #33 — empty list = global, non-empty = scoped) but the UI doesn't expose it yet. Adding it needs a tree picker similar to what the metadata-schemas panel has for category linkage. Left as a focused follow-up if operators ask for it.
+- **No "test trait detection" sandbox.** Operators have to wait for the next document to flow through to see if their indicator keywords work. A dry-run "paste text → see what traits would fire" sandbox would close this loop.
+- **No bulk import / export for traits.** Pack import already brings them in via the existing import service; explicit ad-hoc CSV upload not wired.
+
+**Phase 3 status:** §3.2 complete. §3.3 complete. §3.4 complete (with the deferred follow-ups above). §3.5 complete. §3.6 partial (Tier 2 search + chain verify; Tier 1 timeline + CSV export deferred). §3.8 mostly complete (cross-service metrics deferred). §3.1 / §3.9 untouched.
+
+**Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest single piece left, multi-PR), §3.9 hub pack management (medium), §3.6 follow-ups (Tier 1 timeline / CSV export).
