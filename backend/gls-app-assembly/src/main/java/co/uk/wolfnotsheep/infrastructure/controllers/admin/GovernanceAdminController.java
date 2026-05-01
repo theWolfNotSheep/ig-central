@@ -276,6 +276,76 @@ public class GovernanceAdminController {
     }
 
     /**
+     * Reparent a category. Body: {@code {"newParentId": "..."}} where
+     * {@code null}/empty means promote to root. Validates against cycles
+     * (the new parent cannot be the moved node itself nor any of its
+     * descendants), then rebuilds the materialised path tree.
+     *
+     * <p>This is a focused endpoint for drag-drop tree editors — the
+     * existing {@link #updateCategory} PUT also accepts {@code parentId}
+     * but requires the full body and skips cycle detection.
+     */
+    @PostMapping("/taxonomy/{id}/move")
+    public ResponseEntity<?> moveCategory(@PathVariable String id,
+                                          @RequestBody Map<String, String> body) {
+        ClassificationCategory source = categoryRepository.findById(id).orElse(null);
+        if (source == null) return ResponseEntity.notFound().build();
+
+        String rawNewParent = body == null ? null : body.get("newParentId");
+        String newParentId = (rawNewParent == null || rawNewParent.isBlank()) ? null : rawNewParent;
+
+        if (newParentId != null && newParentId.equals(id)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "cycle",
+                    "detail", "A category cannot be its own parent."));
+        }
+
+        if (newParentId != null) {
+            ClassificationCategory newParent = categoryRepository.findById(newParentId).orElse(null);
+            if (newParent == null) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "newParentNotFound",
+                        "newParentId", newParentId));
+            }
+            if (isDescendantOf(newParent, id)) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "cycle",
+                        "detail", "Cannot reparent: target is a descendant of the moved node."));
+            }
+        }
+
+        source.setParentId(newParentId);
+        // Recompute level based on new depth — FUNCTION at root, ACTIVITY one level down, TRANSACTION below.
+        source.setLevel(resolveLevel(newParentId));
+        source.setVersion(source.getVersion() + 1);
+        ClassificationCategory saved = categoryRepository.save(source);
+        governanceService.rebuildPaths();
+        log.info("Moved category {} → newParentId={}", id, newParentId);
+        return ResponseEntity.ok(saved);
+    }
+
+    private boolean isDescendantOf(ClassificationCategory candidate, String ancestorId) {
+        // Walk up the chain — if we reach ancestorId, candidate is a descendant.
+        String cursor = candidate.getParentId();
+        Set<String> visited = new HashSet<>();
+        while (cursor != null && visited.add(cursor)) {
+            if (cursor.equals(ancestorId)) return true;
+            ClassificationCategory parent = categoryRepository.findById(cursor).orElse(null);
+            cursor = parent == null ? null : parent.getParentId();
+        }
+        return false;
+    }
+
+    private ClassificationCategory.TaxonomyLevel resolveLevel(String parentId) {
+        if (parentId == null) return ClassificationCategory.TaxonomyLevel.FUNCTION;
+        ClassificationCategory parent = categoryRepository.findById(parentId).orElse(null);
+        if (parent == null) return ClassificationCategory.TaxonomyLevel.ACTIVITY;
+        return parent.getLevel() == ClassificationCategory.TaxonomyLevel.FUNCTION
+                ? ClassificationCategory.TaxonomyLevel.ACTIVITY
+                : ClassificationCategory.TaxonomyLevel.TRANSACTION;
+    }
+
+    /**
      * Export taxonomy in the ISO 15489 9-column format matching the reference spreadsheet.
      * Columns: Tier 1 Function, Function Code, Tier 2 Activity, Tier 3 Record Class,
      *          Record Code, Typical Records, Jurisdiction, Retention Period, Legal Citation

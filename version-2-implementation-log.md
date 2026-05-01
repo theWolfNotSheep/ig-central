@@ -4661,3 +4661,39 @@ Frontend ships a collapsible `BulkReclassifyPanel` on the Ops tab. Default flow:
 **Phase 3 status:** §3.6 partial (Tier 2 search + chain verify shipped; Tier 1 timeline + Tier 3 trace deep-link + CSV export still open). §3.5 complete. §3.8 mostly complete. §3.1 / §3.3 / §3.4 / §3.9 untouched.
 
 **Next:** Continue Phase 3 — §3.3 taxonomy tree editor (medium) or §3.1 visual DAG editor (biggest). Smaller alternative: §3.6 follow-up — Tier 1 timeline-per-document, but that needs a new collector contract endpoint first.
+
+## 2026-05-01 — Phase 3 PR6 — Drag-drop taxonomy reparenting
+
+**Done:** Phase 3 plan item §3.3 first cut — drag-drop reorganisation on the existing TaxonomyPanel. The legacy panel already had tree rendering with expand/collapse, add/edit/delete, and a CategoryForm modal with all per-node fields (keywords, sensitivity, retention, metadata schema, owner, custodian, jurisdiction, etc.). What it lacked was a way to move a node — operators had to delete + recreate, or open the form modal, scroll to find the parent dropdown, save. This PR adds native HTML5 drag-drop on top.
+
+The existing `PUT /taxonomy/{id}` accepted `parentId` updates but had no cycle protection, required the full body, and didn't make a great drag-drop target. New `POST /taxonomy/{id}/move` endpoint takes just `{newParentId}`, validates against the three failure modes (move-onto-self, move-under-own-descendant, missing target), recomputes the source's `level` based on the new depth, and triggers `governanceService.rebuildPaths()` so the materialised path tree stays consistent.
+
+Frontend uses the native HTML5 drag-and-drop API — no extra dependency. Each tree row has `draggable={true}` plus `onDragStart` / `onDragOver` / `onDrop` handlers. Drag affordances: source row goes to 40% opacity while dragging, valid drop targets get a blue ring + light-blue background. A "drop here to promote to top-level" strip appears above the tree only while a drag is in flight.
+
+**Changes:**
+
+- `gls-app-assembly/.../infrastructure/controllers/admin/GovernanceAdminController.java` — new `POST /taxonomy/{id}/move` endpoint + private helpers `isDescendantOf` (walks the parent chain to detect cycles) and `resolveLevel` (FUNCTION at root, ACTIVITY one level down, TRANSACTION below). Returns 200 + saved category on success, 404 on missing source, 400 on cycle / missing target.
+- `gls-app-assembly/.../controllers/admin/GovernanceAdminControllerMoveTest.java` (new) — 8 tests: move to root sets level FUNCTION; move under FUNCTION sets ACTIVITY; move under ACTIVITY sets TRANSACTION; move-onto-self → 400; move-under-descendant → 400 (proves cycle detection); source-not-found → 404; missing-target → 400; successful move increments version + saves once.
+- `web/src/app/(protected)/governance/page.tsx` — TaxonomyPanel gets `draggingId` / `dragOverId` / `moving` state + `moveCategory` handler that calls the new endpoint. TaxonomyNode signature extended with six drag props (passed recursively into children). Each row is now `draggable`; a root drop-zone strip appears above the tree while a drag is active. Loader2 overlay during the in-flight move so the user can't trigger a second move before the first finishes.
+
+**Tests:** `GovernanceAdminControllerMoveTest` 8 / 0 (new). Reactor green. `tsc --noEmit` clean. ESLint warnings on `governance/page.tsx` are pre-existing (set-state-in-effect on tab init, unused `i` var, ternary-as-expression in `toggle`) — not introduced by this PR.
+
+**Decisions logged:** None new. The "native HTML5 drag-drop, no library" call is worth noting: the tree is small (a few hundred categories at the absolute upper bound) and needs only single-element drag-drop without complex collision detection. `react-dnd` or `@hello-pangea/dnd` would be 50–100 KB extra for no real win at this scale.
+
+**Files changed:**
+
+- `backend/gls-app-assembly/src/main/java/.../infrastructure/controllers/admin/GovernanceAdminController.java` — modified (new endpoint + 2 helpers).
+- `backend/gls-app-assembly/src/test/java/.../infrastructure/controllers/admin/GovernanceAdminControllerMoveTest.java` — 1 new.
+- `web/src/app/(protected)/governance/page.tsx` — modified (TaxonomyPanel state + handlers, TaxonomyNode signature + drag attrs, root drop-zone, Loader2 overlay).
+- Log = 4 files total.
+
+**Open issues / deferred:**
+
+- **No sibling reordering.** The tree displays children in the order Mongo returns them; there's no UI to drag a node up/down within siblings. The model has a `sortOrder` field but the move endpoint doesn't touch it. Adding "drop on the top half of a row to insert before / bottom half to insert after" + a batch sortOrder update on the backend is a focused follow-up.
+- **No audit trail UI.** Every move call is audited via `PlatformAuditEmitter` (because `governanceService.rebuildPaths` triggers a state-change audit), but there's no UI to view the audit history filtered by `categoryId`. Defers to the existing Audit Explorer (PR3) — operators can search Tier 2 events by `documentId` but not by category ID; could add a category-scoped query.
+- **No multi-select drag.** Drag one node at a time. Bulk reorganisation needs admin to repeat.
+- **No offline / optimistic update.** UI waits for the server response before updating the tree. Optimistic update would feel snappier but introduces rollback complexity on cycle errors.
+
+**Phase 3 status:** §3.3 partial (drag-drop reparenting + per-node field editor shipped; sibling reorder + audit-trail-per-category + hub pack browser/import wizard still open). §3.5 complete. §3.6 partial. §3.8 mostly complete. §3.1 / §3.4 / §3.9 untouched.
+
+**Next:** Continue Phase 3 — §3.1 visual DAG editor (biggest piece, multi-PR), §3.4 component management UI (PII / sensitivity / storage tier / trait CRUD — much of it likely exists already), §3.6 follow-ups (Tier 1 timeline / CSV export). DAG editor is the headline missing item from the original v2 vision.
